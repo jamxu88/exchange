@@ -1,0 +1,100 @@
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS users (
+    trader_id UUID PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    api_key TEXT PRIMARY KEY,
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    UNIQUE (trader_id, api_key)
+);
+
+CREATE INDEX IF NOT EXISTS api_keys_trader_id_idx ON api_keys (trader_id);
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+    audit_id UUID PRIMARY KEY,
+    actor_username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_username TEXT,
+    target_trader_id UUID,
+    details TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS admin_audit_logs_occurred_at_idx ON admin_audit_logs (occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS balances (
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    asset TEXT NOT NULL,
+    free BIGINT NOT NULL,
+    locked BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (trader_id, asset)
+);
+
+CREATE TABLE IF NOT EXISTS positions (
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    market TEXT NOT NULL,
+    net_quantity BIGINT NOT NULL,
+    average_entry_price BIGINT,
+    realized_pnl BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (trader_id, market)
+);
+
+CREATE TABLE IF NOT EXISTS pending_positions (
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    market TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity BIGINT NOT NULL,
+    reserved_quote BIGINT,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (trader_id, market, side)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    order_id UUID PRIMARY KEY,
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    market TEXT NOT NULL,
+    side TEXT NOT NULL,
+    price BIGINT NOT NULL,
+    quantity BIGINT NOT NULL,
+    remaining BIGINT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS orders_trader_id_created_at_idx ON orders (trader_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS orders_trader_id_market_status_idx ON orders (trader_id, market, status);
+
+CREATE TABLE IF NOT EXISTS fills (
+    fill_id UUID PRIMARY KEY,
+    market TEXT NOT NULL,
+    maker_order_id UUID NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+    taker_order_id UUID NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+    price BIGINT NOT NULL,
+    quantity BIGINT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS fills_maker_order_id_idx ON fills (maker_order_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS fills_taker_order_id_idx ON fills (taker_order_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS pnl_snapshots (
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    market TEXT NOT NULL,
+    realized_pnl BIGINT NOT NULL,
+    unrealized_pnl BIGINT NOT NULL,
+    captured_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (trader_id, market, captured_at)
+);
+
+CREATE INDEX IF NOT EXISTS pnl_snapshots_trader_id_market_idx ON pnl_snapshots (trader_id, market, captured_at DESC);
+
+COMMIT;

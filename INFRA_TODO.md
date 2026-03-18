@@ -1,0 +1,174 @@
+# Infrastructure TODO
+
+## Scope
+
+This file tracks infrastructure work separately from local product/backend implementation.
+
+Current intended deployment shape:
+
+- Exchange backend: Rust service on EC2
+- Exchange data layer: local PostgreSQL on the EC2 machine
+- Client frontend: Next.js app on ECS
+- Current internal test endpoint: `http://16.59.150.9:8080`
+- Current internal test WebSocket endpoint: `ws://16.59.150.9:8080/ws`
+
+This infrastructure plan should stay aligned with the actual product target:
+
+- internal competition only
+- single-region / single-service deployment for now
+- no RDS requirement
+- no public-product hardening requirement
+
+## 1. PostgreSQL
+
+Purpose:
+
+- Store exchange application data needed by the backend
+- Provide durable transactional storage for account, order, fill, and audit state
+- Run locally for the deployed EC2-based competition environment
+
+Work items:
+
+- [ ] Define schema and table layout for:
+  - users
+  - api_keys
+  - balances
+  - positions
+  - pending_positions
+  - orders
+  - fills
+  - settlement_journal
+  - audit_logs
+- [ ] Define primary keys, foreign keys, and unique constraints
+- [ ] Define indexes required for exchange query paths
+- [ ] Define write patterns for:
+  - order acceptance
+  - order state transitions
+  - fill recording
+  - balance / position updates
+  - settlement events
+- [x] Add a dedicated persistence worker thread / task for PostgreSQL writes
+- [x] Define batching strategy for the persistence worker:
+  - max batch size
+  - max flush interval
+  - queue pressure thresholds
+- [ ] Define idempotency strategy for repeated writes
+- [ ] Define consistency requirements per query path:
+  - transaction boundaries
+  - lock strategy
+  - isolation level
+- [ ] Define local backup and restore plan
+- [ ] Define migration strategy
+- [ ] Define connection pooling strategy:
+  - dedicated writer connection(s)
+  - read/query pool
+- [ ] Define read/write path for reconciliation and admin queries
+
+Exchange implementation constraints:
+
+- Design exchange storage access around explicit relational query paths, not ad hoc ORM sprawl
+- Keep high-frequency matching state in memory, not in PostgreSQL
+- Keep PostgreSQL writes off the main exchange thread
+- Use batched writes so the local EC2 machine is not overwhelmed
+- Keep account and order state queryable by user, market, and status with indexed reads
+- Use transactions for account mutations that must remain consistent
+- Keep append-only ledger semantics for orders, fills, and settlement events where appropriate
+
+## 2. EC2 For Exchange
+
+Purpose:
+
+- Host the Rust exchange backend
+- Host the local PostgreSQL instance used by the exchange
+
+Work items:
+
+- [ ] Define EC2 instance class and sizing targets for exchange + local PostgreSQL
+- [ ] Define VPC, subnets, security groups, and internal exposure model
+- [x] Define service bootstrapping:
+  - systemd
+  - binary deployment path
+  - environment file management
+  - PostgreSQL service management
+- [ ] Define secrets delivery approach
+- [x] Define health checks and restart policy
+- [ ] Define logging and metrics pipeline
+- [ ] Define deployment procedure:
+  - artifact build
+  - rollout
+  - rollback
+- [ ] Define SSH / SSM / operations access controls
+- [ ] Define disk sizing and retention expectations for PostgreSQL data and backups
+
+Exchange implementation constraints:
+
+- Keep the exchange service runnable as a single deployable binary
+- Keep config externalized through environment/config files
+- Separate infrastructure wiring from core exchange logic
+- Keep startup deterministic so EC2 instance replacement is straightforward
+- Keep persistence work isolated from the main exchange loop
+
+## 3. ECS For Client
+
+Purpose:
+
+- Host the Next.js client application
+- Serve the competition UI separately from exchange compute
+
+Work items:
+
+- [ ] Define ECS service topology
+- [ ] Define Docker build and runtime image
+- [ ] Define task sizing targets
+- [ ] Define ALB / domain / TLS setup if external browser access is required
+- [ ] Define environment and secrets injection
+- [ ] Define deployment strategy
+- [ ] Define static asset and caching strategy
+- [ ] Define client-to-exchange network path and allowed origins
+- [ ] Define observability for frontend runtime and API errors
+
+Client implementation constraints:
+
+- Keep the client configurable by environment variables
+- Keep API/WS endpoints externally configurable
+- Avoid hardcoding localhost-specific assumptions into app code
+
+## 4. Cross-Cutting Data Concerns
+
+These need to be considered while building the exchange locally.
+
+- [x] Introduce a repository/storage abstraction before wiring persistence
+- [ ] Separate in-memory engine state from durable account/order records
+- [ ] Define canonical source of truth for:
+  - balances
+  - positions
+  - pending positions
+  - orders
+  - fills
+  - pnl
+- [ ] Define write ordering between matching, settlement, and persistence
+- [x] Define the persistence queue and worker model between the main exchange thread and PostgreSQL
+- [ ] Define how WS/REST reads should source data:
+  - in-memory state
+  - PostgreSQL
+  - hybrid strategy
+- [ ] Define recovery/bootstrap path for EC2 process restart
+- [ ] Define reconciliation jobs between engine state and PostgreSQL state
+
+Current local status:
+
+- The exchange now uses a repository layer for identity, balances, open orders, and fills.
+- A PostgreSQL schema has been defined in `exchange/sql/migrations/001_initial.sql`.
+- A live PostgreSQL backend exists behind the same repository boundary as the in-memory backend.
+- The live matching orderbook still stays in-memory in the process, separate from durable account/query state.
+- Dedicated persistence-thread batching is implemented and deployed.
+- The exchange is running on EC2 with Elastic IP `16.59.150.9`.
+- Public internal test endpoints are `http://16.59.150.9:8080`, `http://16.59.150.9:8080/health`, and `ws://16.59.150.9:8080/ws`.
+
+## 5. Suggested Order
+
+1. Finalize local PostgreSQL schema and indexed query paths.
+2. Add the dedicated persistence queue / worker so database writes are off the main exchange thread.
+3. Keep the exchange deployable as one EC2 service until the local product surface is complete.
+4. Add restart recovery and reconciliation using local PostgreSQL.
+5. Keep the client packaged simply unless internal competition requirements force a split.

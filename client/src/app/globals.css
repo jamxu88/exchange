@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+:root {
+  --background: #040405;
+  --foreground: #f4f4f5;
+  --surface: rgba(20, 20, 22, 0.92);
+  --surface-raised: rgba(24, 24, 28, 0.95);
+  --surface-stroke: #26272b;
+  --surface-soft: #111114;
+  --muted: #96969d;
+  --muted-strong: #b7b7bd;
+  --green: #42cc4e;
+  --green-soft: rgba(66, 204, 78, 0.14);
+  --red: #ff7a7a;
+  --red-soft: rgba(255, 122, 122, 0.14);
+  --cyan: #40d9ff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-darker-grotesque);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top, rgba(66, 204, 78, 0.12), transparent 28%),
+    radial-gradient(circle at 80% 0%, rgba(64, 217, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, #080809 0%, #040405 100%);
+}
+
+body {
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-darker-grotesque), sans-serif;
+  letter-spacing: 0.01em;
+}
+
+a,
+button {
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: rgba(66, 204, 78, 0.28);
+  color: #ffffff;
+}
+
+.surface-panel {
+  border: 1px solid var(--surface-stroke);
+  background:
+    linear-gradient(180deg, rgba(24, 24, 28, 0.96), rgba(18, 18, 20, 0.94)),
+    var(--surface);
+  border-radius: 1.5rem;
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(18px);
+}
+
+.surface-panel-soft {
+  border: 1px solid rgba(45, 45, 50, 0.9);
+  background: rgba(15, 15, 17, 0.86);
+  border-radius: 1.25rem;
+}
+
+.surface-title {
+  color: #ffffff;
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.surface-muted {
+  color: var(--muted);
+}
+
+.card-link {
+  border: 1px solid var(--surface-stroke);
+  border-radius: 1.5rem;
+  background:
+    linear-gradient(180deg, rgba(26, 26, 29, 0.96), rgba(17, 17, 20, 0.94)),
+    var(--surface);
+  color: var(--foreground);
+  font-weight: 700;
+  padding: 1.25rem;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.card-link:hover {
+  border-color: rgba(66, 204, 78, 0.52);
+  box-shadow:
+    0 16px 32px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(66, 204, 78, 0.12);
+  transform: translateY(-1px);
+}

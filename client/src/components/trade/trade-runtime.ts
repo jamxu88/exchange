@@ -1,0 +1,45 @@
+import type { MarketDefinition } from "@/components/trade/trade-types";
+
+export type TradeRuntimeConfig = {
+  httpUrl: string;
+  wsUrl: string;
+  apiKey?: string;
+  markets: MarketDefinition[];
+  reconnectDelayMs: number;
+};
+
+const DEFAULT_HTTP_URL = "http://localhost:8080";
+const DEFAULT_WS_URL = "ws://localhost:8080/ws";
+const DEFAULT_MARKETS = ["BTC-USD", "ETH-USD", "SOL-USD"];
+const DEFAULT_RECONNECT_DELAY_MS = 1_500;
+
+function toMarketDefinition(entry: string): MarketDefinition {
+  const [rawId, rawLabel] = entry.split("|");
+  const id = rawId.trim();
+  const [baseAsset = id, quoteAsset = "USD"] = id.split("-");
+
+  return {
+    id,
+    name: rawLabel?.trim() || id,
+    baseAsset,
+    quoteAsset,
+  };
+}
+
+export function createTradeRuntimeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): TradeRuntimeConfig {
+  const markets = (env.NEXT_PUBLIC_EXCHANGE_MARKETS || DEFAULT_MARKETS.join(","))
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map(toMarketDefinition);
+
+  return {
+    httpUrl: env.NEXT_PUBLIC_EXCHANGE_HTTP_URL || DEFAULT_HTTP_URL,
+    wsUrl: env.NEXT_PUBLIC_EXCHANGE_WS_URL || DEFAULT_WS_URL,
+    apiKey: env.NEXT_PUBLIC_EXCHANGE_API_KEY || undefined,
+    markets: markets.length > 0 ? markets : DEFAULT_MARKETS.map(toMarketDefinition),
+    reconnectDelayMs: DEFAULT_RECONNECT_DELAY_MS,
+  };
+}
