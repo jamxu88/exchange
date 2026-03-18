@@ -22,9 +22,11 @@ exchange/target/
 .env
 .env.local
 .env.*.local
+*.env
 **/.env
 **/.env.local
 **/.env.*.local
+**/*.env
 
 !.env.example
 !**/.env.example
