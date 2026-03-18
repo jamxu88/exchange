@@ -15,11 +15,20 @@ What exists today:
 - In-memory settlement and balance locking for spot-style markets
 - Local auth system with operator-provisioned users, simple admin bearer-token auth, and assigned API-key auth for competition users
 - Admin provisioning audit logging through the storage layer
+- Persisted operator control plane for:
+  - exchange-wide trading on/off
+  - market create / delete / enable / disable / settle
+  - bulk config load
+  - admin broadcast / user-targeted messages
+  - leaderboard generation
 - Per-user in-memory rate limiting on authenticated REST account and trading routes
 - PostgreSQL-oriented repository abstraction for balances, open orders, fills, identity lookups, and admin audit records
 - In-memory repository backend plus a live PostgreSQL repository backend behind the same boundary
 - Background PostgreSQL writer thread with batched flushes, retry/backpressure handling, and health telemetry behind the storage boundary
 - EC2-hosted internal test deployment is live at `http://16.59.150.9:8080` with WS at `ws://16.59.150.9:8080/ws`
+- Public browser-safe access is live at `https://quant.jamesxu.dev` with WS at `wss://quant.jamesxu.dev/ws`
+- GitHub is now the source of truth for deployment updates, and the EC2 host runs from a Git clone at `~/exchange-v2`
+- Mintlify-based internal docs now exist under `docs/`
 - OpenAPI generation and Swagger UI
 - Tests and latency checks for core paths
 
@@ -37,9 +46,10 @@ Target constraints:
 What is still true:
 
 - Persistence and recovery are only partially implemented
-- Settlement is still in-memory only
+- Settlement now persists a journal, but full replay-based recovery is still incomplete
 - WS trading is implemented end-to-end, but restart reconciliation is still incomplete
-- Startup recovery now rebuilds in-memory orderbooks from persisted open orders, but full reconciliation is still missing
+- Startup recovery now rebuilds in-memory orderbooks from persisted open orders and reconciles locked balances against those recovered orders
+- The backend admin control plane is implemented, and the Next.js client now validates login keys against the backend and uses the live admin/trader surfaces
 
 ## Progress Snapshot
 
@@ -49,9 +59,20 @@ What is still true:
 - Health endpoint exists
 - REST endpoints exist for:
   - `POST /api/v1/admin/users`
+  - `GET /api/v1/admin/state`
+  - `POST /api/v1/admin/trading/start`
+  - `POST /api/v1/admin/trading/stop`
+  - `GET|POST /api/v1/admin/markets`
+  - `PATCH|DELETE /api/v1/admin/markets/{market_id}`
+  - `POST /api/v1/admin/markets/{market_id}/settle`
+  - `POST /api/v1/admin/config/load`
+  - `GET|POST /api/v1/admin/messages`
+  - `GET /api/v1/admin/leaderboard`
+  - `GET /api/v1/markets`
   - `GET /api/v1/user`
   - `GET /api/v1/balance`
   - `GET /api/v1/portfolio`
+  - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
   - `GET /api/v1/fills`
   - `POST /api/v1/orders`
@@ -68,6 +89,7 @@ What is still true:
 - Matching engine tests pass
 - REST tests pass
 - Admin provisioning endpoint is tested end-to-end
+- Admin trading-control, market lifecycle, config-load, messaging, settlement, and leaderboard routes are tested end-to-end
 - Local submit / cancel / amend flows are tested end-to-end
 - Direct API-key trading flow is tested end-to-end
 - Cross-account order isolation is tested end-to-end
@@ -79,10 +101,14 @@ What is still true:
 - Storage access is routed through a repository layer instead of raw app-state maps
 - Repository backend trait exists with in-memory and PostgreSQL backends
 - PostgreSQL initial schema exists for users, api keys, balances, orders, fills, positions, pending positions, pnl snapshots, and admin audit logs
-- PostgreSQL repository writes are wired through a dedicated batched writer thread for identity, balances, orders, fills, and admin audit logs
+- PostgreSQL initial schema now also persists exchange controls, market definitions, and admin messages
+- PostgreSQL repository writes are wired through a dedicated batched writer thread for identity, exchange controls, markets, admin messages, balances, orders, fills, and admin audit logs
 - PostgreSQL writer health now exposes queue depth, flush latency, retry/failure counts, and degraded status through `/health`
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders
+- Market configs now enforce trading-enabled state plus per-market enable/disable, tick size, and minimum order quantity
+- Market settlement exists as an admin operation and converts base-asset balances into quote balances at a configured settlement price
 - Public health and WebSocket auth/snapshot probes succeeded over Elastic IP `16.59.150.9`
+- GitHub repo sync is in place for the EC2 host, and the deployed tree fast-forwards cleanly from `origin/main`
 - Matching hot path was improved:
   - lightweight execution records added
   - fewer hot-path lookups
@@ -112,26 +138,33 @@ What is still true:
   - `resync_required` messages exist for market-data sequence gaps and lagged receivers
   - socket-level integration tests exist for auth, subscribe, trading, and user-event delivery
 - Settlement:
-  - in-memory balance locking / release / fill application exists
-  - no persistence or reconciliation yet
+  - balance locking / release / fill application exists
+  - settlement balance mutations are now journaled through the storage layer
+  - startup reconciliation now restores locked/free balance splits against recovered open orders
+  - full replay-based recovery is still not implemented
 - Docs:
   - OpenAPI exists for the current REST surface
-  - internal competition docs still need to be written
+  - Mintlify internal docs now cover architecture, auth, REST, WS, recovery, client integration, deployment, and runbooks
+  - backup and restore guidance still needs deeper operational work
+- Admin control plane:
+  - backend operator endpoints now exist
+  - client admin panel now reads live backend state and posts server actions to the operator endpoints
 - Storage:
   - in-memory backend is still the default local app mode
   - PostgreSQL backend can be selected behind the same storage boundary
   - PostgreSQL schema is defined and executed by the live repository implementation
   - dedicated off-thread persistence, batched write flushing, and retry/backpressure telemetry are implemented
   - startup recovery rebuilds in-memory orderbooks from persisted open orders
-  - settlement journaling and full reconciliation are not implemented yet
+  - settlement journaling is implemented
+  - replay-based recovery is not implemented yet
 
 ### Not Started / Missing
 
-- Persistent settlement journal
 - Order recovery from snapshots or journal replay
-- EC2 deployment topology and local PostgreSQL operations plan
+- Formal EC2 sizing, rollback, and local PostgreSQL backup plan
 - Local PostgreSQL backup / restore and restart-recovery playbooks
-- Internal operator and competition-user documentation
+- Full replay-based settlement recovery from durable state
+- Real EC2 load test and saturation validation against competition-like traffic
 
 ## Main Workstreams
 
@@ -192,6 +225,7 @@ Trading should be via WS events.
 - authenticated `submit_order`, `cancel_order`, and `amend_order` messages exist
 - `ack` / `reject` replies exist
 - user-scoped `fill` and `order_state` events exist
+- user-scoped / broadcast `admin_message` events exist
 - public market-data flow is implemented locally
 - socket-level integration tests cover auth, subscribe, trading, and user-event delivery
 
@@ -250,7 +284,7 @@ Trading should be via WS events.
 - [x] Remove bearer-session dependency from REST and WS user auth
 - [x] Simplify REST auth to direct assigned API-key auth
 - [ ] Keep admin/operator auth simple and internal-only
-- [ ] Keep only the audit logging that is operationally useful for provisioning and access changes
+- [x] Keep only the audit logging that is operationally useful for provisioning and access changes
 - [ ] Add API-key rotation / revocation support if operators need it
 
 ## 5. Rate Limiting
@@ -282,8 +316,8 @@ Trading should be via WS events.
 - [x] Lock funds before accepting orders
 - [x] Release funds on cancel
 - [x] Apply debits / credits on fill
-- [ ] Persist settlement journal through the background PostgreSQL writer
-- [ ] Reconcile balances after restart
+- [x] Persist settlement journal through the background PostgreSQL writer
+- [x] Reconcile locked balances against recovered open orders after restart
 - [x] Handle persistence queue failures and backpressure safely
 - [ ] Define idempotent settlement flow
 - [ ] Add invariants and reconciliation jobs
@@ -345,7 +379,8 @@ We need a trading API that allows competition users to programmatically interact
 - [ ] Add richer portfolio semantics if needed
 - [ ] Ensure returned data matches WS event stream state
 - [x] Rebuild in-memory orderbooks from persisted open orders after restart
-- [ ] Add full reconciliation behavior from local PostgreSQL after restart
+- [x] Reconcile persisted balance locks against recovered open orders after restart
+- [ ] Add full replay-based reconciliation behavior from local PostgreSQL after restart
 
 ## 10. L3 Data
 
@@ -394,7 +429,9 @@ Local PostgreSQL is the durable store for the internal competition deployment. I
   - queue pressure thresholds
 - [x] Add backpressure, retry, and failure-handling policy for the persistence queue
 - [x] Rebuild in-memory orderbooks from persisted open orders on startup
-- [ ] Add snapshots and full recovery procedures
+- [x] Persist settlement journal entries alongside balance mutations
+- [x] Persist exchange controls, market definitions, and admin messages through the same writer path
+- [ ] Add replayable snapshots and full recovery procedures
 - [ ] Define local backup retention and restore drills
 - [ ] Add restart reconciliation playbooks
 
@@ -404,27 +441,28 @@ We need internal docs, not public-product polish.
 
 ### Required
 
-- [ ] System architecture doc
-- [ ] Internal auth and provisioning doc
-- [ ] REST API doc
-- [ ] WS trading protocol doc
-- [ ] L3 market data doc
-- [ ] Error codes and rejection reasons
-- [ ] Sequence / replay / recovery semantics
-- [ ] EC2 + local PostgreSQL deployment and operations doc
+- [x] System architecture doc
+- [x] Internal auth and provisioning doc
+- [x] REST API doc
+- [x] WS trading protocol doc
+- [x] L3 market data doc
+- [x] Error codes and rejection reasons
+- [x] Sequence / replay / recovery semantics
+- [x] EC2 + local PostgreSQL deployment and operations doc
+- [x] Document the current GitHub-based EC2 deploy/update workflow and live endpoint
 - [ ] Backup / restore doc
-- [ ] Internal competition trader quickstart
-- [ ] Example clients
+- [x] Internal competition trader quickstart
+- [x] Example clients
 
 ## Suggested Implementation Order
 
 1. Simplify competition-user auth to the assigned API-key-only model
 2. Tighten the WS trading protocol and L3 schema
 3. Move PostgreSQL persistence off the main exchange thread and batch writes
-4. Extend startup recovery into full reconciliation on top of persisted data
-5. Finish settlement durability and correctness
-6. Extend restart reconciliation and settlement journaling
-7. Write internal docs and runbooks alongside the implementation
+4. Build the operator control plane needed to run the competition
+5. Extend startup recovery into full reconciliation on top of persisted data
+6. Wire the client login/admin/trader flows to the live backend surface
+7. Add TLS and run production-like load tests
 
 ## Immediate Next Tasks
 
@@ -436,8 +474,15 @@ We need internal docs, not public-product polish.
 - [x] Add full socket-level WS integration tests
 - [x] Add `resync_required` handling for market-data gaps and lag
 - [x] Add queue depth, flush latency, and DB failure metrics
-- [ ] Add full reconciliation and settlement recovery using local PostgreSQL
-- [ ] Persist a settlement journal through the background PostgreSQL writer
+- [x] Persist a settlement journal through the background PostgreSQL writer
+- [x] Reconcile locked balances against recovered open orders on startup
+- [x] Add backend endpoints for start / stop trading, market lifecycle, config load, settlement, admin messages, and leaderboard
+- [ ] Add full replay-based settlement recovery using local PostgreSQL
 - [x] Make PostgreSQL the default deployed backend and validate it on the EC2 box
+- [x] Validate API keys against the backend during client login
+- [x] Wire the admin page and trade client to the live market / leaderboard / admin-message endpoints
+- [x] Put TLS in front of the EC2 deployment and switch browser clients to `https://` + `wss://`
+- [ ] Run a competition-like load test against the EC2 deployment
+- [ ] Replace the temporary GitHub PAT on EC2 with a deploy key or machine-user SSH key
 - [ ] Refactor engine-internal order representation
-- [ ] Document the internal architecture and operator runbook
+- [x] Document the internal architecture and operator runbook

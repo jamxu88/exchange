@@ -16,6 +16,28 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS api_keys_trader_id_idx ON api_keys (trader_id);
 
+CREATE TABLE IF NOT EXISTS exchange_controls (
+    control_key TEXT PRIMARY KEY,
+    trading_enabled BOOLEAN NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS markets (
+    market_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    base_asset TEXT NOT NULL,
+    quote_asset TEXT NOT NULL,
+    tick_size BIGINT NOT NULL,
+    min_order_quantity BIGINT NOT NULL,
+    reference_price BIGINT,
+    settlement_price BIGINT,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS markets_status_idx ON markets (status, market_id);
+
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
     audit_id UUID PRIMARY KEY,
     actor_username TEXT NOT NULL,
@@ -28,6 +50,19 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 
 CREATE INDEX IF NOT EXISTS admin_audit_logs_occurred_at_idx ON admin_audit_logs (occurred_at DESC);
 
+CREATE TABLE IF NOT EXISTS admin_messages (
+    message_id UUID PRIMARY KEY,
+    target_username TEXT,
+    target_trader_id UUID REFERENCES users(trader_id) ON DELETE SET NULL,
+    market_id TEXT,
+    level TEXT NOT NULL,
+    title TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS admin_messages_created_at_idx ON admin_messages (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS balances (
     trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
     asset TEXT NOT NULL,
@@ -36,6 +71,21 @@ CREATE TABLE IF NOT EXISTS balances (
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (trader_id, asset)
 );
+
+CREATE TABLE IF NOT EXISTS settlement_journal (
+    journal_id UUID PRIMARY KEY,
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    asset TEXT NOT NULL,
+    free_delta BIGINT NOT NULL,
+    locked_delta BIGINT NOT NULL,
+    reason TEXT NOT NULL,
+    order_id UUID,
+    fill_id UUID,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS settlement_journal_trader_id_occurred_at_idx
+    ON settlement_journal (trader_id, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS positions (
     trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,

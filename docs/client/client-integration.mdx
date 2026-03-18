@@ -1,0 +1,73 @@
+---
+title: "Client Integration"
+description: "How the Next.js client currently authenticates and talks to the exchange."
+---
+
+## Runtime config
+
+The trade client reads:
+
+- `NEXT_PUBLIC_EXCHANGE_HTTP_URL`
+- `NEXT_PUBLIC_EXCHANGE_WS_URL`
+- `NEXT_PUBLIC_EXCHANGE_MARKETS`
+- `NEXT_PUBLIC_EXCHANGE_API_KEY`
+
+Recommended live values:
+
+```text
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
+```
+
+## Login flow
+
+Current flow:
+
+1. user visits `/login`
+2. user pastes assigned API key
+3. `/api/auth/login` validates the key against the backend
+4. the login route classifies the key as `admin` or `trader` from backend auth
+5. the client stores `exchange_session`
+6. `/trade` and `/admin` inject `session.apiKey` into their server-side data loaders and runtime config
+
+## Trade bootstrap
+
+On load, the client fetches:
+
+- `/api/v1/markets`
+- `/api/v1/user`
+- `/api/v1/balance`
+- `/api/v1/open-orders`
+- `/api/v1/fills`
+
+Market metadata is public. Account endpoints use `x-api-key`.
+
+## WebSocket integration
+
+On socket open, the client currently:
+
+1. sends `authenticate` if an API key is present
+2. sends `subscribe` for the selected market
+3. applies `snapshot` and `delta` book updates
+4. consumes authenticated `fill`, `order_state`, and `admin_message` events
+5. refreshes account state after user events
+6. reacts to disconnects by reconnecting after a short delay
+
+The backend protocol also supports:
+
+- `submit_order`
+- `cancel_order`
+- `amend_order`
+- `fill`
+- `order_state`
+- `admin_message`
+- `resync_required`
+
+## Known client/backend mismatches to keep in mind
+
+- the browser ticket still submits, amends, and cancels over REST even though the backend also supports WS trading messages
+- client runtime defaults to localhost for local development
+- public browser traffic should use `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
+- the exchange origin is loopback-only on the EC2 host, so browser clients should not target raw origin addresses
+- public port `80` is not currently redirecting, so link users directly to the HTTPS URL

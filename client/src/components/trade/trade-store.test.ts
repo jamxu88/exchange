@@ -13,6 +13,7 @@ const markets: MarketDefinition[] = [
 
 function bootstrapData(): TradeBootstrapData {
   return {
+    markets,
     user: { traderId: "trader-1", username: "alice" },
     balances: [
       { asset: "BTC", free: 2, locked: 1 },

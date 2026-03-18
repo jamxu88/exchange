@@ -1,11 +1,15 @@
 use exchange::{
-    auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
+    admin::{
+        AdminMessageLevel, AdminService, MarketDefinition, MarketStatus, SendAdminMessageRequest,
+    },
+    auth::{AuthService, AuthenticatedAdmin, ProvisionUserRequest, ProvisionUserResponse},
     build_app,
     config::Config,
     marketdata::{OrderStateStatus, ServerMessage},
     settlement::SettlementEngine,
     state::AppState,
 };
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::time::Duration;
@@ -19,7 +23,7 @@ use tokio_tungstenite::{
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 fn test_state() -> AppState {
-    AppState::new(Config {
+    let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
@@ -30,7 +34,26 @@ fn test_state() -> AppState {
         postgres_write_flush_interval_ms: 25,
         postgres_write_queue_capacity: 4_096,
         postgres_write_retry_backoff_ms: 250,
-    })
+    });
+    seed_market(&state, "BTC-USD", "BTC", "USD");
+    state
+}
+
+fn seed_market(state: &AppState, market_id: &str, base_asset: &str, quote_asset: &str) {
+    let now = Utc::now();
+    state.storage.upsert_market(MarketDefinition {
+        market_id: market_id.to_string(),
+        display_name: market_id.to_string(),
+        base_asset: base_asset.to_string(),
+        quote_asset: quote_asset.to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: None,
+        settlement_price: None,
+        status: MarketStatus::Enabled,
+        created_at: now,
+        updated_at: now,
+    });
 }
 
 fn provision_user(state: &AppState, username: &str) -> ProvisionUserResponse {
@@ -359,6 +382,42 @@ async fn websocket_crossing_trade_delivers_fill_and_order_state_to_both_sockets(
             assert_eq!(order.remaining, 0);
         }
         other => panic!("unexpected maker order state: {other:?}"),
+    }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_delivers_broadcast_admin_messages_to_authenticated_clients() {
+    let state = test_state();
+    let user = provision_user(&state, "message-recipient");
+    let (url, server) = spawn_server(state.clone()).await;
+    let mut socket = connect_socket(&url).await;
+    authenticate(&mut socket, &user.profile.api_key).await;
+
+    let sent = AdminService::send_message(
+        &state,
+        &AuthenticatedAdmin {
+            username: "ops".to_string(),
+        },
+        SendAdminMessageRequest {
+            target_username: None,
+            market: Some("BTC-USD".to_string()),
+            level: AdminMessageLevel::Info,
+            title: Some("Desk notice".to_string()),
+            body: "Trading will pause soon.".to_string(),
+        },
+    )
+    .expect("send admin message");
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::AdminMessage { message } => {
+            assert_eq!(message.message_id, sent.message_id);
+            assert_eq!(message.market.as_deref(), Some("BTC-USD"));
+            assert_eq!(message.body, "Trading will pause soon.");
+        }
+        other => panic!("unexpected admin message event: {other:?}"),
     }
 
     server.abort();

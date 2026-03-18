@@ -1,5 +1,6 @@
 import type {
   AccountBalance,
+  MarketDefinition,
   PendingOrder,
   SubmitOrderIntent,
   SubmitOrderResult,
@@ -53,6 +54,13 @@ type SubmitOrderResponse = {
   resting: boolean;
 };
 
+type MarketResponse = {
+  market_id: string;
+  display_name: string;
+  base_asset: string;
+  quote_asset: string;
+};
+
 export class ExchangeApiError extends Error {
   status: number;
 
@@ -96,6 +104,15 @@ function normalizeFill(fill: FillResponse): TradeFill {
   };
 }
 
+function normalizeMarket(market: MarketResponse): MarketDefinition {
+  return {
+    id: market.market_id,
+    name: market.display_name,
+    baseAsset: market.base_asset,
+    quoteAsset: market.quote_asset,
+  };
+}
+
 function joinUrl(baseUrl: string, path: string) {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
@@ -114,6 +131,7 @@ export class TradeRestClient {
   async bootstrapAccountData(): Promise<TradeBootstrapData> {
     if (!this.apiKey) {
       return {
+        markets: [],
         user: null,
         balances: [],
         openOrders: [],
@@ -122,8 +140,9 @@ export class TradeRestClient {
       };
     }
 
-    const [userResult, balanceResult, openOrdersResult, fillsResult] =
+    const [marketsResult, userResult, balanceResult, openOrdersResult, fillsResult] =
       await Promise.allSettled([
+        this.request<MarketResponse[]>("/api/v1/markets", { includeAuth: false }),
         this.request<UserResponse>("/api/v1/user"),
         this.request<BalanceResponse[]>("/api/v1/balance"),
         this.request<OpenOrderResponse[]>("/api/v1/open-orders"),
@@ -131,6 +150,12 @@ export class TradeRestClient {
       ]);
 
     const warnings: string[] = [];
+    const markets = pickSettledValue(
+      marketsResult,
+      (value) => value.map(normalizeMarket),
+      warnings,
+      "Market bootstrap failed.",
+    );
     const user = pickSettledValue(userResult, (value) => ({
       traderId: value.trader_id,
       username: value.username,
@@ -164,6 +189,7 @@ export class TradeRestClient {
     }
 
     return {
+      markets,
       user: user ?? null,
       balances,
       openOrders,
@@ -207,14 +233,18 @@ export class TradeRestClient {
     };
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init?: RequestInit & { includeAuth?: boolean },
+  ): Promise<T> {
+    const { includeAuth = true, ...requestInit } = init ?? {};
     const response = await this.fetchImpl(joinUrl(this.baseUrl, path), {
-      ...init,
+      ...requestInit,
       headers: {
         accept: "application/json",
-        ...(init?.body ? { "content-type": "application/json" } : {}),
-        ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
-        ...init?.headers,
+        ...(requestInit.body ? { "content-type": "application/json" } : {}),
+        ...(includeAuth && this.apiKey ? { "x-api-key": this.apiKey } : {}),
+        ...requestInit.headers,
       },
     });
 

@@ -1,0 +1,86 @@
+---
+title: "Recovery And Resync"
+description: "How clients should react to sequence gaps, lag, and process restarts."
+---
+
+## Market-data sequencing
+
+Every market delta includes a per-market `sequence`.
+
+Current behavior:
+
+- a fresh `subscribe` returns one snapshot
+- live deltas follow with increasing sequence numbers
+- if the backend detects a gap, it sends `resync_required`
+- if the broadcast receiver lags, it sends `resync_required`
+
+## Client action for market-data resync
+
+When you receive:
+
+```json
+{
+  "type": "resync_required",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "expected_sequence": 5,
+  "current_sequence": 9,
+  "reason": "market sequence gap detected; resubscribe for a fresh snapshot"
+}
+```
+
+Do this:
+
+1. discard your local book for that market
+2. send a new `subscribe`
+3. replace local state with the returned snapshot
+4. resume processing deltas from the new snapshot sequence
+
+## User-event lag
+
+If the user event stream lags, the backend sends:
+
+```json
+{
+  "type": "resync_required",
+  "channel": "user",
+  "market": null,
+  "expected_sequence": null,
+  "current_sequence": null,
+  "reason": "user event stream lagged by N messages; refresh account state and reconnect if needed"
+}
+```
+
+Do this:
+
+1. re-fetch `/api/v1/user`
+2. re-fetch `/api/v1/balance`
+3. re-fetch `/api/v1/open-orders`
+4. re-fetch `/api/v1/fills`
+5. reconnect the socket if your client cannot confidently recover local order state
+
+## Restart behavior
+
+On backend restart:
+
+- open orders are recovered from storage into the in-memory orderbooks
+- persisted balances are reconciled so locked amounts match those recovered open orders
+- market-data sequence counters restart from `0`
+- no historical replay is available
+
+That means clients should treat a reconnect after restart as a fresh session and re-bootstrap account state over REST before trusting local caches.
+
+## Current recovery boundary
+
+Implemented:
+
+- open-order recovery into the in-memory book
+- startup lock reconciliation for persisted balances
+- market-data gap detection
+- user-event lag detection
+
+Not implemented:
+
+- full settlement replay
+- durable sequence continuation
+- historical gap-fill API

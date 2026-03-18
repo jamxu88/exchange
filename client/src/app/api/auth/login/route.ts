@@ -1,11 +1,11 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
-  createSessionForApiKey,
   defaultRouteForRole,
   encodeSessionCookie,
   SESSION_COOKIE,
 } from "@/lib/auth";
+import { authenticateExchangeSession, ExchangeServerError } from "@/lib/exchange-server";
 
 export async function POST(request: Request) {
   const form = await request.formData();
@@ -15,7 +15,16 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL("/login?error=missing-api-key", request.url));
   }
 
-  const session = createSessionForApiKey(apiKey);
+  let session;
+  try {
+    session = await authenticateExchangeSession(apiKey);
+  } catch (error) {
+    if (error instanceof ExchangeServerError && error.status < 500) {
+      return NextResponse.redirect(new URL("/login?error=invalid-api-key", request.url));
+    }
+    return NextResponse.redirect(new URL("/login?error=exchange-unavailable", request.url));
+  }
+
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, encodeSessionCookie(session), {
     httpOnly: true,

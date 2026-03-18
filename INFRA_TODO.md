@@ -9,8 +9,11 @@ Current intended deployment shape:
 - Exchange backend: Rust service on EC2
 - Exchange data layer: local PostgreSQL on the EC2 machine
 - Client frontend: Next.js app on ECS
+- Source of truth for deploys: GitHub `origin/main`, pulled onto the EC2 host
 - Current internal test endpoint: `http://16.59.150.9:8080`
 - Current internal test WebSocket endpoint: `ws://16.59.150.9:8080/ws`
+- Public browser-safe endpoint: `https://quant.jamesxu.dev`
+- Public browser-safe WebSocket endpoint: `wss://quant.jamesxu.dev/ws`
 
 This infrastructure plan should stay aligned with the actual product target:
 
@@ -24,14 +27,17 @@ This infrastructure plan should stay aligned with the actual product target:
 Purpose:
 
 - Store exchange application data needed by the backend
-- Provide durable transactional storage for account, order, fill, and audit state
+- Provide durable transactional storage for account, order, fill, exchange-control, message, and audit state
 - Run locally for the deployed EC2-based competition environment
 
 Work items:
 
-- [ ] Define schema and table layout for:
+- [x] Define schema and table layout for:
   - users
   - api_keys
+  - exchange_controls
+  - markets
+  - admin_messages
   - balances
   - positions
   - pending_positions
@@ -39,14 +45,16 @@ Work items:
   - fills
   - settlement_journal
   - audit_logs
-- [ ] Define primary keys, foreign keys, and unique constraints
-- [ ] Define indexes required for exchange query paths
-- [ ] Define write patterns for:
+- [x] Define primary keys, foreign keys, and unique constraints
+- [x] Define indexes required for exchange query paths
+- [x] Define write patterns for:
   - order acceptance
   - order state transitions
   - fill recording
   - balance / position updates
   - settlement events
+  - exchange control / market config updates
+  - admin message persistence
 - [x] Add a dedicated persistence worker thread / task for PostgreSQL writes
 - [x] Define batching strategy for the persistence worker:
   - max batch size
@@ -88,17 +96,23 @@ Work items:
 - [x] Define service bootstrapping:
   - systemd
   - binary deployment path
+  - GitHub checkout path
   - environment file management
   - PostgreSQL service management
 - [ ] Define secrets delivery approach
+- [ ] Replace the temporary GitHub PAT on EC2 with a deploy key or machine-user SSH key
 - [x] Define health checks and restart policy
 - [ ] Define logging and metrics pipeline
+- [x] Add TLS reverse proxy for `https://` and `wss://`
 - [ ] Define deployment procedure:
-  - artifact build
-  - rollout
+  - [x] GitHub-backed EC2 checkout at `/home/ec2-user/exchange-v2`
+  - [x] Fast-forward update flow via `git pull --ff-only`
+  - [x] Release rebuild on-host via `cargo build --release`
+  - [x] Rollout via `sudo systemctl restart exchange`
   - rollback
 - [ ] Define SSH / SSM / operations access controls
 - [ ] Define disk sizing and retention expectations for PostgreSQL data and backups
+- [ ] Run a competition-like load test against the EC2 deployment
 
 Exchange implementation constraints:
 
@@ -162,8 +176,16 @@ Current local status:
 - A live PostgreSQL backend exists behind the same repository boundary as the in-memory backend.
 - The live matching orderbook still stays in-memory in the process, separate from durable account/query state.
 - Dedicated persistence-thread batching is implemented and deployed.
+- Settlement journal rows are now persisted through the same background writer path as balance updates.
+- Startup recovery now reconciles persisted balance locks against recovered open orders.
 - The exchange is running on EC2 with Elastic IP `16.59.150.9`.
+- The EC2 host now runs from a GitHub clone at `/home/ec2-user/exchange-v2`.
+- The exchange env file lives at `/home/ec2-user/exchange-v2/exchange.env`.
+- The deployed update flow is `git pull --ff-only`, `cargo build --release`, and `sudo systemctl restart exchange`.
+- GitHub access on the EC2 host is temporarily PAT-based and should be replaced with a deploy key.
 - Public internal test endpoints are `http://16.59.150.9:8080`, `http://16.59.150.9:8080/health`, and `ws://16.59.150.9:8080/ws`.
+- Caddy is active on the host with `/etc/caddy/Caddyfile`, and `https://quant.jamesxu.dev/health` returns `200`.
+- Mintlify-based internal docs now exist under `docs/`.
 
 ## 5. Suggested Order
 

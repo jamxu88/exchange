@@ -3,6 +3,12 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use exchange::{
+    admin::{
+        AdminMessageEntry, AdminMessageLevel, AdminStateResponse, DeleteMarketResponse,
+        LeaderboardRow, LoadExchangeConfigRequest, LoadExchangeConfigResponse, MarketDefinition,
+        MarketStatus, SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse,
+        TradingControlResponse, UpdateMarketRequest, UpsertMarketRequest,
+    },
     accounts::UserProfile,
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
     build_app,
@@ -16,10 +22,11 @@ use exchange::{
         SubmitOrderResponse,
     },
 };
+use chrono::Utc;
 use tower::ServiceExt;
 
 fn test_state() -> AppState {
-    AppState::new(Config {
+    let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
@@ -30,11 +37,14 @@ fn test_state() -> AppState {
         postgres_write_flush_interval_ms: 25,
         postgres_write_queue_capacity: 4_096,
         postgres_write_retry_backoff_ms: 250,
-    })
+    });
+    seed_market(&state, "BTC-USD", "BTC", "USD");
+    seed_market(&state, "ETH-USD", "ETH", "USD");
+    state
 }
 
 fn rate_limited_state(per_user_requests_per_second: u64) -> AppState {
-    AppState::new(Config {
+    let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
@@ -45,7 +55,27 @@ fn rate_limited_state(per_user_requests_per_second: u64) -> AppState {
         postgres_write_flush_interval_ms: 25,
         postgres_write_queue_capacity: 4_096,
         postgres_write_retry_backoff_ms: 250,
-    })
+    });
+    seed_market(&state, "BTC-USD", "BTC", "USD");
+    seed_market(&state, "ETH-USD", "ETH", "USD");
+    state
+}
+
+fn seed_market(state: &AppState, market_id: &str, base_asset: &str, quote_asset: &str) {
+    let now = Utc::now();
+    state.storage.upsert_market(MarketDefinition {
+        market_id: market_id.to_string(),
+        display_name: market_id.to_string(),
+        base_asset: base_asset.to_string(),
+        quote_asset: quote_asset.to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: None,
+        settlement_price: None,
+        status: MarketStatus::Enabled,
+        created_at: now,
+        updated_at: now,
+    });
 }
 
 fn api_key_request(method: Method, uri: &str, api_key: &str) -> Request<Body> {
@@ -80,6 +110,20 @@ fn admin_request(method: Method, uri: &str, admin_token: &str, body: Body) -> Re
         .header("authorization", format!("Bearer {admin_token}"))
         .body(body)
         .expect("request")
+}
+
+fn admin_json_request<T: serde::Serialize>(
+    method: Method,
+    uri: &str,
+    admin_token: &str,
+    body: &T,
+) -> Request<Body> {
+    admin_request(
+        method,
+        uri,
+        admin_token,
+        Body::from(serde_json::to_vec(body).expect("admin json")),
+    )
 }
 
 async fn json_body<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
@@ -805,4 +849,318 @@ async fn openapi_document_is_served() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn public_markets_endpoint_returns_configured_markets() {
+    let app = build_app(test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/markets")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let markets: Vec<MarketDefinition> = json_body(response).await;
+    assert!(markets.iter().any(|market| market.market_id == "BTC-USD"));
+    assert!(markets.iter().any(|market| market.market_id == "ETH-USD"));
+}
+
+#[tokio::test]
+async fn admin_can_stop_and_start_trading() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "trade-toggle-user");
+    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
+
+    let stop_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/trading/stop",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(stop_response.status(), StatusCode::OK);
+    let stopped: TradingControlResponse = json_body(stop_response).await;
+    assert!(!stopped.controls.trading_enabled);
+
+    let rejected = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+
+    let start_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/trading/start",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(start_response.status(), StatusCode::OK);
+    let started: TradingControlResponse = json_body(start_response).await;
+    assert!(started.controls.trading_enabled);
+
+    let accepted = app
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(accepted.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn admin_can_manage_market_lifecycle_and_load_config() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "market-admin-user");
+    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
+
+    let create_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/markets",
+            "test-admin-token",
+            &UpsertMarketRequest {
+                market_id: "SOL-USD".to_string(),
+                display_name: Some("Solana".to_string()),
+                base_asset: "SOL".to_string(),
+                quote_asset: "USD".to_string(),
+                tick_size: 5,
+                min_order_quantity: 2,
+                reference_price: Some(25),
+                enabled: true,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let created: MarketDefinition = json_body(create_response).await;
+    assert_eq!(created.market_id, "SOL-USD");
+    assert_eq!(created.tick_size, 5);
+
+    let patch_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::PATCH,
+            "/api/v1/admin/markets/SOL-USD",
+            "test-admin-token",
+            &UpdateMarketRequest {
+                display_name: None,
+                tick_size: None,
+                min_order_quantity: None,
+                reference_price: None,
+                enabled: Some(false),
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    let disabled: MarketDefinition = json_body(patch_response).await;
+    assert_eq!(disabled.status, MarketStatus::Disabled);
+
+    let disabled_order = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOL-USD".to_string(),
+                side: Side::Buy,
+                price: 25,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(disabled_order.status(), StatusCode::CONFLICT);
+
+    let delete_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            "/api/v1/admin/markets/SOL-USD",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let deleted: DeleteMarketResponse = json_body(delete_response).await;
+    assert_eq!(deleted.market_id, "SOL-USD");
+
+    let load_response = app
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/config/load",
+            "test-admin-token",
+            &LoadExchangeConfigRequest {
+                trading_enabled: Some(false),
+                markets: vec![UpsertMarketRequest {
+                    market_id: "DOGE-USD".to_string(),
+                    display_name: Some("Dogecoin".to_string()),
+                    base_asset: "DOGE".to_string(),
+                    quote_asset: "USD".to_string(),
+                    tick_size: 1,
+                    min_order_quantity: 10,
+                    reference_price: Some(1),
+                    enabled: true,
+                }],
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(load_response.status(), StatusCode::OK);
+    let loaded: LoadExchangeConfigResponse = json_body(load_response).await;
+    assert!(!loaded.controls.trading_enabled);
+    assert!(loaded
+        .markets
+        .iter()
+        .any(|market| market.market_id == "DOGE-USD"));
+}
+
+#[tokio::test]
+async fn admin_messages_and_state_endpoint_round_trip() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    provision_user(&state, "message-user");
+
+    let send_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/messages",
+            "test-admin-token",
+            &SendAdminMessageRequest {
+                target_username: Some("message-user".to_string()),
+                market: Some("BTC-USD".to_string()),
+                level: AdminMessageLevel::Warning,
+                title: Some("Desk notice".to_string()),
+                body: "Reduce size ahead of settlement.".to_string(),
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(send_response.status(), StatusCode::OK);
+    let sent: AdminMessageEntry = json_body(send_response).await;
+    assert_eq!(sent.target_username.as_deref(), Some("message-user"));
+
+    let state_response = app
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/v1/admin/state",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(state_response.status(), StatusCode::OK);
+    let admin_state: AdminStateResponse = json_body(state_response).await;
+    assert!(admin_state
+        .recent_messages
+        .iter()
+        .any(|message| message.message_id == sent.message_id));
+}
+
+#[tokio::test]
+async fn admin_can_settle_market_and_leaderboard_reflects_result() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "settle-maker");
+    let taker = provision_user(&state, "settle-taker");
+    SettlementEngine::seed_balance(&state, maker.profile.trader_id, "BTC", 3);
+    SettlementEngine::seed_balance(&state, taker.profile.trader_id, "USD", 200);
+
+    let submit_response = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                price: 120,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(submit_response.status(), StatusCode::CREATED);
+
+    let settle_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/markets/BTC-USD/settle",
+            "test-admin-token",
+            &SettleMarketRequest {
+                settlement_price: 150,
+                announcement: None,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(settle_response.status(), StatusCode::OK);
+    let settled: SettleMarketResponse = json_body(settle_response).await;
+    assert_eq!(settled.market.status, MarketStatus::Settled);
+    assert_eq!(settled.canceled_orders, 1);
+
+    let maker_balances = state.storage.list_balances(maker.profile.trader_id);
+    let maker_btc = maker_balances
+        .iter()
+        .find(|balance| balance.asset == "BTC")
+        .expect("maker btc");
+    let maker_usd = maker_balances
+        .iter()
+        .find(|balance| balance.asset == "USD")
+        .expect("maker usd");
+    assert_eq!(maker_btc.free, 0);
+    assert_eq!(maker_btc.locked, 0);
+    assert_eq!(maker_usd.free, 450);
+
+    let leaderboard_response = app
+        .oneshot(api_key_request(
+            Method::GET,
+            "/api/v1/leaderboard",
+            &maker.profile.api_key,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(leaderboard_response.status(), StatusCode::OK);
+    let leaderboard: Vec<LeaderboardRow> = json_body(leaderboard_response).await;
+    assert_eq!(leaderboard[0].username, "settle-maker");
+    assert_eq!(leaderboard[0].equity, 450);
 }

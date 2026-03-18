@@ -12,6 +12,15 @@ function errorCopy(error?: string) {
   if (error === "missing-api-key") {
     return "Enter the assigned API key to start the competition session.";
   }
+  if (error === "invalid-api-key") {
+    return "The exchange rejected that API key. Check the assigned key and try again.";
+  }
+  if (error === "exchange-unavailable") {
+    return "The exchange could not be reached for login validation. Try again shortly.";
+  }
+  if (error === "session-expired") {
+    return "Your session is no longer valid. Sign in again.";
+  }
 
   return null;
 }
@@ -47,7 +56,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <div className="surface-panel-soft grid gap-4 p-5 text-xl text-[var(--muted-strong)]">
             <p className="font-semibold text-white">Session notes</p>
             <p>Each user signs in with an assigned API key.</p>
-            <p>Admin access is derived from the configured admin key list.</p>
+            <p>The login route validates the key directly against the exchange backend.</p>
             <p>The trade client reuses the same session for REST and WS access.</p>
           </div>
         </div>
@@ -86,7 +95,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             Start session
           </button>
           <p className="text-lg text-[var(--muted)]">
-            Trader or admin access is derived from the key you were assigned.
+            Trader or admin access is determined by the exchange when the key is validated.
           </p>
         </form>
       </section>

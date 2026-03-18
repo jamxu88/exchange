@@ -1,0 +1,76 @@
+---
+title: "Competition Quickstart"
+description: "How a competition user receives credentials and connects to the live exchange."
+---
+
+## 1. Get your assigned API key
+
+Competition users are provisioned by an operator. There is no self-registration flow.
+
+Each participant receives:
+
+- a username
+- a unique API key
+
+That API key is both the user identity and the API access credential.
+
+## 2. Browser login flow
+
+If you are using the Next.js client:
+
+1. Open `/login`.
+2. Paste the assigned API key.
+3. The client validates the key against the exchange, stores an HTTP-only session cookie, and routes you to `/trade` or `/admin`.
+
+## 3. REST check
+
+Use the API key directly against the live exchange:
+
+```bash
+curl \
+  -H "x-api-key: YOUR_API_KEY" \
+  https://quant.jamesxu.dev/api/v1/user
+```
+
+Example response:
+
+```json
+{
+  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+  "username": "team-alpha",
+  "api_key": "exch_redacted",
+  "created_at": "2026-03-18T15:27:42.159901Z"
+}
+```
+
+## 4. WebSocket check
+
+Open a socket to:
+
+```text
+wss://quant.jamesxu.dev/ws
+```
+
+Authenticate:
+
+```json
+{"op":"authenticate","api_key":"YOUR_API_KEY"}
+```
+
+Then subscribe to market data:
+
+```json
+{"op":"subscribe","channel":"l3","market":"BTC-USD"}
+```
+
+## 5. If you receive `resync_required`
+
+- For `channel: "l3"`, resubscribe to get a fresh snapshot.
+- For `channel: "user"`, refresh account state over REST and reconnect if needed.
+
+## 6. Current operational caveats
+
+- The live endpoint is `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`.
+- Public port `80` is not currently redirecting, so use the HTTPS URL directly.
+- Market-data sequence numbers reset when the backend process restarts.
+- Restart recovery currently restores open orders into the in-memory book, but full settlement reconciliation is not implemented yet.

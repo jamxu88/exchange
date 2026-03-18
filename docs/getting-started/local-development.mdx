@@ -1,0 +1,101 @@
+---
+title: "Local Development"
+description: "Run the backend and client locally with the same config model used in deployment."
+---
+
+## Prerequisites
+
+- Rust toolchain
+- PostgreSQL if you want local durable storage
+- Node.js and npm for the client
+- Mintlify CLI via `npx` if you want to preview the docs site locally
+
+## Preview the docs site
+
+```bash
+cd docs
+npx mintlify dev
+```
+
+## Backend environment
+
+Copy the backend example file and adjust as needed:
+
+```bash
+cp exchange/.env.example exchange/.env
+```
+
+Key backend settings:
+
+- `BIND_ADDR`
+- `DATABASE_URL`
+- `STORAGE_BACKEND=in_memory|postgres`
+- `ADMIN_API_TOKEN`
+- `WS_BROADCAST_BUFFER`
+- `PER_USER_REQUESTS_PER_SECOND`
+- `POSTGRES_WRITE_BATCH_SIZE`
+- `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
+- `POSTGRES_WRITE_QUEUE_CAPACITY`
+- `POSTGRES_WRITE_RETRY_BACKOFF_MS`
+
+For fast local iteration without PostgreSQL:
+
+```bash
+STORAGE_BACKEND=in_memory cargo run --manifest-path exchange/Cargo.toml
+```
+
+For local PostgreSQL-backed development:
+
+```bash
+STORAGE_BACKEND=postgres \
+DATABASE_URL=postgres://exchange:exchange@localhost:5432/exchange \
+cargo run --manifest-path exchange/Cargo.toml
+```
+
+Useful local URLs:
+
+- `http://localhost:8080/health`
+- `http://localhost:8080/docs`
+- `ws://localhost:8080/ws`
+
+## Backend tests
+
+```bash
+cargo test --manifest-path exchange/Cargo.toml
+```
+
+## Client environment
+
+Copy the client example file:
+
+```bash
+cp client/.env.example client/.env.local
+```
+
+The trade client runtime reads:
+
+- `NEXT_PUBLIC_EXCHANGE_HTTP_URL`
+- `NEXT_PUBLIC_EXCHANGE_WS_URL`
+- `NEXT_PUBLIC_EXCHANGE_MARKETS`
+- `NEXT_PUBLIC_EXCHANGE_API_KEY`
+
+Run the client:
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Client default local targets:
+
+- HTTP: `http://localhost:8080`
+- WebSocket: `ws://localhost:8080/ws`
+
+## Recommended local workflow
+
+1. Start PostgreSQL if you want durable storage testing.
+2. Start the backend with `STORAGE_BACKEND=postgres` when testing persistence or restart behavior.
+3. Start the client and point it at the local backend.
+4. Provision a user with the admin endpoint.
+5. Use the returned API key in the client login form or direct REST and WS tests. The client login route now validates the key against the backend before writing the session cookie.

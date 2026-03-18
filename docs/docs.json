@@ -1,0 +1,57 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Quant Exchange",
+  "description": "Internal documentation for the exchange backend, client, and EC2 deployment.",
+  "favicon": "/favicon.ico",
+  "colors": {
+    "primary": "#1F7A5A"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "getting-started/local-development",
+          "getting-started/competition-quickstart",
+          "getting-started/current-deployment"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/system-architecture",
+          "architecture/storage-and-recovery"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/authentication",
+          "reference/rest-api",
+          "reference/websocket-api",
+          "reference/recovery-and-resync",
+          "reference/error-codes",
+          "reference/examples"
+        ]
+      },
+      {
+        "group": "Client",
+        "pages": [
+          "client/client-integration",
+          "client/client-deployment",
+          "client/ui-and-figma",
+          "client/keybinds"
+        ]
+      },
+      {
+        "group": "Operations",
+        "pages": [
+          "operations/deployment-and-ops",
+          "operations/runbook"
+        ]
+      }
+    ]
+  }
+}

@@ -1,7 +1,11 @@
 use crate::accounts::{UserProfile, UserRecord};
-use crate::admin::AdminAuditEntry;
+use crate::admin::{
+    AdminAuditEntry, AdminMessageEntry, AdminMessageLevel, ExchangeControls, MarketDefinition,
+    MarketStatus,
+};
 use crate::config::Config;
 use crate::orderbook::{Fill, Order, Side};
+use crate::settlement::{SettlementJournalEntry, SettlementJournalReason};
 use crate::state::Balance;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -23,8 +27,12 @@ const DEFAULT_POSTGRES_BACKPRESSURE_PERCENT: usize = 80;
 
 pub const USERS_TABLE: &str = "users";
 pub const API_KEYS_TABLE: &str = "api_keys";
+pub const EXCHANGE_CONTROLS_TABLE: &str = "exchange_controls";
+pub const MARKETS_TABLE: &str = "markets";
 pub const ADMIN_AUDIT_LOGS_TABLE: &str = "admin_audit_logs";
+pub const ADMIN_MESSAGES_TABLE: &str = "admin_messages";
 pub const BALANCES_TABLE: &str = "balances";
+pub const SETTLEMENT_JOURNAL_TABLE: &str = "settlement_journal";
 pub const POSITIONS_TABLE: &str = "positions";
 pub const PENDING_POSITIONS_TABLE: &str = "pending_positions";
 pub const ORDERS_TABLE: &str = "orders";
@@ -110,14 +118,31 @@ pub trait StorageBackend: Send + Sync {
     fn kind(&self) -> StorageBackendKind;
     fn persistence_status(&self) -> PersistenceStatus;
     fn create_user(&self, record: UserRecord) -> Result<(), StorageError>;
+    fn list_users(&self) -> Vec<UserRecord>;
     fn get_user(&self, trader_id: Uuid) -> Option<UserRecord>;
     fn get_user_by_username(&self, username: &str) -> Option<UserRecord>;
     fn get_user_by_api_key(&self, api_key: &str) -> Option<UserRecord>;
+    fn get_exchange_controls(&self) -> ExchangeControls;
+    fn set_exchange_controls(&self, controls: ExchangeControls);
+    fn list_markets(&self) -> Vec<MarketDefinition>;
+    fn get_market(&self, market_id: &str) -> Option<MarketDefinition>;
+    fn upsert_market(&self, market: MarketDefinition);
+    fn delete_market(&self, market_id: &str) -> Option<MarketDefinition>;
     fn append_admin_audit_log(&self, entry: AdminAuditEntry);
     fn list_admin_audit_logs(&self) -> Vec<AdminAuditEntry>;
+    fn append_admin_message(&self, entry: AdminMessageEntry);
+    fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry>;
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance>;
+    fn list_all_balances(&self) -> Vec<(Uuid, Vec<Balance>)>;
     fn put_balance(&self, trader_id: Uuid, balance: Balance);
     fn replace_balances(&self, trader_id: Uuid, balances: Vec<Balance>);
+    fn apply_settlement_update(
+        &self,
+        trader_id: Uuid,
+        balances: Vec<Balance>,
+        journal_entries: Vec<SettlementJournalEntry>,
+    );
+    fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry>;
     fn upsert_order_ledger(&self, order: Order);
     fn close_order_ledger(&self, trader_id: Uuid, order_id: Uuid, remaining: u64);
     fn list_all_open_orders(&self) -> Vec<Order>;
@@ -166,6 +191,10 @@ impl StorageRepository {
         self.backend.create_user(record)
     }
 
+    pub fn list_users(&self) -> Vec<UserRecord> {
+        self.backend.list_users()
+    }
+
     pub fn get_user(&self, trader_id: Uuid) -> Option<UserRecord> {
         self.backend.get_user(trader_id)
     }
@@ -178,6 +207,30 @@ impl StorageRepository {
         self.backend.get_user_by_api_key(api_key)
     }
 
+    pub fn get_exchange_controls(&self) -> ExchangeControls {
+        self.backend.get_exchange_controls()
+    }
+
+    pub fn set_exchange_controls(&self, controls: ExchangeControls) {
+        self.backend.set_exchange_controls(controls)
+    }
+
+    pub fn list_markets(&self) -> Vec<MarketDefinition> {
+        self.backend.list_markets()
+    }
+
+    pub fn get_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        self.backend.get_market(market_id)
+    }
+
+    pub fn upsert_market(&self, market: MarketDefinition) {
+        self.backend.upsert_market(market)
+    }
+
+    pub fn delete_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        self.backend.delete_market(market_id)
+    }
+
     pub fn append_admin_audit_log(&self, entry: AdminAuditEntry) {
         self.backend.append_admin_audit_log(entry)
     }
@@ -186,8 +239,20 @@ impl StorageRepository {
         self.backend.list_admin_audit_logs()
     }
 
+    pub fn append_admin_message(&self, entry: AdminMessageEntry) {
+        self.backend.append_admin_message(entry)
+    }
+
+    pub fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry> {
+        self.backend.list_admin_messages(limit)
+    }
+
     pub fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
         self.backend.list_balances(trader_id)
+    }
+
+    pub fn list_all_balances(&self) -> Vec<(Uuid, Vec<Balance>)> {
+        self.backend.list_all_balances()
     }
 
     pub fn put_balance(&self, trader_id: Uuid, balance: Balance) {
@@ -196,6 +261,20 @@ impl StorageRepository {
 
     pub fn replace_balances(&self, trader_id: Uuid, balances: Vec<Balance>) {
         self.backend.replace_balances(trader_id, balances)
+    }
+
+    pub fn apply_settlement_update(
+        &self,
+        trader_id: Uuid,
+        balances: Vec<Balance>,
+        journal_entries: Vec<SettlementJournalEntry>,
+    ) {
+        self.backend
+            .apply_settlement_update(trader_id, balances, journal_entries)
+    }
+
+    pub fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry> {
+        self.backend.list_settlement_journal()
     }
 
     pub fn upsert_order_ledger(&self, order: Order) {
@@ -241,7 +320,11 @@ struct InMemoryRepository {
     users: DashMap<Uuid, UserRecord>,
     usernames: DashMap<String, Uuid>,
     api_keys: DashMap<String, Uuid>,
+    exchange_controls: Arc<Mutex<ExchangeControls>>,
+    markets: DashMap<String, MarketDefinition>,
     admin_audit_logs: Arc<Mutex<Vec<AdminAuditEntry>>>,
+    admin_messages: Arc<Mutex<Vec<AdminMessageEntry>>>,
+    settlement_journal: Arc<Mutex<Vec<SettlementJournalEntry>>>,
     accounts: DashMap<Uuid, Arc<Mutex<AccountPartition>>>,
 }
 
@@ -286,6 +369,21 @@ impl StorageBackend for InMemoryRepository {
         Ok(())
     }
 
+    fn list_users(&self) -> Vec<UserRecord> {
+        let mut users = self
+            .users
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        users.sort_by(|left, right| {
+            left.profile
+                .username
+                .cmp(&right.profile.username)
+                .then_with(|| left.profile.trader_id.cmp(&right.profile.trader_id))
+        });
+        users
+    }
+
     fn get_user(&self, trader_id: Uuid) -> Option<UserRecord> {
         self.users.get(&trader_id).map(|entry| entry.clone())
     }
@@ -298,6 +396,42 @@ impl StorageBackend for InMemoryRepository {
     fn get_user_by_api_key(&self, api_key: &str) -> Option<UserRecord> {
         let trader_id = self.api_keys.get(api_key).map(|entry| *entry.value())?;
         self.get_user(trader_id)
+    }
+
+    fn get_exchange_controls(&self) -> ExchangeControls {
+        self.exchange_controls
+            .lock()
+            .expect("exchange controls lock")
+            .clone()
+    }
+
+    fn set_exchange_controls(&self, controls: ExchangeControls) {
+        *self
+            .exchange_controls
+            .lock()
+            .expect("exchange controls lock") = controls;
+    }
+
+    fn list_markets(&self) -> Vec<MarketDefinition> {
+        let mut markets = self
+            .markets
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        markets.sort_by(|left, right| left.market_id.cmp(&right.market_id));
+        markets
+    }
+
+    fn get_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        self.markets.get(market_id).map(|entry| entry.clone())
+    }
+
+    fn upsert_market(&self, market: MarketDefinition) {
+        self.markets.insert(market.market_id.clone(), market);
+    }
+
+    fn delete_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        self.markets.remove(market_id).map(|(_, market)| market)
     }
 
     fn append_admin_audit_log(&self, entry: AdminAuditEntry) {
@@ -315,10 +449,52 @@ impl StorageBackend for InMemoryRepository {
         entries
     }
 
+    fn append_admin_message(&self, entry: AdminMessageEntry) {
+        let mut guard = self.admin_messages.lock().expect("admin message lock");
+        guard.push(entry);
+    }
+
+    fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry> {
+        let mut entries = self
+            .admin_messages
+            .lock()
+            .expect("admin message lock")
+            .clone();
+        entries.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.message_id.cmp(&left.message_id))
+        });
+        if let Some(limit) = limit {
+            entries.truncate(limit);
+        }
+        entries
+    }
+
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
         self.with_account(trader_id, |account| {
             account.balances.values().cloned().collect()
         })
+    }
+
+    fn list_all_balances(&self) -> Vec<(Uuid, Vec<Balance>)> {
+        let mut balances = Vec::new();
+        for entry in &self.accounts {
+            let trader_id = *entry.key();
+            let mut trader_balances = entry
+                .value()
+                .lock()
+                .expect("account partition lock")
+                .balances
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            trader_balances.sort_by(|left, right| left.asset.cmp(&right.asset));
+            balances.push((trader_id, trader_balances));
+        }
+        balances.sort_by_key(|(trader_id, _)| *trader_id);
+        balances
     }
 
     fn put_balance(&self, trader_id: Uuid, balance: Balance) {
@@ -334,6 +510,33 @@ impl StorageBackend for InMemoryRepository {
                 .map(|balance| (balance.asset.clone(), balance))
                 .collect();
         });
+    }
+
+    fn apply_settlement_update(
+        &self,
+        trader_id: Uuid,
+        balances: Vec<Balance>,
+        journal_entries: Vec<SettlementJournalEntry>,
+    ) {
+        self.replace_balances(trader_id, balances);
+        if journal_entries.is_empty() {
+            return;
+        }
+        let mut guard = self
+            .settlement_journal
+            .lock()
+            .expect("settlement journal lock");
+        guard.extend(journal_entries);
+    }
+
+    fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry> {
+        let mut entries = self
+            .settlement_journal
+            .lock()
+            .expect("settlement journal lock")
+            .clone();
+        entries.sort_by_key(|entry| (entry.occurred_at, entry.journal_id));
+        entries
     }
 
     fn upsert_order_ledger(&self, _order: Order) {}
@@ -465,6 +668,10 @@ impl StorageBackend for PostgresRepository {
         Ok(())
     }
 
+    fn list_users(&self) -> Vec<UserRecord> {
+        self.cache.list_users()
+    }
+
     fn get_user(&self, trader_id: Uuid) -> Option<UserRecord> {
         self.cache.get_user(trader_id)
     }
@@ -477,6 +684,37 @@ impl StorageBackend for PostgresRepository {
         self.cache.get_user_by_api_key(api_key)
     }
 
+    fn get_exchange_controls(&self) -> ExchangeControls {
+        self.cache.get_exchange_controls()
+    }
+
+    fn set_exchange_controls(&self, controls: ExchangeControls) {
+        self.cache.set_exchange_controls(controls.clone());
+        self.writer.enqueue(PersistOp::SetExchangeControls(controls));
+    }
+
+    fn list_markets(&self) -> Vec<MarketDefinition> {
+        self.cache.list_markets()
+    }
+
+    fn get_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        self.cache.get_market(market_id)
+    }
+
+    fn upsert_market(&self, market: MarketDefinition) {
+        self.cache.upsert_market(market.clone());
+        self.writer.enqueue(PersistOp::UpsertMarket(market));
+    }
+
+    fn delete_market(&self, market_id: &str) -> Option<MarketDefinition> {
+        let removed = self.cache.delete_market(market_id);
+        if removed.is_some() {
+            self.writer
+                .enqueue(PersistOp::DeleteMarket(market_id.to_string()));
+        }
+        removed
+    }
+
     fn append_admin_audit_log(&self, entry: AdminAuditEntry) {
         self.cache.append_admin_audit_log(entry.clone());
         self.writer.enqueue(PersistOp::AppendAdminAuditLog(entry));
@@ -486,8 +724,21 @@ impl StorageBackend for PostgresRepository {
         self.cache.list_admin_audit_logs()
     }
 
+    fn append_admin_message(&self, entry: AdminMessageEntry) {
+        self.cache.append_admin_message(entry.clone());
+        self.writer.enqueue(PersistOp::AppendAdminMessage(entry));
+    }
+
+    fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry> {
+        self.cache.list_admin_messages(limit)
+    }
+
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
         self.cache.list_balances(trader_id)
+    }
+
+    fn list_all_balances(&self) -> Vec<(Uuid, Vec<Balance>)> {
+        self.cache.list_all_balances()
     }
 
     fn put_balance(&self, trader_id: Uuid, balance: Balance) {
@@ -502,6 +753,25 @@ impl StorageBackend for PostgresRepository {
             trader_id,
             balances,
         });
+    }
+
+    fn apply_settlement_update(
+        &self,
+        trader_id: Uuid,
+        balances: Vec<Balance>,
+        journal_entries: Vec<SettlementJournalEntry>,
+    ) {
+        self.cache
+            .apply_settlement_update(trader_id, balances.clone(), journal_entries.clone());
+        self.writer.enqueue(PersistOp::ApplySettlementUpdate {
+            trader_id,
+            balances,
+            journal_entries,
+        });
+    }
+
+    fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry> {
+        self.cache.list_settlement_journal()
     }
 
     fn upsert_order_ledger(&self, order: Order) {
@@ -753,7 +1023,11 @@ impl PostgresWriteTelemetry {
 #[derive(Debug, Clone)]
 enum PersistOp {
     CreateUser(UserRecord),
+    SetExchangeControls(ExchangeControls),
+    UpsertMarket(MarketDefinition),
+    DeleteMarket(String),
     AppendAdminAuditLog(AdminAuditEntry),
+    AppendAdminMessage(AdminMessageEntry),
     PutBalance {
         trader_id: Uuid,
         balance: Balance,
@@ -761,6 +1035,11 @@ enum PersistOp {
     ReplaceBalances {
         trader_id: Uuid,
         balances: Vec<Balance>,
+    },
+    ApplySettlementUpdate {
+        trader_id: Uuid,
+        balances: Vec<Balance>,
+        journal_entries: Vec<SettlementJournalEntry>,
     },
     UpsertOrderLedger(Order),
     CloseOrderLedger {
@@ -912,6 +1191,53 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
             )
             .map_err(|error| format!("postgres api key insert failed: {error}"))?;
         }
+        PersistOp::SetExchangeControls(controls) => {
+            tx.execute(
+                "INSERT INTO exchange_controls (control_key, trading_enabled, updated_at) \
+                 VALUES ('exchange', $1, $2) \
+                 ON CONFLICT (control_key) DO UPDATE SET \
+                   trading_enabled = EXCLUDED.trading_enabled, \
+                   updated_at = EXCLUDED.updated_at",
+                &[&controls.trading_enabled, &controls.updated_at],
+            )
+            .map_err(|error| format!("postgres exchange control upsert failed: {error}"))?;
+        }
+        PersistOp::UpsertMarket(market) => {
+            tx.execute(
+                "INSERT INTO markets \
+                 (market_id, display_name, base_asset, quote_asset, tick_size, min_order_quantity, \
+                  reference_price, settlement_price, status, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (market_id) DO UPDATE SET \
+                   display_name = EXCLUDED.display_name, \
+                   base_asset = EXCLUDED.base_asset, \
+                   quote_asset = EXCLUDED.quote_asset, \
+                   tick_size = EXCLUDED.tick_size, \
+                   min_order_quantity = EXCLUDED.min_order_quantity, \
+                   reference_price = EXCLUDED.reference_price, \
+                   settlement_price = EXCLUDED.settlement_price, \
+                   status = EXCLUDED.status, \
+                   updated_at = EXCLUDED.updated_at",
+                &[
+                    &market.market_id,
+                    &market.display_name,
+                    &market.base_asset,
+                    &market.quote_asset,
+                    &u64_to_i64(market.tick_size),
+                    &u64_to_i64(market.min_order_quantity),
+                    &market.reference_price.map(u64_to_i64),
+                    &market.settlement_price.map(u64_to_i64),
+                    &market_status_to_db(market.status),
+                    &market.created_at,
+                    &market.updated_at,
+                ],
+            )
+            .map_err(|error| format!("postgres market upsert failed: {error}"))?;
+        }
+        PersistOp::DeleteMarket(market_id) => {
+            tx.execute("DELETE FROM markets WHERE market_id = $1", &[market_id])
+                .map_err(|error| format!("postgres market delete failed: {error}"))?;
+        }
         PersistOp::AppendAdminAuditLog(entry) => {
             tx.execute(
                 "INSERT INTO admin_audit_logs \
@@ -928,6 +1254,24 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
                 ],
             )
             .map_err(|error| format!("postgres admin audit insert failed: {error}"))?;
+        }
+        PersistOp::AppendAdminMessage(entry) => {
+            tx.execute(
+                "INSERT INTO admin_messages \
+                 (message_id, target_username, target_trader_id, market_id, level, title, body, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                &[
+                    &entry.message_id,
+                    &entry.target_username,
+                    &entry.target_trader_id,
+                    &entry.market,
+                    &admin_message_level_to_db(entry.level),
+                    &entry.title,
+                    &entry.body,
+                    &entry.created_at,
+                ],
+            )
+            .map_err(|error| format!("postgres admin message insert failed: {error}"))?;
         }
         PersistOp::PutBalance { trader_id, balance } => {
             let updated_at = Utc::now();
@@ -952,23 +1296,33 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
             trader_id,
             balances,
         } => {
-            tx.execute("DELETE FROM balances WHERE trader_id = $1", &[trader_id])
-                .map_err(|error| format!("postgres balance delete failed: {error}"))?;
-
-            let updated_at = Utc::now();
-            for balance in balances {
+            persist_balance_snapshot(tx, *trader_id, balances)?;
+        }
+        PersistOp::ApplySettlementUpdate {
+            trader_id,
+            balances,
+            journal_entries,
+        } => {
+            persist_balance_snapshot(tx, *trader_id, balances)?;
+            for entry in journal_entries {
                 tx.execute(
-                    "INSERT INTO balances (trader_id, asset, free, locked, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5)",
+                    "INSERT INTO settlement_journal \
+                     (journal_id, trader_id, asset, free_delta, locked_delta, reason, order_id, fill_id, occurred_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                     ON CONFLICT (journal_id) DO NOTHING",
                     &[
-                        trader_id,
-                        &balance.asset,
-                        &u64_to_i64(balance.free),
-                        &u64_to_i64(balance.locked),
-                        &updated_at,
+                        &entry.journal_id,
+                        &entry.trader_id,
+                        &entry.asset,
+                        &entry.free_delta,
+                        &entry.locked_delta,
+                        &settlement_reason_to_db(entry.reason),
+                        &entry.order_id,
+                        &entry.fill_id,
+                        &entry.occurred_at,
                     ],
                 )
-                .map_err(|error| format!("postgres balance insert failed: {error}"))?;
+                .map_err(|error| format!("postgres settlement journal insert failed: {error}"))?;
             }
         }
         PersistOp::UpsertOrderLedger(order) => {
@@ -1038,8 +1392,12 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
 
 fn hydrate_cache(client: &mut Client, cache: &InMemoryRepository) {
     hydrate_users(client, cache);
+    hydrate_exchange_controls(client, cache);
+    hydrate_markets(client, cache);
     hydrate_admin_audit_logs(client, cache);
+    hydrate_admin_messages(client, cache);
     hydrate_balances(client, cache);
+    hydrate_settlement_journal(client, cache);
     hydrate_open_orders(client, cache);
     hydrate_fills(client, cache);
 }
@@ -1062,6 +1420,35 @@ fn hydrate_users(client: &mut Client, cache: &InMemoryRepository) {
     }
 }
 
+fn hydrate_exchange_controls(client: &mut Client, cache: &InMemoryRepository) {
+    let row = client
+        .query_opt(
+            "SELECT trading_enabled, updated_at FROM exchange_controls WHERE control_key = 'exchange'",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres exchange controls hydrate failed: {error}"));
+
+    if let Some(row) = row {
+        cache.set_exchange_controls(exchange_controls_from_row(row));
+    }
+}
+
+fn hydrate_markets(client: &mut Client, cache: &InMemoryRepository) {
+    let rows = client
+        .query(
+            "SELECT market_id, display_name, base_asset, quote_asset, tick_size, min_order_quantity, \
+                    reference_price, settlement_price, status, created_at, updated_at \
+             FROM markets \
+             ORDER BY market_id ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres market hydrate failed: {error}"));
+
+    for row in rows {
+        cache.upsert_market(market_from_row(row));
+    }
+}
+
 fn hydrate_admin_audit_logs(client: &mut Client, cache: &InMemoryRepository) {
     let rows = client
         .query(
@@ -1077,6 +1464,21 @@ fn hydrate_admin_audit_logs(client: &mut Client, cache: &InMemoryRepository) {
     }
 }
 
+fn hydrate_admin_messages(client: &mut Client, cache: &InMemoryRepository) {
+    let rows = client
+        .query(
+            "SELECT message_id, target_username, target_trader_id, market_id, level, title, body, created_at \
+             FROM admin_messages \
+             ORDER BY created_at ASC, message_id ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres admin message hydrate failed: {error}"));
+
+    for row in rows {
+        cache.append_admin_message(admin_message_from_row(row));
+    }
+}
+
 fn hydrate_balances(client: &mut Client, cache: &InMemoryRepository) {
     let rows = client
         .query(
@@ -1089,6 +1491,24 @@ fn hydrate_balances(client: &mut Client, cache: &InMemoryRepository) {
         let trader_id: Uuid = row.get("trader_id");
         cache.put_balance(trader_id, balance_from_row(row));
     }
+}
+
+fn hydrate_settlement_journal(client: &mut Client, cache: &InMemoryRepository) {
+    let rows = client
+        .query(
+            "SELECT journal_id, trader_id, asset, free_delta, locked_delta, reason, order_id, fill_id, occurred_at \
+             FROM settlement_journal \
+             ORDER BY occurred_at ASC, journal_id ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres settlement journal hydrate failed: {error}"));
+
+    let entries: Vec<_> = rows.into_iter().map(settlement_journal_from_row).collect();
+    cache
+        .settlement_journal
+        .lock()
+        .expect("settlement journal lock")
+        .extend(entries);
 }
 
 fn hydrate_open_orders(client: &mut Client, cache: &InMemoryRepository) {
@@ -1142,6 +1562,29 @@ fn user_from_row(row: Row) -> UserRecord {
     }
 }
 
+fn exchange_controls_from_row(row: Row) -> ExchangeControls {
+    ExchangeControls {
+        trading_enabled: row.get("trading_enabled"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn market_from_row(row: Row) -> MarketDefinition {
+    MarketDefinition {
+        market_id: row.get("market_id"),
+        display_name: row.get("display_name"),
+        base_asset: row.get("base_asset"),
+        quote_asset: row.get("quote_asset"),
+        tick_size: i64_to_u64(row.get("tick_size")),
+        min_order_quantity: i64_to_u64(row.get("min_order_quantity")),
+        reference_price: row.get::<_, Option<i64>>("reference_price").map(i64_to_u64),
+        settlement_price: row.get::<_, Option<i64>>("settlement_price").map(i64_to_u64),
+        status: market_status_from_db(&row.get::<_, String>("status")),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
 fn admin_audit_from_row(row: Row) -> AdminAuditEntry {
     AdminAuditEntry {
         audit_id: row.get("audit_id"),
@@ -1151,6 +1594,19 @@ fn admin_audit_from_row(row: Row) -> AdminAuditEntry {
         target_trader_id: row.get("target_trader_id"),
         details: row.get("details"),
         occurred_at: row.get("occurred_at"),
+    }
+}
+
+fn admin_message_from_row(row: Row) -> AdminMessageEntry {
+    AdminMessageEntry {
+        message_id: row.get("message_id"),
+        target_username: row.get("target_username"),
+        target_trader_id: row.get("target_trader_id"),
+        market: row.get("market_id"),
+        level: admin_message_level_from_db(&row.get::<_, String>("level")),
+        title: row.get("title"),
+        body: row.get("body"),
+        created_at: row.get("created_at"),
     }
 }
 
@@ -1187,6 +1643,20 @@ fn fill_from_row(row: Row) -> Fill {
     }
 }
 
+fn settlement_journal_from_row(row: Row) -> SettlementJournalEntry {
+    SettlementJournalEntry {
+        journal_id: row.get("journal_id"),
+        trader_id: row.get("trader_id"),
+        asset: row.get("asset"),
+        free_delta: row.get("free_delta"),
+        locked_delta: row.get("locked_delta"),
+        reason: settlement_reason_from_db(&row.get::<_, String>("reason")),
+        order_id: row.get("order_id"),
+        fill_id: row.get("fill_id"),
+        occurred_at: row.get("occurred_at"),
+    }
+}
+
 fn side_to_db(side: Side) -> &'static str {
     match side {
         Side::Buy => "BUY",
@@ -1200,6 +1670,88 @@ fn side_from_db(side: &str) -> Side {
         "SELL" => Side::Sell,
         other => panic!("unsupported order side in storage: {other}"),
     }
+}
+
+fn settlement_reason_to_db(reason: SettlementJournalReason) -> &'static str {
+    match reason {
+        SettlementJournalReason::BalanceSeeded => "BALANCE_SEEDED",
+        SettlementJournalReason::OrderHoldLocked => "ORDER_HOLD_LOCKED",
+        SettlementJournalReason::OrderHoldReleased => "ORDER_HOLD_RELEASED",
+        SettlementJournalReason::FillSettled => "FILL_SETTLED",
+        SettlementJournalReason::MarketSettled => "MARKET_SETTLED",
+    }
+}
+
+fn settlement_reason_from_db(reason: &str) -> SettlementJournalReason {
+    match reason {
+        "BALANCE_SEEDED" => SettlementJournalReason::BalanceSeeded,
+        "ORDER_HOLD_LOCKED" => SettlementJournalReason::OrderHoldLocked,
+        "ORDER_HOLD_RELEASED" => SettlementJournalReason::OrderHoldReleased,
+        "FILL_SETTLED" => SettlementJournalReason::FillSettled,
+        "MARKET_SETTLED" => SettlementJournalReason::MarketSettled,
+        other => panic!("unsupported settlement reason in storage: {other}"),
+    }
+}
+
+fn market_status_to_db(status: MarketStatus) -> &'static str {
+    match status {
+        MarketStatus::Enabled => "ENABLED",
+        MarketStatus::Disabled => "DISABLED",
+        MarketStatus::Settled => "SETTLED",
+    }
+}
+
+fn market_status_from_db(status: &str) -> MarketStatus {
+    match status {
+        "ENABLED" => MarketStatus::Enabled,
+        "DISABLED" => MarketStatus::Disabled,
+        "SETTLED" => MarketStatus::Settled,
+        other => panic!("unsupported market status in storage: {other}"),
+    }
+}
+
+fn admin_message_level_to_db(level: AdminMessageLevel) -> &'static str {
+    match level {
+        AdminMessageLevel::Info => "INFO",
+        AdminMessageLevel::Warning => "WARNING",
+        AdminMessageLevel::Critical => "CRITICAL",
+    }
+}
+
+fn admin_message_level_from_db(level: &str) -> AdminMessageLevel {
+    match level {
+        "INFO" => AdminMessageLevel::Info,
+        "WARNING" => AdminMessageLevel::Warning,
+        "CRITICAL" => AdminMessageLevel::Critical,
+        other => panic!("unsupported admin message level in storage: {other}"),
+    }
+}
+
+fn persist_balance_snapshot(
+    tx: &mut Transaction<'_>,
+    trader_id: Uuid,
+    balances: &[Balance],
+) -> Result<(), String> {
+    tx.execute("DELETE FROM balances WHERE trader_id = $1", &[&trader_id])
+        .map_err(|error| format!("postgres balance delete failed: {error}"))?;
+
+    let updated_at = Utc::now();
+    for balance in balances {
+        tx.execute(
+            "INSERT INTO balances (trader_id, asset, free, locked, updated_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+            &[
+                &trader_id,
+                &balance.asset,
+                &u64_to_i64(balance.free),
+                &u64_to_i64(balance.locked),
+                &updated_at,
+            ],
+        )
+        .map_err(|error| format!("postgres balance insert failed: {error}"))?;
+    }
+
+    Ok(())
 }
 
 fn i64_to_u64(value: i64) -> u64 {

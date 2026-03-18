@@ -13,10 +13,13 @@ What exists today:
 - Login route scaffold
 - Trade route scaffold
 - Admin route scaffold
-- Mock session-based auth flow
+- API-key session flow with backend-validated cookie state
 - Keybind provider scaffold
 - Health endpoint
 - Live exchange backend is available for integration testing at `http://16.59.150.9:8080` and `ws://16.59.150.9:8080/ws`
+- The live exchange backend now runs from a GitHub-synced EC2 checkout, so client integration should assume `main` is the deployed source of truth
+- Mintlify-based internal docs now exist under `docs/`
+- Public browser-safe exchange access is available at `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
 
 What is still true:
 
@@ -24,9 +27,9 @@ What is still true:
 - The client is no longer a starter template, but it is still not a production-ready trading system
 - The trading UI and design system are implemented, but still need final polish and broader route coverage
 - Real-time transport and trading UX are implemented client-side, but still depend on backend completeness and load validation
-- The currently deployed backend endpoint is plain HTTP/WS only; TLS is not configured yet
 - Individual authentication is not implemented for production
-- Admin workflows are not implemented
+- Admin workflows are now wired to the backend, but the operator UX still needs polish
+- ECS deployment is still not implemented even though the docs now describe the intended path
 
 ## Progress Snapshot
 
@@ -37,12 +40,13 @@ What is still true:
   - `/login`
   - `/trade`
   - `/admin`
-- Mock auth flow exists
+- Backend-validated API-key login flow exists
 - Role gating scaffold exists for trader/admin flows
 - Keybind support exists for navigation:
   - `Ctrl/Cmd + K` -> `/trade`
   - `Ctrl/Cmd + G` -> `/admin`
 - ECS deployment intent is already documented in [client/README.md](/Users/james/Desktop/Coding/exchange-v2/client/README.md)
+- Live exchange endpoint/env configuration is documented in [client/README.md](/Users/james/Desktop/Coding/exchange-v2/client/README.md)
 - Figma-based trading interface is implemented on `/trade`
 - Core trading layout is in place:
   - market selector/header
@@ -75,30 +79,32 @@ What is still true:
 ### Partial
 
 - Authentication:
-  - mock login only
-  - not tied to backend auth model
+  - API-key login form exists
+  - login session is validated against the backend before cookie creation
+  - admin vs trader role is resolved from backend auth
 - Admin panel:
   - route exists
-  - no real controls yet
+  - backend operator endpoints now exist for trading control, markets, config load, messages, settlement, and leaderboard
+  - the page now reads live backend state and posts server actions to those endpoints
 - Trader UI:
   - Figma shell exists
   - stateful workflows exist
-  - still using a mix of mock/synthetic behavior until backend capabilities are finalized
+  - still uses REST for ticket submit / amend / cancel even though the backend also supports WS trading messages
 - Real-time integration:
   - REST bootstrap and WS connection logic exist
   - public health, WS auth, and L3 snapshot probes now succeed against `16.59.150.9`
-  - depends on live backend endpoints and final event model
+  - the deployed exchange host is now updated from GitHub instead of manual file sync
+  - client now consumes live `fill`, `order_state`, and `admin_message` events and refreshes account state from the backend
 - Performance:
   - framework baseline is light
   - no production profiling, budgets, or load validation yet
 
 ### Not Started / Missing
 
-- Real individual authentication
+- Full browser-session lifecycle hardening
 - Low-latency client architecture work
 - Memory budget enforcement
 - End-to-end UX polish
-- Production admin workflows
 - Broader validation of live WS/order flows under realistic competition traffic
 - Performance/load testing under sustained market updates
 
@@ -113,8 +119,8 @@ What is still true:
 - [ ] Admin panel to run the event
 - [x] Keybinds
 - [x] Implement the referenced Figma design
-- [ ] Internal-competition API-key login flow
-- [ ] Admin messaging workflows for broadcast and user-specific communication
+- [x] Internal-competition API-key login flow
+- [x] Admin messaging workflows for broadcast and user-specific communication
 
 ## Figma Source of Truth
 
@@ -191,19 +197,19 @@ Low latency and low memory are explicit requirements.
 
 ### Current
 
-- Mock login only
+- Backend-validated API-key login with HTTP-only session cookie
 
 ### Required
 
-- [ ] Replace mock login with API-key login for the internal competition
+- [x] Replace mock login with API-key login for the internal competition
 - [ ] Support individual trader accounts keyed by assigned API keys
 - [ ] Align auth model with backend auth/API key strategy
-- [ ] Validate API key on login and establish client session from it
-- [ ] Persist authenticated trader identity for REST and WS requests
-- [ ] Add protected route handling
+- [x] Validate API key on login and establish client session from it
+- [x] Persist authenticated trader identity for REST and WS requests
+- [x] Add protected route handling
 - [ ] Add session expiry / refresh behavior
-- [ ] Add logout flow
-- [ ] Add admin-vs-trader authorization rules
+- [x] Add logout flow
+- [x] Add admin-vs-trader authorization rules
 
 ## 6. Admin Panel
 
@@ -212,24 +218,32 @@ The client needs an admin panel to run the event.
 ### Current
 
 - `/admin` route scaffold exists
+- backend already exposes:
+  - start / stop trading
+  - market create / patch / delete
+  - market enable / disable / settle
+  - config load
+  - admin messages
+  - leaderboard
 
 ### Required
 
 - [ ] Define event-ops workflows
-- [ ] Add admin dashboard layout
+- [x] Add admin dashboard layout
 - [ ] Add operational controls, for example:
   - add markets
   - market pause/resume
   - start trading
-  - clear orderbook
   - enable/disable markets visible to users
+  - settle markets
   - event messaging / announcements
   - send broadcast messages to all users
   - send unique messages to individual users
-  - load a file of per-user messages and send them in bulk
+  - load config payloads into the backend
+  - render leaderboard
   - monitoring views
 - [ ] Add audit visibility for admin actions
-- [ ] Restrict access to admin users only
+- [x] Restrict access to admin users only
 
 ## 7. Keybinds
 
@@ -267,7 +281,8 @@ Using the referenced Figma node as the target:
 - [x] Connect to backend WS streams
 - [x] Handle auth on WS connection
 - [x] Subscribe to market data
-- [ ] Subscribe to account/trading events
+- [x] Subscribe to account/trading events
+- [x] Consume backend `admin_message` events in the message panel
 - [x] Render L3 updates efficiently
 - [x] Handle reconnect and resync
 - [x] Surface connection degradation clearly
@@ -283,11 +298,11 @@ Using the referenced Figma node as the target:
 
 ## 11. Documentation
 
-- [ ] Client architecture doc
-- [ ] Auth flow doc for API-key login
-- [ ] ECS deployment doc
-- [ ] Figma-to-implementation mapping doc
-- [ ] Keybind reference
+- [x] Client architecture doc
+- [x] Auth flow doc for API-key login
+- [x] ECS deployment doc
+- [x] Figma-to-implementation mapping doc
+- [x] Keybind reference
 - [ ] Admin workflow doc for market controls and user messaging
 - [ ] Performance budget doc
 
@@ -304,11 +319,12 @@ Using the referenced Figma node as the target:
 
 ## Immediate Next Tasks
 
-- [ ] Replace mock login with the API-key login flow for the competition
-- [ ] Point deployed client environments at `http://16.59.150.9:8080` and `ws://16.59.150.9:8080/ws` until TLS is added
-- [ ] Finish wiring live account/trading WS events end-to-end against the backend
+- [x] Validate API keys against the backend during login instead of only after session bootstrap
+- [x] Point deployed client environments at `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
+- [x] Document the exact client deploy env values to use against the current EC2 exchange endpoint
+- [x] Finish wiring live account/trading WS events end-to-end against the backend
 - [ ] Define admin panel actions and permissions for market controls and messaging
 - [ ] Define the file format and ingestion flow for per-user message uploads
 - [ ] Add performance budgets for memory and UI update latency
 - [ ] Add client logging/monitoring for REST and WS failures
-- [ ] Document the implemented client architecture and Figma mapping
+- [x] Document the implemented client architecture and Figma mapping

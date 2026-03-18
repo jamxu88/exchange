@@ -92,6 +92,7 @@ export type TradeFill = {
 };
 
 export type TradeBootstrapData = {
+  markets: MarketDefinition[];
   user: TradeUser | null;
   balances: AccountBalance[];
   openOrders: PendingOrder[];

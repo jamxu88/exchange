@@ -1,0 +1,73 @@
+---
+title: "Current Deployment"
+description: "The live EC2 deployment shape and the important on-box paths."
+---
+
+## Live host
+
+- Elastic IP: `16.59.150.9`
+- Public HTTPS: `https://quant.jamesxu.dev`
+- Public health: `https://quant.jamesxu.dev/health`
+- Public WebSocket: `wss://quant.jamesxu.dev/ws`
+- SSH user: `ec2-user`
+- On-box exchange origin: `http://127.0.0.1:8080`
+
+`quant.jamesxu.dev` resolves to the Elastic IP. Caddy now terminates TLS on the host and reverse-proxies requests to the loopback-only exchange origin on `127.0.0.1:8080`.
+
+## Runtime layout on the EC2 host
+
+- Repo: `/home/ec2-user/exchange-v2`
+- Backend binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
+- Backend env file: `/home/ec2-user/exchange-v2/exchange.env`
+- Service: `exchange`
+- Caddy binary: `/usr/local/bin/caddy`
+- Caddy config: `/etc/caddy/Caddyfile`
+- Caddy service: `caddy`
+- Database: local PostgreSQL on the same EC2 machine
+
+## Deployment source of truth
+
+The EC2 host now runs from a GitHub clone. Deployment updates should come from `origin/main`, not from manual file transfer.
+
+Current flow:
+
+```bash
+git push origin main
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
+  cd ~/exchange-v2 &&
+  git pull --ff-only &&
+  cd exchange &&
+  source "$HOME/.cargo/env" &&
+  cargo build --release &&
+  sudo systemctl restart exchange &&
+  sudo systemctl status exchange --no-pager
+'
+```
+
+## Health and logs
+
+Check health:
+
+```bash
+curl https://quant.jamesxu.dev/health
+```
+
+Check service state:
+
+```bash
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
+  'sudo systemctl status exchange --no-pager'
+```
+
+Tail logs:
+
+```bash
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
+  'sudo journalctl -u exchange -f'
+```
+
+## Current deployment caveats
+
+- Public port `80` still times out, so `http://quant.jamesxu.dev` does not currently redirect to HTTPS
+- GitHub access on the EC2 host is temporarily PAT-based
+- PostgreSQL is local to the instance, not managed RDS

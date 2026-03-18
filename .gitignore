@@ -1,6 +1,8 @@
 .DS_Store
 .idea/
 .vscode/
+.mintlify/
+docs/.mintlify/
 
 *.log
 npm-debug.log*

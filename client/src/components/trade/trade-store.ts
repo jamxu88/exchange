@@ -51,6 +51,7 @@ export type TradeAction =
   | { type: "adjust-shares"; delta: number }
   | { type: "bootstrap-start"; id: number; time: string }
   | { type: "bootstrap-success"; data: TradeBootstrapData; id: number; time: string }
+  | { type: "account-sync"; data: TradeBootstrapData }
   | { type: "bootstrap-error"; error: string; id: number; time: string }
   | { type: "ws-status"; status: ConnectionStatus; id: number; time: string }
   | { type: "ws-authenticated"; user: TradeUser; id: number; time: string }
@@ -66,6 +67,44 @@ export type TradeAction =
       marketId: MarketId;
       sequence: number;
       events: MarketBookDelta[];
+    }
+  | {
+      type: "ws-reject";
+      op: string;
+      code: string;
+      message: string;
+      id: number;
+      time: string;
+    }
+  | {
+      type: "ws-fill";
+      fill: TradeFill;
+      id: number;
+      time: string;
+    }
+  | {
+      type: "ws-order-state";
+      order: PendingOrder;
+      status: "open" | "filled" | "canceled";
+      id: number;
+      time: string;
+    }
+  | {
+      type: "ws-resync-required";
+      channel: string;
+      marketId?: MarketId;
+      reason: string;
+      id: number;
+      time: string;
+    }
+  | {
+      type: "ws-admin-message";
+      level: "info" | "warning" | "critical";
+      title?: string;
+      body: string;
+      market?: string;
+      id: number;
+      time: string;
     }
   | { type: "submit-start" }
   | { type: "submit-success"; result: SubmitOrderResult; id: number; time: string }
@@ -165,6 +204,34 @@ function positionMapFromBalances(
   }, {});
 }
 
+function syncMarketDefinitions(
+  currentState: TradeState,
+  markets: MarketDefinition[],
+  balances: TradeBootstrapData["balances"],
+) {
+  const nextMarkets = markets.length > 0 ? markets : currentState.availableMarkets;
+  const nextMarketBooks = nextMarkets.reduce<Record<MarketId, MarketBookState>>((next, market) => {
+    next[market.id] = currentState.marketBooks[market.id] ?? createEmptyMarketBook(market.id);
+    return next;
+  }, {});
+  const nextSelectedMarketId = nextMarkets.some(
+    (market) => market.id === currentState.selectedMarketId,
+  )
+    ? currentState.selectedMarketId
+    : nextMarkets[0]?.id ?? currentState.selectedMarketId;
+
+  return {
+    availableMarkets: nextMarkets,
+    marketBooks: nextMarketBooks,
+    positionsByMarket: positionMapFromBalances(
+      nextMarkets,
+      balances,
+      currentState.positionsByMarket,
+    ),
+    selectedMarketId: nextSelectedMarketId,
+  };
+}
+
 function updateMarketBookForDelta(
   book: MarketBookState,
   event: MarketBookDelta,
@@ -250,6 +317,16 @@ function ensurePendingOrder(
   return [...withoutCurrent, nextOrder];
 }
 
+function upsertPendingOrder(pendingOrders: PendingOrder[], nextOrder: PendingOrder) {
+  const withoutCurrent = pendingOrders.filter((order) => order.id !== nextOrder.id);
+  return [...withoutCurrent, nextOrder];
+}
+
+function upsertFill(fills: TradeFill[], nextFill: TradeFill) {
+  const withoutCurrent = fills.filter((fill) => fill.fillId !== nextFill.fillId);
+  return [...withoutCurrent, nextFill].slice(-50);
+}
+
 function weightedFillPrice(fills: TradeFill[]) {
   const totalQuantity = fills.reduce((sum, fill) => sum + fill.quantity, 0);
   if (totalQuantity === 0) {
@@ -333,6 +410,24 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
   };
 }
 
+function applyBootstrapDataToState(
+  currentState: TradeState,
+  data: TradeBootstrapData,
+) {
+  const synced = syncMarketDefinitions(currentState, data.markets, data.balances);
+  return {
+    ...currentState,
+    availableMarkets: synced.availableMarkets,
+    selectedMarketId: synced.selectedMarketId,
+    user: data.user ?? currentState.user,
+    balances: data.balances,
+    pendingOrders: data.openOrders,
+    fills: data.fills,
+    marketBooks: synced.marketBooks,
+    positionsByMarket: synced.positionsByMarket,
+  };
+}
+
 export function tradeReducer(state: TradeState, action: TradeAction): TradeState {
   switch (action.type) {
     case "select-market": {
@@ -411,7 +506,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           : "Connected in public market-data mode.",
       });
 
-      messages = action.data.warnings.reduce(
+        messages = action.data.warnings.reduce(
         (next, warning, index) =>
           pushMessage(next, {
             id: action.id + index + 1,
@@ -423,20 +518,14 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
       );
 
       return {
-        ...state,
+        ...applyBootstrapDataToState(state, action.data),
         bootstrapStatus: "ready",
-        user: action.data.user,
-        balances: action.data.balances,
-        pendingOrders: action.data.openOrders,
-        fills: action.data.fills,
-        positionsByMarket: positionMapFromBalances(
-          state.availableMarkets,
-          action.data.balances,
-          state.positionsByMarket,
-        ),
         messages,
       };
     }
+
+    case "account-sync":
+      return applyBootstrapDataToState(state, action.data);
 
     case "bootstrap-error":
       return {
@@ -540,6 +629,76 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         },
       };
     }
+
+    case "ws-reject":
+      return {
+        ...state,
+        isSubmitting: false,
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: "negative",
+          text: `${action.op} rejected (${action.code}): ${action.message}`,
+        }),
+      };
+
+    case "ws-fill":
+      return {
+        ...state,
+        fills: upsertFill(state.fills, action.fill),
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: "positive",
+          text: `Fill ${action.fill.market} ${action.fill.quantity} @ ${formatPrice(action.fill.price)}.`,
+        }),
+      };
+
+    case "ws-order-state": {
+      const pendingOrders =
+        action.status === "open"
+          ? upsertPendingOrder(state.pendingOrders, action.order)
+          : state.pendingOrders.filter((order) => order.id !== action.order.id);
+      const text =
+        action.status === "open"
+          ? `Order ${action.order.id} is open for ${action.order.shares} shares.`
+          : action.status === "filled"
+            ? `Order ${action.order.id} filled.`
+            : `Order ${action.order.id} canceled.`;
+
+      return {
+        ...state,
+        pendingOrders,
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: action.status === "canceled" ? "neutral" : "positive",
+          text,
+        }),
+      };
+    }
+
+    case "ws-resync-required":
+      return {
+        ...state,
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: "negative",
+          text: `${action.channel} resync required${action.marketId ? ` for ${action.marketId}` : ""}: ${action.reason}`,
+        }),
+      };
+
+    case "ws-admin-message":
+      return {
+        ...state,
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: action.level === "critical" ? "negative" : action.level === "warning" ? "neutral" : "positive",
+          text: `${action.title ? `${action.title}: ` : ""}${action.body}${action.market ? ` (${action.market})` : ""}`,
+        }),
+      };
 
     case "submit-start":
       return {

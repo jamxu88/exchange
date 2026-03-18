@@ -1,7 +1,8 @@
 use crate::config::Config;
-use crate::marketdata::{BroadcastEvent, UserBroadcastEvent};
+use crate::marketdata::{BroadcastEvent, ServerMessage, UserBroadcastEvent};
 use crate::orderbook::{Order, OrderBook};
 use crate::rate_limit::PerUserRateLimiter;
+use crate::settlement::SettlementEngine;
 use crate::storage::StorageRepository;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ pub struct AppState {
     pub storage: StorageRepository,
     pub events_tx: broadcast::Sender<BroadcastEvent>,
     pub user_events_tx: broadcast::Sender<UserBroadcastEvent>,
+    pub system_events_tx: broadcast::Sender<ServerMessage>,
     pub market_sequences: Arc<DashMap<String, u64>>,
     pub user_rate_limiter: PerUserRateLimiter,
 }
@@ -44,12 +46,14 @@ impl AppState {
     pub fn with_storage(config: Config, storage: StorageRepository) -> Self {
         let (events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (user_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
+        let (system_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let state = Self {
             config,
             orderbooks: Arc::new(DashMap::new()),
             storage,
             events_tx,
             user_events_tx,
+            system_events_tx,
             market_sequences: Arc::new(DashMap::new()),
             user_rate_limiter: PerUserRateLimiter::new(),
         };
@@ -71,12 +75,18 @@ impl AppState {
     }
 
     fn recover_runtime_state(&self) {
-        let recovered = recover_orderbooks(self.storage.list_all_open_orders());
+        for market in self.storage.list_markets() {
+            self.market_sequences.entry(market.market_id).or_insert(0);
+        }
+        let open_orders = self.storage.list_all_open_orders();
+        let recovered = recover_orderbooks(open_orders.clone());
         for (market, orderbook) in recovered {
             self.orderbooks
                 .insert(market.clone(), Arc::new(Mutex::new(orderbook)));
             self.market_sequences.entry(market).or_insert(0);
         }
+        SettlementEngine::reconcile_balances_after_restart(self, &open_orders)
+            .unwrap_or_else(|error| panic!("failed to reconcile balances after restart: {error}"));
     }
 }
 
@@ -140,6 +150,30 @@ mod tests {
     #[tokio::test]
     async fn app_state_recovers_orderbooks_from_storage() {
         let storage = StorageRepository::new_in_memory();
+        storage.put_balance(
+            Uuid::from_u128(10),
+            Balance {
+                asset: "USD".to_string(),
+                free: 0,
+                locked: 200,
+            },
+        );
+        storage.put_balance(
+            Uuid::from_u128(20),
+            Balance {
+                asset: "USD".to_string(),
+                free: 0,
+                locked: 300,
+            },
+        );
+        storage.put_balance(
+            Uuid::from_u128(30),
+            Balance {
+                asset: "ETH".to_string(),
+                free: 0,
+                locked: 1,
+            },
+        );
         storage.upsert_open_order(
             Uuid::from_u128(10),
             stable_order(1, 10, "BTC-USD", Side::Buy, 100, 2, 1),

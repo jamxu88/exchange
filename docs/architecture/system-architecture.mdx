@@ -1,0 +1,75 @@
+---
+title: "System Architecture"
+description: "The current internal architecture of the exchange and client."
+---
+
+## High-level components
+
+### Exchange backend
+
+- Rust service built with Axum
+- REST endpoints for account, admin, and order entry
+- WebSocket endpoint for market data and trading events
+- In-memory matching engine and orderbooks
+
+### Storage layer
+
+- Repository boundary in front of storage operations
+- In-memory backend for fast local development
+- PostgreSQL backend for deployed durable state
+- Background writer thread with batching, retry, and backpressure telemetry
+
+### Client
+
+- Next.js application
+- API-key login page
+- Trade console with REST bootstrap and WS live updates
+- Admin panel scaffold backed by a live operator REST control plane
+
+## Request flow
+
+### REST account reads
+
+1. Request arrives with `x-api-key`.
+2. Backend resolves the user through the storage repository.
+3. Response is served from repository-backed account state.
+
+### REST order entry
+
+1. Request arrives with `x-api-key`.
+2. Trading service validates exchange trading state, market status, tick size, quantity, and ownership.
+3. Settlement locks balances in memory.
+4. Matching engine processes the order against the in-memory book.
+5. User and market events are broadcast.
+6. Durable state changes are enqueued to the PostgreSQL writer.
+
+### REST admin control plane
+
+1. Request arrives with `Authorization: Bearer ADMIN_API_TOKEN`.
+2. Admin service mutates persisted exchange controls, markets, or admin-message state through the repository.
+3. Trading gates and market lifecycle state are reflected immediately from the in-memory cache.
+4. Settlement or message actions also emit user/system WS events when needed.
+
+### WebSocket trading
+
+1. Client connects to `/ws`.
+2. Client authenticates with `{"op":"authenticate","api_key":"..."}`.
+3. Client subscribes to one market's `l3` stream.
+4. Client may submit, cancel, or amend orders on the same socket.
+5. Server responds with `ack` or `reject`, plus `fill` and `order_state` events.
+
+## Source of truth by concern
+
+- Matching state: in memory inside the exchange process
+- Open order recovery source: persisted open orders in PostgreSQL
+- User, balances, order ledger, fills, audit state: storage repository
+- Exchange controls, market definitions, and admin messages: storage repository
+- Market-data sequencing: in-memory per-market sequence counters
+
+## Intentional non-goals right now
+
+- Public-internet product hardening
+- Complex auth and session infrastructure
+- Multi-region failover
+- Distributed matching engine
+- Public historical market-data APIs

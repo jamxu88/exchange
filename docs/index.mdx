@@ -1,0 +1,62 @@
+---
+title: "Quant Exchange"
+description: "Internal documentation for the exchange backend, client, and EC2 deployment."
+---
+
+This documentation describes the exchange exactly as it exists today: a Rust backend in `exchange/`, a Next.js client in `client/`, and a single EC2 deployment with local PostgreSQL for an internal competition.
+
+## Current live endpoints
+
+- HTTPS: `https://quant.jamesxu.dev`
+- Health: `https://quant.jamesxu.dev/health`
+- Swagger UI: `https://quant.jamesxu.dev/docs`
+- WebSocket: `wss://quant.jamesxu.dev/ws`
+
+## What this system is
+
+- Internal competition exchange, not a public product
+- Operator-provisioned users only
+- Assigned API key per participant
+- In-memory matching engine and orderbooks
+- Local PostgreSQL for durable user, exchange-control, balance, order, fill, message, and audit state
+- Background batched persistence writer so the matching path does not write directly to PostgreSQL
+
+## What this system is not
+
+- No public self-registration
+- No JWT, OAuth, or browser-style public auth model
+- No multi-node matching cluster
+- No durable replay log for market data
+- No full replay-based settlement recovery on restart yet
+
+## Use this site for
+
+- Local development and environment setup
+- Competition-user onboarding
+- REST and WebSocket protocol details
+- Storage, recovery, and resync behavior
+- EC2 deployment and operator procedures
+- Client integration against the live exchange
+
+## Preview the docs locally
+
+```bash
+cd docs
+npx mintlify dev
+```
+
+## Canonical code locations
+
+- Backend: `exchange/`
+- Client: `client/`
+- Exchange runtime docs in code: `exchange/src/rest.rs`, `exchange/src/ws.rs`, `exchange/src/marketdata.rs`
+- OpenAPI generation: `exchange/src/docs.rs`
+
+## Important current caveats
+
+- Public traffic now lands on Caddy over `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`.
+- The exchange origin is loopback-only on the EC2 host at `127.0.0.1:8080`.
+- Public port `80` still times out, so use the HTTPS URL directly instead of relying on automatic `http` to `https` redirects.
+- Startup recovery rebuilds in-memory orderbooks from persisted open orders and reconciles locked balances against those recovered orders, but it does not yet replay full settlement history.
+- Sequence numbers are per-market and in-memory; they reset on process restart.
+- The EC2 host currently pulls from GitHub using a temporary stored PAT. Replace that with a deploy key or machine-user SSH key and revoke the PAT.

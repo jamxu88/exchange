@@ -8,9 +8,6 @@ export type SessionUser = {
 };
 
 export const SESSION_COOKIE = "exchange_session";
-const ADMIN_API_KEYS_ENV = "EXCHANGE_ADMIN_API_KEYS";
-const DEV_ADMIN_API_KEY = "admin";
-const DEV_TRADER_API_KEY = "trader";
 
 function normalizeApiKey(apiKey: string) {
   return apiKey.trim();
@@ -25,36 +22,8 @@ export function maskApiKey(apiKey: string) {
   return `${normalized.slice(0, 4)}...${normalized.slice(-4)}`;
 }
 
-export function resolveRoleForApiKey(
-  apiKey: string,
-  env: NodeJS.ProcessEnv = process.env,
-): UserRole {
+export function createSessionForApiKey(apiKey: string, role: UserRole): SessionUser {
   const normalized = normalizeApiKey(apiKey);
-
-  if (env.NODE_ENV !== "production") {
-    if (normalized === DEV_ADMIN_API_KEY) {
-      return "admin";
-    }
-
-    if (normalized === DEV_TRADER_API_KEY) {
-      return "trader";
-    }
-  }
-
-  const adminKeys = (env[ADMIN_API_KEYS_ENV] ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  return adminKeys.includes(normalized) ? "admin" : "trader";
-}
-
-export function createSessionForApiKey(
-  apiKey: string,
-  env: NodeJS.ProcessEnv = process.env,
-): SessionUser {
-  const normalized = normalizeApiKey(apiKey);
-  const role = resolveRoleForApiKey(normalized, env);
 
   return {
     id: `${role}-${maskApiKey(normalized)}`,

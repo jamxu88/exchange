@@ -2,27 +2,48 @@
 
 Rust template for an exchange core service, targeted for a single EC2 deployment for an internal competition.
 
+Canonical internal docs now live in `docs/` as a Mintlify site.
+
 ## Included template features
 
 - Axum HTTP server (REST + WS)
 - Operator-provisioned competition users via `POST /api/v1/admin/users`
 - Simple user auth via assigned `x-api-key`
 - Simple admin auth via `Authorization: Bearer $ADMIN_API_TOKEN`
+- Operator control-plane REST endpoints for:
+  - exchange-wide start / stop trading
+  - market create / patch / delete
+  - market enable / disable / settle
+  - bulk config load
+  - admin messages
+  - leaderboard queries
 - Per-user `100 ops/sec` rate limiting on authenticated REST account/trading routes
 - Matching engine + in-memory orderbook skeleton
 - PostgreSQL-oriented repository abstraction for user/account/order/fill state
 - Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
 - OpenAPI docs + Swagger UI at `/docs`
 - REST endpoints for trader visibility:
+  - `GET /api/v1/markets`
   - `GET /api/v1/user`
   - `GET /api/v1/balance`
   - `GET /api/v1/portfolio`
+  - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
   - `GET /api/v1/fills`
 - REST endpoints for order entry:
   - `POST /api/v1/orders`
   - `PATCH /api/v1/orders/{order_id}`
   - `DELETE /api/v1/orders/{order_id}`
+- REST endpoints for operator workflows:
+  - `GET /api/v1/admin/state`
+  - `POST /api/v1/admin/trading/start`
+  - `POST /api/v1/admin/trading/stop`
+  - `GET|POST /api/v1/admin/markets`
+  - `PATCH|DELETE /api/v1/admin/markets/{market_id}`
+  - `POST /api/v1/admin/markets/{market_id}/settle`
+  - `POST /api/v1/admin/config/load`
+  - `GET|POST /api/v1/admin/messages`
+  - `GET /api/v1/admin/leaderboard`
 - WebSocket endpoint for market data and trading events:
   - `GET /ws`
   - market-data flow:
@@ -35,7 +56,7 @@ Rust template for an exchange core service, targeted for a single EC2 deployment
     - send `{"op":"authenticate","api_key":"..."}`
     - receive `authenticated` acknowledgement for the competition user
     - send `submit_order`, `cancel_order`, and `amend_order` messages
-    - receive `ack` / `reject` replies plus user-scoped `fill` and `order_state` events
+    - receive `ack` / `reject` replies plus user-scoped `fill`, `order_state`, and `admin_message` events
 - Socket-level integration tests cover auth, subscribe, submit/amend/cancel, and crossing-trade user-event delivery.
 
 ## Authentication model
@@ -52,20 +73,69 @@ Rust template for an exchange core service, targeted for a single EC2 deployment
 
 - Matching remains in memory.
 - Durable account, order, fill, and audit data can be routed to local PostgreSQL.
+- Exchange controls, market definitions, and admin messages are persisted through the same storage boundary.
 - `STORAGE_BACKEND=postgres` enables the PostgreSQL-backed repository.
 - The PostgreSQL backend keeps an in-memory cache for reads and pushes writes to a dedicated background writer thread.
 - The background writer uses a bounded queue plus transaction batches so the exchange path does not perform direct database writes.
 - The writer retries failed batches in order, applies backpressure by blocking enqueue when the queue is saturated, and reports queue/flush health through `/health`.
-- Startup recovery rebuilds in-memory orderbooks from persisted open orders before the exchange begins serving traffic.
+- Settlement balance mutations are journaled durably through the storage layer.
+- Startup recovery rebuilds in-memory orderbooks from persisted open orders and reconciles locked/free balances against those recovered orders before the exchange begins serving traffic.
 - The initial schema lives at `sql/migrations/001_initial.sql`.
 
 ## Current deployed test endpoint
 
-- HTTP base: `http://16.59.150.9:8080`
-- Health: `http://16.59.150.9:8080/health`
-- Swagger docs: `http://16.59.150.9:8080/docs`
-- WebSocket: `ws://16.59.150.9:8080/ws`
-- This is currently plain HTTP/WS for internal testing. TLS is not configured yet.
+- HTTP base: `https://quant.jamesxu.dev`
+- Health: `https://quant.jamesxu.dev/health`
+- Swagger docs: `https://quant.jamesxu.dev/docs`
+- WebSocket: `wss://quant.jamesxu.dev/ws`
+- The public TLS edge is handled by Caddy on the EC2 host.
+- Public port `80` is not currently redirecting, so use the HTTPS URL directly.
+
+## Internal docs
+
+- Mintlify docs root: `docs/`
+- Start there for architecture, auth, REST, WS, recovery, deployment, and operator runbooks.
+- Preview locally with `cd docs && npx mintlify dev`
+
+## Current EC2 deployment
+
+- Host: `ec2-user@16.59.150.9`
+- Repo path: `/home/ec2-user/exchange-v2`
+- Exchange binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
+- Exchange env file: `/home/ec2-user/exchange-v2/exchange.env`
+- Service name: `exchange`
+- Data store: local PostgreSQL on the same EC2 machine
+- Source of truth for code updates: GitHub `origin/main`
+
+## Update the deployed EC2 host from GitHub
+
+Push locally first:
+
+```bash
+git push origin main
+```
+
+Then update the EC2 host:
+
+```bash
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
+  cd ~/exchange-v2 &&
+  git pull --ff-only &&
+  cd exchange &&
+  source "$HOME/.cargo/env" &&
+  cargo build --release &&
+  sudo systemctl restart exchange &&
+  sudo systemctl status exchange --no-pager
+'
+```
+
+Verify the live service:
+
+```bash
+curl https://quant.jamesxu.dev/health
+```
+
+Current note: GitHub access on the EC2 host is temporarily configured with a stored PAT. Replace that with a GitHub deploy key or machine-user SSH key, then revoke the PAT.
 
 ## Run locally
 
@@ -99,8 +169,8 @@ Key environment variables:
 
 ## Next implementation priorities
 
-1. Extend startup recovery into full reconciliation and settlement recovery on top of persisted local PostgreSQL data
-2. Add deterministic matching tests and replay tests
-3. Extend restart recovery into full balance, fill, and settlement reconciliation
-4. Add explicit account-refresh guidance for user-event resync cases
-5. Write the internal operator and competition-user runbook
+1. Extend startup recovery from lock reconciliation into full replay-based settlement recovery on top of persisted local PostgreSQL data
+2. Decide whether the browser client should move order submit / cancel / amend onto the existing WS trading protocol or keep REST for ticket actions
+3. Open public port `80` if automatic `http` to `https` redirects are required
+4. Load test the deployed EC2 stack under competition-like traffic
+5. Replace the temporary GitHub PAT on the EC2 host with a deploy key or machine-user SSH key

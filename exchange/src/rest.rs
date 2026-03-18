@@ -1,3 +1,8 @@
+use crate::admin::{
+    AdminService, DeleteMarketResponse, ListQuery, LoadExchangeConfigRequest,
+    LoadExchangeConfigResponse, MarketDefinition, SendAdminMessageRequest, SettleMarketRequest,
+    SettleMarketResponse, UpdateMarketRequest, UpsertMarketRequest,
+};
 use crate::accounts::UserProfile;
 use crate::auth::{
     AuthError, AuthService, AuthenticatedAdmin, AuthenticatedUser, ProvisionUserRequest,
@@ -55,14 +60,19 @@ impl From<AuthError> for ApiError {
 impl TradingError {
     fn status_code(&self) -> StatusCode {
         match self {
+            TradingError::TradingDisabled => StatusCode::CONFLICT,
             TradingError::InvalidMarket
+            | TradingError::TickSizeViolation { .. }
+            | TradingError::QuantityBelowMinimum { .. }
             | TradingError::InvalidPrice
             | TradingError::InvalidQuantity
             | TradingError::InvalidRemaining
             | TradingError::InvalidAmend => StatusCode::BAD_REQUEST,
-            TradingError::OrderNotFound => StatusCode::NOT_FOUND,
+            TradingError::MarketNotConfigured | TradingError::OrderNotFound => StatusCode::NOT_FOUND,
             TradingError::OrderNotOwned => StatusCode::FORBIDDEN,
-            TradingError::InsufficientBalance { .. } => StatusCode::CONFLICT,
+            TradingError::MarketDisabled
+            | TradingError::MarketSettled
+            | TradingError::InsufficientBalance { .. } => StatusCode::CONFLICT,
             TradingError::Overflow => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -286,4 +296,168 @@ pub async fn amend_order(
 ) -> Result<Json<AmendOrderResponse>, TradingError> {
     let response = TradingService::amend_order(&state, auth.trader_id, order_id, request).await?;
     Ok(Json(response))
+}
+
+pub async fn get_markets(State(state): State<AppState>) -> impl IntoResponse {
+    Json(AdminService::list_markets(&state))
+}
+
+pub async fn get_leaderboard(
+    State(state): State<AppState>,
+    _auth: AuthenticatedUser,
+    Query(query): Query<ListQuery>,
+) -> impl IntoResponse {
+    Json(AdminService::leaderboard(&state, query.limit).await)
+}
+
+pub async fn get_admin_state(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::get_state(&state, 50))
+}
+
+pub async fn start_trading(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::set_trading_enabled(&state, &admin, true))
+}
+
+pub async fn stop_trading(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::set_trading_enabled(&state, &admin, false))
+}
+
+pub async fn list_admin_markets(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::list_markets(&state))
+}
+
+pub async fn create_or_update_market(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<UpsertMarketRequest>,
+) -> Result<Json<MarketDefinition>, (StatusCode, Json<ApiError>)> {
+    AdminService::upsert_market(&state, &admin, request)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn patch_market(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(market_id): Path<String>,
+    Json(request): Json<UpdateMarketRequest>,
+) -> Result<Json<MarketDefinition>, (StatusCode, Json<ApiError>)> {
+    AdminService::update_market(&state, &admin, &market_id, request)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn delete_market(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(market_id): Path<String>,
+) -> Result<Json<DeleteMarketResponse>, (StatusCode, Json<ApiError>)> {
+    AdminService::delete_market(&state, &admin, &market_id)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn load_exchange_config(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<LoadExchangeConfigRequest>,
+) -> Result<Json<LoadExchangeConfigResponse>, (StatusCode, Json<ApiError>)> {
+    AdminService::load_exchange_config(&state, &admin, request)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn send_admin_message(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<SendAdminMessageRequest>,
+) -> Result<Json<crate::admin::AdminMessageEntry>, (StatusCode, Json<ApiError>)> {
+    AdminService::send_message(&state, &admin, request)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn list_admin_messages(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+    Query(query): Query<ListQuery>,
+) -> impl IntoResponse {
+    Json(AdminService::list_admin_messages(
+        &state,
+        query.limit.unwrap_or(50),
+    ))
+}
+
+pub async fn settle_market(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(market_id): Path<String>,
+    Json(request): Json<SettleMarketRequest>,
+) -> Result<Json<SettleMarketResponse>, (StatusCode, Json<ApiError>)> {
+    AdminService::settle_market(&state, &admin, &market_id, request)
+        .await
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn get_admin_leaderboard(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+    Query(query): Query<ListQuery>,
+) -> impl IntoResponse {
+    Json(AdminService::leaderboard(&state, query.limit).await)
 }

@@ -1,3 +1,4 @@
+use crate::admin::{MarketDefinition, MarketStatus};
 use crate::marketdata::{
     BookDelta, BroadcastEvent, L3Order, OrderStateStatus, ServerMessage, UserBroadcastEvent,
 };
@@ -46,12 +47,24 @@ pub struct AmendOrderResponse {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TradingError {
+    #[error("trading is currently disabled")]
+    TradingDisabled,
     #[error("invalid market symbol")]
     InvalidMarket,
+    #[error("market is not configured")]
+    MarketNotConfigured,
+    #[error("market is disabled")]
+    MarketDisabled,
+    #[error("market has already been settled")]
+    MarketSettled,
     #[error("price must be greater than zero")]
     InvalidPrice,
+    #[error("price must align to tick size {tick_size}")]
+    TickSizeViolation { tick_size: u64 },
     #[error("quantity must be greater than zero")]
     InvalidQuantity,
+    #[error("quantity must be at least {minimum}")]
+    QuantityBelowMinimum { minimum: u64 },
     #[error("remaining quantity must be greater than zero")]
     InvalidRemaining,
     #[error("cannot increase remaining quantity")]
@@ -70,10 +83,12 @@ impl From<SettlementError> for TradingError {
     fn from(value: SettlementError) -> Self {
         match value {
             SettlementError::InvalidMarket => Self::InvalidMarket,
+            SettlementError::InvalidSettlementPrice => Self::InvalidPrice,
             SettlementError::InsufficientFreeBalance { asset }
             | SettlementError::InsufficientLockedBalance { asset } => {
                 Self::InsufficientBalance { asset }
             }
+            SettlementError::RecoveryBalanceMismatch { .. } => Self::Overflow,
             SettlementError::Overflow => Self::Overflow,
         }
     }
@@ -87,7 +102,7 @@ impl TradingService {
         trader_id: Uuid,
         request: SubmitOrderRequest,
     ) -> Result<SubmitOrderResponse, TradingError> {
-        validate_market(&request.market)?;
+        let market = validate_submit_market(state, &request)?;
         if request.price == 0 {
             return Err(TradingError::InvalidPrice);
         }
@@ -98,7 +113,7 @@ impl TradingService {
         let order = Order {
             id: Uuid::new_v4(),
             trader_id,
-            market: request.market.clone(),
+            market: market.market_id.clone(),
             side: request.side,
             price: request.price,
             quantity: request.quantity,
@@ -151,6 +166,7 @@ impl TradingService {
                 order.price,
                 execution.price,
                 execution.quantity,
+                fill.fill_id,
             )?;
             SettlementEngine::apply_fill(
                 state,
@@ -160,6 +176,7 @@ impl TradingService {
                 execution.maker_limit_price,
                 execution.price,
                 execution.quantity,
+                fill.fill_id,
             )?;
 
             state.storage.append_fill(trader_id, fill.clone());
@@ -317,6 +334,7 @@ impl TradingService {
         }
 
         let market = find_order_market(state, trader_id, order_id)?;
+        ensure_market_allows_entry(state, &market)?;
         let book_handle = market_orderbook(state, &market);
         let (before, after) = {
             let mut book = book_handle.lock().await;
@@ -357,7 +375,44 @@ impl TradingService {
     }
 }
 
-fn validate_market(market: &str) -> Result<(), TradingError> {
+fn validate_submit_market(
+    state: &AppState,
+    request: &SubmitOrderRequest,
+) -> Result<MarketDefinition, TradingError> {
+    let market = ensure_market_allows_entry(state, &request.market)?;
+    if request.price % market.tick_size != 0 {
+        return Err(TradingError::TickSizeViolation {
+            tick_size: market.tick_size,
+        });
+    }
+    if request.quantity < market.min_order_quantity {
+        return Err(TradingError::QuantityBelowMinimum {
+            minimum: market.min_order_quantity,
+        });
+    }
+    Ok(market)
+}
+
+fn ensure_market_allows_entry(
+    state: &AppState,
+    market: &str,
+) -> Result<MarketDefinition, TradingError> {
+    validate_market_symbol(market)?;
+    if !state.storage.get_exchange_controls().trading_enabled {
+        return Err(TradingError::TradingDisabled);
+    }
+    let market = state
+        .storage
+        .get_market(market)
+        .ok_or(TradingError::MarketNotConfigured)?;
+    match market.status {
+        MarketStatus::Enabled => Ok(market),
+        MarketStatus::Disabled => Err(TradingError::MarketDisabled),
+        MarketStatus::Settled => Err(TradingError::MarketSettled),
+    }
+}
+
+fn validate_market_symbol(market: &str) -> Result<(), TradingError> {
     let Some((base, quote)) = market.split_once('-') else {
         return Err(TradingError::InvalidMarket);
     };
@@ -439,13 +494,15 @@ fn publish_user_order_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
     use crate::marketdata::BookDelta;
     use crate::settlement::SettlementEngine;
     use crate::state::Balance;
+    use chrono::Utc;
 
     fn test_state() -> AppState {
-        AppState::new(Config {
+        let state = AppState::new(Config {
             bind_addr: "127.0.0.1:0".to_string(),
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
@@ -456,7 +513,27 @@ mod tests {
             postgres_write_flush_interval_ms: 25,
             postgres_write_queue_capacity: 4_096,
             postgres_write_retry_backoff_ms: 250,
-        })
+        });
+        seed_market(&state, "BTC-USD", "BTC", "USD");
+        seed_market(&state, "ETH-USD", "ETH", "USD");
+        state
+    }
+
+    fn seed_market(state: &AppState, market_id: &str, base_asset: &str, quote_asset: &str) {
+        let now = Utc::now();
+        state.storage.upsert_market(MarketDefinition {
+            market_id: market_id.to_string(),
+            display_name: market_id.to_string(),
+            base_asset: base_asset.to_string(),
+            quote_asset: quote_asset.to_string(),
+            tick_size: 1,
+            min_order_quantity: 1,
+            reference_price: None,
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
     }
 
     fn balance_for(state: &AppState, trader_id: Uuid, asset: &str) -> BalanceSnapshot {
@@ -607,6 +684,20 @@ mod tests {
                 },
             ],
         );
+        let now = Utc::now();
+        storage.upsert_market(MarketDefinition {
+            market_id: "BTC-USD".to_string(),
+            display_name: "BTC-USD".to_string(),
+            base_asset: "BTC".to_string(),
+            quote_asset: "USD".to_string(),
+            tick_size: 1,
+            min_order_quantity: 1,
+            reference_price: None,
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
 
         let state = AppState::with_storage(
             Config {

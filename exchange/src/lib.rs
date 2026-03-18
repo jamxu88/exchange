@@ -30,16 +30,39 @@ pub fn build_app(app_state: AppState) -> Router {
     let public_routes = Router::new()
         .route("/health", get(rest::health))
         .route("/ws", get(ws::ws_handler))
+        .route("/api/v1/markets", get(rest::get_markets))
         .with_state(app_state.clone());
 
     let admin_routes = Router::new()
         .route("/api/v1/admin/users", post(rest::provision_user))
+        .route("/api/v1/admin/state", get(rest::get_admin_state))
+        .route("/api/v1/admin/trading/start", post(rest::start_trading))
+        .route("/api/v1/admin/trading/stop", post(rest::stop_trading))
+        .route(
+            "/api/v1/admin/markets",
+            get(rest::list_admin_markets).post(rest::create_or_update_market),
+        )
+        .route(
+            "/api/v1/admin/markets/:market_id",
+            delete(rest::delete_market).patch(rest::patch_market),
+        )
+        .route(
+            "/api/v1/admin/markets/:market_id/settle",
+            post(rest::settle_market),
+        )
+        .route("/api/v1/admin/config/load", post(rest::load_exchange_config))
+        .route(
+            "/api/v1/admin/messages",
+            get(rest::list_admin_messages).post(rest::send_admin_message),
+        )
+        .route("/api/v1/admin/leaderboard", get(rest::get_admin_leaderboard))
         .with_state(app_state.clone());
 
     let protected_routes = Router::new()
         .route("/api/v1/user", get(rest::get_user))
         .route("/api/v1/balance", get(rest::get_balance))
         .route("/api/v1/portfolio", get(rest::get_portfolio))
+        .route("/api/v1/leaderboard", get(rest::get_leaderboard))
         .route("/api/v1/open-orders", get(rest::get_open_orders))
         .route("/api/v1/fills", get(rest::get_fills))
         .route("/api/v1/orders", post(rest::submit_order))

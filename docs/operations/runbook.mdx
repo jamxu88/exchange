@@ -1,0 +1,69 @@
+---
+title: "Runbook"
+description: "Operator actions for provisioning users, checking health, deploying, and responding to common issues."
+---
+
+## Provision a competition user
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer ADMIN_API_TOKEN" \
+  -H "content-type: application/json" \
+  https://quant.jamesxu.dev/api/v1/admin/users \
+  -d '{"username":"team-alpha"}'
+```
+
+Operational notes:
+
+- store the returned API key securely
+- deliver it directly to the user
+- provisioning events are audit-logged through the storage layer
+
+## Check service health
+
+```bash
+curl https://quant.jamesxu.dev/health
+```
+
+Look at:
+
+- top-level `status`
+- `persistence.mode`
+- `queue_depth`
+- `backlog_depth`
+- `last_error`
+
+## Restart the service
+
+```bash
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
+  'sudo systemctl restart exchange && sudo systemctl status exchange --no-pager'
+```
+
+## Inspect logs
+
+```bash
+ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
+  'sudo journalctl -u exchange -n 200 --no-pager'
+```
+
+## If persistence goes degraded
+
+1. check `/health`
+2. inspect `persistence.last_error`
+3. inspect local PostgreSQL service status
+4. inspect exchange logs
+5. if PostgreSQL is back, watch whether queue depth drains
+
+## If a user reports bad local state
+
+1. tell them to reconnect the socket
+2. tell them to re-fetch account state
+3. if they saw `resync_required`, make sure they discarded stale local orderbook state
+
+## Known current limits
+
+- no formal backup and restore runbook yet
+- no full replay-based settlement recovery yet
+- no durable market-data replay

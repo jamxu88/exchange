@@ -1,0 +1,38 @@
+---
+title: "UI And Figma Mapping"
+description: "How the implemented trade UI maps to the referenced Figma design."
+---
+
+## Design source
+
+Referenced Figma file:
+
+- File key: `1CXRX79fMCN1kILTRVUXzp`
+- Node id: `40:8`
+- Node name: `MacBook Pro 14" - 4`
+
+## Implemented trade layout
+
+The current `/trade` page maps the design into these major regions:
+
+- market selector and top status strip
+- connection state indicator
+- user identity badge
+- positions panel
+- PnL summary card
+- central L3 orderbook
+- order ticket
+- message and event log panel
+
+## Runtime model behind the UI
+
+- REST bootstrap for initial account state
+- WebSocket for market data and authenticated events
+- reducer/store architecture for local trade state
+- runtime config for environment-specific endpoints and markets
+
+## Current non-final areas
+
+- the `/admin` page is now wired to the live operator endpoints, but the operator UX still needs polish and broader testing
+- some backend capabilities are still incomplete, so parts of the UI still defend against partial server state
+- final performance budgets and load validation are not done yet

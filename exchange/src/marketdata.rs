@@ -1,3 +1,4 @@
+use crate::admin::AdminMessageEntry;
 use crate::orderbook::{Fill, Order, Side};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -86,6 +87,9 @@ pub enum ServerMessage {
     OrderState {
         order: Order,
         status: OrderStateStatus,
+    },
+    AdminMessage {
+        message: AdminMessageEntry,
     },
     ResyncRequired {
         channel: String,

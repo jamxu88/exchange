@@ -16,6 +16,7 @@ const runtime: TradeRuntimeConfig = {
 describe("useTradeController", () => {
   it("bootstraps state and updates websocket subscriptions on market changes", async () => {
     const bootstrapAccountData = vi.fn().mockResolvedValue({
+      markets: runtime.markets,
       user: { traderId: "trader-1", username: "alice" },
       balances: [{ asset: "BTC", free: 1, locked: 1 }],
       openOrders: [],
@@ -92,6 +93,7 @@ describe("useTradeController", () => {
     const restClientFactory = () =>
       ({
         bootstrapAccountData: vi.fn().mockResolvedValue({
+          markets: runtime.markets,
           user: null,
           balances: [],
           openOrders: [],
@@ -131,5 +133,35 @@ describe("useTradeController", () => {
     expect(submitOrder).toHaveBeenCalled();
     expect(result.current.state.pendingOrders).toHaveLength(1);
     expect(result.current.state.filledOrders).toBe(1);
+  });
+
+  it("surfaces a bootstrap failure without retrying on every render", async () => {
+    const bootstrapAccountData = vi.fn().mockRejectedValue(new Error("bootstrap failed"));
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("error");
+    });
+
+    expect(result.current.state.messages.at(-1)?.text).toContain("bootstrap failed");
+    expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
   });
 });

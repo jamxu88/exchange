@@ -2,13 +2,27 @@
 
 Next.js template for a low-latency exchange client UI, designed for ECS deployment.
 
+Canonical internal docs now live in `docs/` as a Mintlify site.
+
 ## Current deployed exchange endpoint
 
-- HTTP base: `http://16.59.150.9:8080`
-- Health: `http://16.59.150.9:8080/health`
-- Swagger docs: `http://16.59.150.9:8080/docs`
-- WebSocket: `ws://16.59.150.9:8080/ws`
-- This is currently plain HTTP/WS for internal testing. TLS is not configured yet.
+- HTTP base: `https://quant.jamesxu.dev`
+- Health: `https://quant.jamesxu.dev/health`
+- Swagger docs: `https://quant.jamesxu.dev/docs`
+- WebSocket: `wss://quant.jamesxu.dev/ws`
+- Public port `80` is not currently redirecting, so use the HTTPS URL directly.
+
+## Internal docs
+
+- Mintlify docs root: `docs/`
+- See the client pages there for integration, deployment, Figma mapping, and keybind reference.
+- Preview locally with `cd docs && npx mintlify dev`
+
+## Current integration target
+
+- The live exchange backend on `https://quant.jamesxu.dev` is the current integration target for the client.
+- That backend now runs from the GitHub-synced EC2 checkout, so client integration testing against the live host should track the latest deployed `main`.
+- Keep client endpoint configuration externalized with `EXCHANGE_HTTP_URL`, `NEXT_PUBLIC_EXCHANGE_HTTP_URL`, and `NEXT_PUBLIC_EXCHANGE_WS_URL`; do not hardcode the domain in app logic.
 
 ## Included template features
 
@@ -32,8 +46,9 @@ npm run dev
 The local client defaults still target `localhost:8080`. To point a local client at the deployed exchange instead, set:
 
 ```bash
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=http://16.59.150.9:8080
-NEXT_PUBLIC_EXCHANGE_WS_URL=ws://16.59.150.9:8080/ws
+EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
 ```
 
 ## Environment
@@ -43,9 +58,18 @@ Copy `.env.example` to `.env.local` and update values.
 For the current internal test deployment, use:
 
 ```bash
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=http://16.59.150.9:8080
-NEXT_PUBLIC_EXCHANGE_WS_URL=ws://16.59.150.9:8080/ws
+EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
 NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
+```
+
+`EXCHANGE_HTTP_URL` is used by server-rendered routes and server actions such as login and the admin page. If it is unset, those paths fall back to `NEXT_PUBLIC_EXCHANGE_HTTP_URL`, then to `http://localhost:8080`.
+
+When validating the client against the live EC2 exchange, re-check the exchange health endpoint first:
+
+```bash
+curl https://quant.jamesxu.dev/health
 ```
 
 ## Production deployment notes (ECS)
@@ -57,7 +81,7 @@ NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
 
 ## What to implement next
 
-- Replace mock login with the internal competition API-key flow
-- Finish wiring live account/trading WS events against the deployed exchange endpoint
+- Add trader-facing balance and buying-power presentation where it improves decision making
+- Decide whether the browser client should move order submit/cancel/amend from REST onto the existing WS trading protocol
 - Add operational actions in admin panel (pause market, risk thresholds)
 - Add end-to-end auth and authorization tests

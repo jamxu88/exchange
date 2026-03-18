@@ -24,6 +24,7 @@ struct ClientConnection {
 async fn client_loop(mut socket: WebSocket, state: AppState) {
     let mut market_rx = state.events_tx.subscribe();
     let mut user_rx = state.user_events_tx.subscribe();
+    let mut system_rx = state.system_events_tx.subscribe();
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
     let mut connection = ClientConnection::default();
 
@@ -70,6 +71,25 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                     }
                     Err(RecvError::Lagged(skipped)) => {
                         if let Some(message) = user_resync_required(&connection, skipped) {
+                            if send_server_message(&mut socket, &message).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+            event = system_rx.recv() => {
+                match event {
+                    Ok(message) => {
+                        if connection.authenticated_user.is_some()
+                            && send_server_message(&mut socket, &message).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        if let Some(message) = system_resync_required(&connection, skipped) {
                             if send_server_message(&mut socket, &message).await.is_err() {
                                 break;
                             }
@@ -309,6 +329,19 @@ fn user_resync_required(connection: &ClientConnection, skipped: u64) -> Option<S
     })
 }
 
+fn system_resync_required(connection: &ClientConnection, skipped: u64) -> Option<ServerMessage> {
+    connection.authenticated_user.as_ref()?;
+    Some(ServerMessage::ResyncRequired {
+        channel: "system".to_string(),
+        market: None,
+        expected_sequence: None,
+        current_sequence: None,
+        reason: format!(
+            "system event stream lagged by {skipped} messages; refresh state if needed"
+        ),
+    })
+}
+
 fn ack(op: &str, request_id: Option<String>) -> ServerMessage {
     ServerMessage::Ack {
         op: op.to_string(),
@@ -336,9 +369,15 @@ fn trading_reject(op: &str, request_id: Option<String>, error: TradingError) -> 
 
 fn trading_error_code(error: &TradingError) -> &'static str {
     match error {
+        TradingError::TradingDisabled => "trading_disabled",
         TradingError::InvalidMarket => "invalid_market",
+        TradingError::MarketNotConfigured => "market_not_configured",
+        TradingError::MarketDisabled => "market_disabled",
+        TradingError::MarketSettled => "market_settled",
         TradingError::InvalidPrice => "invalid_price",
+        TradingError::TickSizeViolation { .. } => "tick_size_violation",
         TradingError::InvalidQuantity => "invalid_quantity",
+        TradingError::QuantityBelowMinimum { .. } => "quantity_below_minimum",
         TradingError::InvalidRemaining => "invalid_remaining",
         TradingError::InvalidAmend => "invalid_amend",
         TradingError::OrderNotFound => "order_not_found",
@@ -379,6 +418,7 @@ async fn send_server_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
     use crate::marketdata::{BookDelta, L3Order, OrderStateStatus};
     use crate::orderbook::{Order, Side};
@@ -388,7 +428,7 @@ mod tests {
     use uuid::Uuid;
 
     fn test_state() -> AppState {
-        AppState::new(Config {
+        let state = AppState::new(Config {
             bind_addr: "127.0.0.1:0".to_string(),
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
@@ -399,7 +439,22 @@ mod tests {
             postgres_write_flush_interval_ms: 25,
             postgres_write_queue_capacity: 4_096,
             postgres_write_retry_backoff_ms: 250,
-        })
+        });
+        let now = Utc::now();
+        state.storage.upsert_market(MarketDefinition {
+            market_id: "BTC-USD".to_string(),
+            display_name: "BTC-USD".to_string(),
+            base_asset: "BTC".to_string(),
+            quote_asset: "USD".to_string(),
+            tick_size: 1,
+            min_order_quantity: 1,
+            reference_price: None,
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
+        state
     }
 
     fn stable_order(id: u128, side: Side, price: u64, quantity: u64) -> Order {

@@ -1,0 +1,95 @@
+---
+title: "Storage And Recovery"
+description: "How durable state is written today and what restart recovery does and does not cover."
+---
+
+## Storage modes
+
+The backend supports two storage backends:
+
+- `in_memory`
+- `postgres`
+
+`in_memory` is still the default local mode.
+
+The deployed EC2 host should run with:
+
+```text
+STORAGE_BACKEND=postgres
+```
+
+## PostgreSQL write model
+
+The PostgreSQL backend does not write directly on the hot matching path.
+
+Instead it:
+
+1. keeps an in-memory cache for reads
+2. enqueues durable mutations to a bounded queue
+3. flushes batches on a dedicated background writer thread
+4. retries failed batches in order
+5. reports queue and flush health through `/health`
+
+Config knobs:
+
+- `POSTGRES_WRITE_BATCH_SIZE`
+- `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
+- `POSTGRES_WRITE_QUEUE_CAPACITY`
+- `POSTGRES_WRITE_RETRY_BACKOFF_MS`
+
+## Health response
+
+Example deployed response:
+
+```json
+{
+  "status": "ok",
+  "service": "exchange",
+  "now": "2026-03-18T16:41:45.769893578+00:00",
+  "persistence": {
+    "backend": "postgres",
+    "mode": "ok",
+    "queue_capacity": 4096,
+    "backpressure_threshold": 3277,
+    "queue_depth": 0,
+    "in_flight_ops": 0,
+    "backlog_depth": 0,
+    "high_water_mark": 0,
+    "total_enqueued": 0,
+    "total_flushes": 0,
+    "total_flushed_ops": 0,
+    "total_blocked_enqueues": 0,
+    "total_enqueue_block_time_ms": 0,
+    "total_flush_failures": 0,
+    "total_retries": 0,
+    "last_batch_size": 0,
+    "last_flush_latency_ms": 0,
+    "max_flush_latency_ms": 0,
+    "last_error": null
+  }
+}
+```
+
+`status` becomes `degraded` when persistence mode is `retrying`, `backpressured`, or `stopped`.
+
+## Startup recovery
+
+On process start, the backend:
+
+1. reads persisted open orders from the repository
+2. rebuilds in-memory orderbooks
+3. reconciles persisted balances so locked amounts match those recovered open orders
+4. starts serving traffic with those restored books
+
+This means resting orders survive a process restart if they were already flushed to PostgreSQL, and stale locked/free balance splits are corrected against the recovered open orders.
+
+## What recovery does not do yet
+
+- no full replay-based settlement recovery
+- no historical recomputation of balances from the journal alone
+- no durable continuation of market-data sequence numbers
+- no crash guarantee for writes still queued but not flushed
+
+## Operational meaning
+
+Today, restart recovery is good enough to restore live resting orders into the book and re-lock balances correctly, but it is not yet a complete replay-driven engine-state recovery system.

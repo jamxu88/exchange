@@ -1,0 +1,87 @@
+---
+title: "Error Codes"
+description: "REST error behavior and WebSocket reject and error codes."
+---
+
+## REST error shape
+
+REST errors are returned as:
+
+```json
+{
+  "error": "human readable message"
+}
+```
+
+## REST status mapping
+
+| Status | Example cause |
+| --- | --- |
+| `400` | invalid market symbol, invalid price, tick-size violation, invalid quantity, invalid amend |
+| `401` | missing auth, invalid API key, missing admin auth, invalid admin token |
+| `403` | order exists but belongs to another trader |
+| `404` | order not found, market not configured, target user not found |
+| `409` | insufficient balance, trading disabled, market disabled, market settled, username already exists |
+| `500` | overflow or internal failure |
+
+## WebSocket `error` messages
+
+Used for protocol or transport-level issues.
+
+Known codes:
+
+- `invalid_message`
+- `unsupported_channel`
+- `invalid_api_key`
+
+Example:
+
+```json
+{
+  "type": "error",
+  "code": "unsupported_channel",
+  "message": "only the l3 channel is supported"
+}
+```
+
+## WebSocket `reject` messages
+
+Used for trading-operation failures.
+
+Known codes:
+
+- `unauthenticated`
+- `trading_disabled`
+- `invalid_market`
+- `market_not_configured`
+- `market_disabled`
+- `market_settled`
+- `invalid_price`
+- `tick_size_violation`
+- `invalid_quantity`
+- `quantity_below_minimum`
+- `invalid_remaining`
+- `invalid_amend`
+- `order_not_found`
+- `order_not_owned`
+- `insufficient_balance`
+- `overflow`
+
+Example:
+
+```json
+{
+  "type": "reject",
+  "op": "submit_order",
+  "request_id": "req-1",
+  "code": "insufficient_balance",
+  "message": "insufficient balance for asset USD"
+}
+```
+
+## Health degradation
+
+`GET /health` returns:
+
+- `status: "ok"` when persistence is `disabled` or `ok`
+- `status: "degraded"` when persistence is `retrying`, `backpressured`, or `stopped`

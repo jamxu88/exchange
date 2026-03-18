@@ -14,6 +14,32 @@ describe("TradeRestClient", () => {
     expect(snapshot.warnings).toEqual([
       "No exchange API key configured. Account bootstrap skipped.",
     ]);
+    expect(snapshot.markets).toEqual([]);
+  });
+
+  it("bootstraps markets alongside account state", async () => {
+    const responses = [
+      [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }],
+      { trader_id: "trader-1", username: "alice" },
+      [{ asset: "USD", free: 1000, locked: 0 }],
+      [],
+      [],
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      text: async () => JSON.stringify(responses.shift()),
+    }));
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const snapshot = await client.bootstrapAccountData();
+
+    expect(snapshot.markets).toEqual([
+      { id: "BTC-USD", name: "Bitcoin", baseAsset: "BTC", quoteAsset: "USD" },
+    ]);
+    expect(snapshot.user?.username).toBe("alice");
   });
 
   it("submits an order with the expected auth header and payload", async () => {

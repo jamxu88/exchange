@@ -1,0 +1,218 @@
+---
+title: "WebSocket API"
+description: "The live socket protocol for authentication, market data, trading, and user events."
+---
+
+## Endpoint
+
+```text
+ws://HOST:8080/ws
+```
+
+## Connection behavior
+
+- server sends `heartbeat` messages
+- current implementation supports one `l3` market subscription per connection
+- user-scoped trading and admin events share the same socket once authenticated
+
+## Client messages
+
+### Authenticate
+
+```json
+{"op":"authenticate","api_key":"YOUR_API_KEY"}
+```
+
+### Subscribe to L3 market data
+
+```json
+{"op":"subscribe","channel":"l3","market":"BTC-USD","last_sequence":null}
+```
+
+`last_sequence` is supported by the protocol shape, but the current flow still expects the client to resubscribe for a fresh snapshot when it gets `resync_required`.
+
+### Unsubscribe
+
+```json
+{"op":"unsubscribe","channel":"l3","market":"BTC-USD"}
+```
+
+### Submit order
+
+```json
+{
+  "op": "submit_order",
+  "request_id": "req-1",
+  "market": "BTC-USD",
+  "side": "BUY",
+  "price": 100,
+  "quantity": 2
+}
+```
+
+### Cancel order
+
+```json
+{
+  "op": "cancel_order",
+  "request_id": "req-2",
+  "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5"
+}
+```
+
+### Amend order
+
+```json
+{
+  "op": "amend_order",
+  "request_id": "req-3",
+  "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+  "remaining": 1
+}
+```
+
+## Server messages
+
+### Heartbeat
+
+```json
+{"type":"heartbeat"}
+```
+
+### Authenticated
+
+```json
+{
+  "type": "authenticated",
+  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+  "username": "team-alpha"
+}
+```
+
+### Snapshot
+
+```json
+{
+  "type": "snapshot",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 0,
+  "bids": [],
+  "asks": []
+}
+```
+
+### Delta
+
+```json
+{
+  "type": "delta",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 1,
+  "events": [
+    {
+      "kind": "order_added",
+      "order": {
+        "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+        "side": "BUY",
+        "price": 100,
+        "remaining": 2,
+        "created_at": "2026-03-18T15:28:01.342510Z"
+      }
+    }
+  ]
+}
+```
+
+### Ack
+
+```json
+{"type":"ack","op":"submit_order","request_id":"req-1"}
+```
+
+### Reject
+
+```json
+{
+  "type": "reject",
+  "op": "submit_order",
+  "request_id": "req-1",
+  "code": "insufficient_balance",
+  "message": "insufficient balance for asset USD"
+}
+```
+
+### Fill
+
+```json
+{
+  "type": "fill",
+  "fill": {
+    "fill_id": "fef1b4fd-d0b0-4270-8831-b4c51aa43f1d",
+    "market": "BTC-USD",
+    "maker_order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
+    "taker_order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "price": 100,
+    "quantity": 1,
+    "occurred_at": "2026-03-18T15:28:04.132958Z"
+  }
+}
+```
+
+### Order state
+
+```json
+{
+  "type": "order_state",
+  "order": {
+    "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+    "market": "BTC-USD",
+    "side": "BUY",
+    "price": 100,
+    "quantity": 2,
+    "remaining": 1,
+    "created_at": "2026-03-18T15:28:01.342510Z"
+  },
+  "status": "open"
+}
+```
+
+### Admin message
+
+```json
+{
+  "type": "admin_message",
+  "message": {
+    "message_id": "26aa26f5-8d20-4a6c-9b66-99549585036f",
+    "target_username": null,
+    "target_trader_id": null,
+    "market": "BTC-USD",
+    "level": "info",
+    "title": "Desk notice",
+    "body": "Trading will stop in five minutes.",
+    "created_at": "2026-03-18T16:05:00.000000Z"
+  }
+}
+```
+
+### Resync required
+
+```json
+{
+  "type": "resync_required",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "expected_sequence": 5,
+  "current_sequence": 9,
+  "reason": "market data lagged by 3 messages; resubscribe for a fresh snapshot"
+}
+```
+
+## Current limitations
+
+- one market subscription per connection
+- no replay endpoint
+- no persisted user-event sequence numbers
+- no multi-channel market-data model beyond `l3`

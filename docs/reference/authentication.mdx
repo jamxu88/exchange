@@ -1,0 +1,105 @@
+---
+title: "Authentication"
+description: "The current internal-only auth model for admins, traders, REST, WebSocket, and the client."
+---
+
+## Competition-user auth
+
+Competition users do not self-register.
+
+Operators provision users through:
+
+```text
+POST /api/v1/admin/users
+```
+
+Each provisioned user gets:
+
+- `username`
+- `trader_id`
+- `api_key`
+
+That API key is the only competition-user credential.
+
+## REST auth
+
+Authenticated user routes require:
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+Used for:
+
+- `GET /api/v1/user`
+- `GET /api/v1/balance`
+- `GET /api/v1/portfolio`
+- `GET /api/v1/open-orders`
+- `GET /api/v1/fills`
+- `POST /api/v1/orders`
+- `PATCH /api/v1/orders/{order_id}`
+- `DELETE /api/v1/orders/{order_id}`
+
+## Admin auth
+
+Admin routes require:
+
+```http
+Authorization: Bearer ADMIN_API_TOKEN
+```
+
+Current admin surface:
+
+- `POST /api/v1/admin/users`
+
+The admin token is intentionally simple because this is an internal competition deployment, not a public product.
+
+## WebSocket auth
+
+The WebSocket endpoint is:
+
+```text
+ws://HOST:8080/ws
+```
+
+Authenticate by sending:
+
+```json
+{"op":"authenticate","api_key":"YOUR_API_KEY"}
+```
+
+Successful response:
+
+```json
+{
+  "type": "authenticated",
+  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+  "username": "team-alpha"
+}
+```
+
+## Client session model
+
+The Next.js client currently:
+
+1. accepts an API key on `/login`
+2. validates that key against the exchange before writing `exchange_session`
+3. assigns the session role from backend auth:
+   - `GET /api/v1/admin/state` with `Authorization: Bearer API_KEY` for admins
+   - `GET /api/v1/user` with `x-api-key: API_KEY` for traders
+4. stores an HTTP-only cookie with the validated role and API key preview
+5. injects the API key into REST and WS runtime config
+
+## Current security posture
+
+- simple on purpose
+- internal-only
+- no user passwords
+- no JWTs
+- no OAuth
+- no public browser auth flow
+
+Still worth doing next:
+
+- replace the temporary GitHub PAT on EC2
+- add API-key rotation or revocation if operators need it

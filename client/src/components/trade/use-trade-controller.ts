@@ -63,12 +63,15 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     () => options.runtime ?? createTradeRuntimeConfig(),
     [options.runtime],
   );
+  const initialMarketId = runtime.markets[0]?.id ?? "BTC-USD";
   const [state, dispatch] = useReducer(
     tradeReducer,
     runtime.markets,
     createInitialTradeState,
   );
   const socketRef = useRef<TradeWsClient | null>(null);
+  const accountSyncRef = useRef({ inFlight: false, queued: false });
+  const disposedRef = useRef(false);
 
   const restClient = useMemo(
     () =>
@@ -115,8 +118,117 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     });
   });
 
+  const refreshAccountState = useEffectEvent(async () => {
+    if (accountSyncRef.current.inFlight) {
+      accountSyncRef.current.queued = true;
+      return;
+    }
+
+    accountSyncRef.current.inFlight = true;
+    try {
+      do {
+        accountSyncRef.current.queued = false;
+        const data = await restClient.bootstrapAccountData();
+        if (disposedRef.current) {
+          return;
+        }
+        startTransition(() => {
+          dispatch({ type: "account-sync", data });
+        });
+      } while (accountSyncRef.current.queued);
+    } catch (error) {
+      if (disposedRef.current) {
+        return;
+      }
+      startTransition(() => {
+        dispatch({
+          type: "bootstrap-error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to resync account state from the exchange.",
+          ...createStamp(),
+        });
+      });
+    } finally {
+      accountSyncRef.current.inFlight = false;
+    }
+  });
+
+  const handleReject = useEffectEvent(
+    (payload: { op: string; code: string; message: string }) => {
+      startTransition(() => {
+        dispatch({ type: "ws-reject", ...payload, ...createStamp() });
+      });
+    },
+  );
+
+  const handleFill = useEffectEvent(
+    (fill: {
+      fillId: string;
+      market: string;
+      makerOrderId: string;
+      takerOrderId: string;
+      price: number;
+      quantity: number;
+      occurredAt: string;
+    }) => {
+      startTransition(() => {
+        dispatch({ type: "ws-fill", fill, ...createStamp() });
+      });
+      void refreshAccountState();
+    },
+  );
+
+  const handleOrderState = useEffectEvent(
+    (payload: {
+      order: {
+        id: string;
+        createdAt: string;
+        marketId: string;
+        marketName: string;
+        side: "buy" | "sell";
+        shares: number;
+        limitPrice: number;
+        status: "open" | "partial";
+      };
+      status: "open" | "filled" | "canceled";
+    }) => {
+      startTransition(() => {
+        dispatch({ type: "ws-order-state", ...payload, ...createStamp() });
+      });
+      void refreshAccountState();
+    },
+  );
+
+  const handleResyncRequired = useEffectEvent(
+    (payload: { channel: string; marketId?: string; reason: string }) => {
+      startTransition(() => {
+        dispatch({ type: "ws-resync-required", ...payload, ...createStamp() });
+      });
+      if (payload.channel !== "l3") {
+        void refreshAccountState();
+      }
+    },
+  );
+
+  const handleAdminMessage = useEffectEvent(
+    (payload: {
+      level: "info" | "warning" | "critical";
+      title?: string;
+      body: string;
+      market?: string;
+    }) => {
+      startTransition(() => {
+        dispatch({ type: "ws-admin-message", ...payload, ...createStamp() });
+      });
+    },
+  );
+
   useEffect(() => {
     let cancelled = false;
+    disposedRef.current = false;
+    accountSyncRef.current = { inFlight: false, queued: false };
 
     startTransition(() => {
       dispatch({ type: "bootstrap-start", ...createStamp() });
@@ -154,13 +266,18 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
         wsUrl: runtime.wsUrl,
         apiKey: runtime.apiKey,
         reconnectDelayMs: runtime.reconnectDelayMs,
-        initialMarket: runtime.markets[0]?.id ?? "BTC-USD",
+        initialMarket: initialMarketId,
       },
       {
         onStatusChange: handleStatusChange,
         onAuthenticated: handleAuthenticated,
         onSnapshot: handleSnapshot,
         onDelta: handleDelta,
+        onReject: handleReject,
+        onFill: handleFill,
+        onOrderState: handleOrderState,
+        onResyncRequired: handleResyncRequired,
+        onAdminMessage: handleAdminMessage,
         onError: handleSocketError,
       },
       options.webSocketFactory,
@@ -171,15 +288,18 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
 
     return () => {
       cancelled = true;
+      disposedRef.current = true;
       socketRef.current = null;
       wsClient.disconnect();
     };
+    // Effect events always see the latest callback logic, so the connection
+    // lifecycle only needs to track concrete runtime inputs.
   }, [
     options.webSocketFactory,
     options.wsClientFactory,
     restClient,
     runtime.apiKey,
-    runtime.markets,
+    initialMarketId,
     runtime.reconnectDelayMs,
     runtime.wsUrl,
   ]);

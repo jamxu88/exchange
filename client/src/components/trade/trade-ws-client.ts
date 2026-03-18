@@ -3,6 +3,8 @@ import type {
   MarketBookDelta,
   MarketBookOrder,
   MarketId,
+  PendingOrder,
+  TradeFill,
   TradeSide,
 } from "@/components/trade/trade-types";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
@@ -11,7 +13,7 @@ type ApiSide = "BUY" | "SELL";
 
 type RawClientMessage =
   | { op: "authenticate"; api_key: string }
-  | { op: "subscribe"; channel: "l3"; market: string }
+  | { op: "subscribe"; channel: "l3"; market: string; last_sequence?: number | null }
   | { op: "unsubscribe"; channel: "l3"; market: string };
 
 type RawL3Order = {
@@ -52,6 +54,50 @@ type RawServerMessage =
       sequence: number;
       events: RawBookDelta[];
     }
+  | { type: "ack"; op: string; request_id?: string | null }
+  | { type: "reject"; op: string; request_id?: string | null; code: string; message: string }
+  | {
+      type: "fill";
+      fill: {
+        fill_id: string;
+        market: string;
+        maker_order_id: string;
+        taker_order_id: string;
+        price: number;
+        quantity: number;
+        occurred_at: string;
+      };
+    }
+  | {
+      type: "order_state";
+      order: {
+        id: string;
+        market: string;
+        side: ApiSide;
+        price: number;
+        quantity: number;
+        remaining: number;
+        created_at: string;
+      };
+      status: "open" | "filled" | "canceled";
+    }
+  | {
+      type: "admin_message";
+      message: {
+        level: "info" | "warning" | "critical";
+        title?: string | null;
+        body: string;
+        market?: string | null;
+      };
+    }
+  | {
+      type: "resync_required";
+      channel: string;
+      market?: string | null;
+      expected_sequence?: number | null;
+      current_sequence?: number | null;
+      reason: string;
+    }
   | { type: "unsubscribed"; channel: "l3"; market: string }
   | { type: "error"; code: string; message: string };
 
@@ -73,6 +119,19 @@ export type TradeWsCallbacks = {
   onAuthenticated: (payload: { traderId: string; username: string }) => void;
   onSnapshot: (payload: TradeWsSnapshot) => void;
   onDelta: (payload: TradeWsDelta) => void;
+  onReject: (payload: { op: string; code: string; message: string }) => void;
+  onFill: (payload: TradeFill) => void;
+  onOrderState: (payload: {
+    order: PendingOrder;
+    status: "open" | "filled" | "canceled";
+  }) => void;
+  onResyncRequired: (payload: { channel: string; marketId?: string; reason: string }) => void;
+  onAdminMessage: (payload: {
+    level: "info" | "warning" | "critical";
+    title?: string;
+    body: string;
+    market?: string;
+  }) => void;
   onError: (message: string) => void;
 };
 
@@ -99,6 +158,33 @@ function mapOrder(order: RawL3Order): MarketBookOrder {
     price: order.price,
     remaining: order.remaining,
     createdAt: order.created_at,
+  };
+}
+
+function mapPendingOrder(
+  order: Extract<RawServerMessage, { type: "order_state" }>["order"],
+): PendingOrder {
+  return {
+    id: order.id,
+    createdAt: order.created_at,
+    marketId: order.market,
+    marketName: order.market,
+    side: toTradeSide(order.side),
+    shares: order.remaining,
+    limitPrice: order.price,
+    status: order.remaining < order.quantity ? "partial" : "open",
+  };
+}
+
+function mapFill(fill: Extract<RawServerMessage, { type: "fill" }>["fill"]): TradeFill {
+  return {
+    fillId: fill.fill_id,
+    market: fill.market,
+    makerOrderId: fill.maker_order_id,
+    takerOrderId: fill.taker_order_id,
+    price: fill.price,
+    quantity: fill.quantity,
+    occurredAt: fill.occurred_at,
   };
 }
 
@@ -182,11 +268,7 @@ export class TradeWsClient {
         channel: "l3",
         market: previousMarket,
       });
-      this.send({
-        op: "subscribe",
-        channel: "l3",
-        market: nextMarket,
-      });
+      this.subscribeCurrentMarket();
     }
   }
 
@@ -200,11 +282,7 @@ export class TradeWsClient {
       if (this.apiKey) {
         this.send({ op: "authenticate", api_key: this.apiKey });
       }
-      this.send({
-        op: "subscribe",
-        channel: "l3",
-        market: this.selectedMarket,
-      });
+      this.subscribeCurrentMarket();
     };
 
     socket.onmessage = (event) => {
@@ -260,12 +338,57 @@ export class TradeWsClient {
           events: message.events.map(mapDelta),
         });
         return;
+      case "ack":
+        return;
+      case "reject":
+        this.callbacks.onReject({
+          op: message.op,
+          code: message.code,
+          message: message.message,
+        });
+        return;
+      case "fill":
+        this.callbacks.onFill(mapFill(message.fill));
+        return;
+      case "order_state":
+        this.callbacks.onOrderState({
+          order: mapPendingOrder(message.order),
+          status: message.status,
+        });
+        return;
+      case "admin_message":
+        this.callbacks.onAdminMessage({
+          level: message.message.level,
+          title: message.message.title ?? undefined,
+          body: message.message.body,
+          market: message.message.market ?? undefined,
+        });
+        return;
+      case "resync_required":
+        this.callbacks.onResyncRequired({
+          channel: message.channel,
+          marketId: message.market ?? undefined,
+          reason: message.reason,
+        });
+        if (message.channel === "l3" && message.market === this.selectedMarket) {
+          this.subscribeCurrentMarket();
+        }
+        return;
       case "unsubscribed":
         return;
       case "error":
         this.callbacks.onError(message.message);
         return;
     }
+  }
+
+  private subscribeCurrentMarket() {
+    this.send({
+      op: "subscribe",
+      channel: "l3",
+      market: this.selectedMarket,
+      last_sequence: null,
+    });
   }
 
   private send(message: RawClientMessage) {

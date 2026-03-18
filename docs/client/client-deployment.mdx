@@ -1,0 +1,41 @@
+---
+title: "Client Deployment"
+description: "Current client deployment assumptions and the path toward ECS."
+---
+
+## Current state
+
+- The exchange backend is live on EC2.
+- The client is not yet deployed as the canonical production UI.
+- Client deployment target remains ECS.
+
+## Environment variables
+
+Use these for a deployed client:
+
+```text
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
+```
+
+`NEXT_PUBLIC_EXCHANGE_API_KEY` is optional and mainly useful for local testing or a pinned kiosk-like client. Admin access is now determined by backend validation, not a client-side key list.
+
+## ECS notes
+
+The repo already includes:
+
+- `client/Dockerfile`
+- standalone Next.js output configuration
+- `/api/health` route for container health checks
+
+Still needed around deployment:
+
+- final ECS service definition
+- ALB and TLS setup
+- environment and secret injection
+- rollout and rollback procedure
+
+## Important current caveat
+
+The exchange origin is loopback-only on the EC2 host. Browser clients should use `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws` directly. Public port `80` is not currently redirecting, so use the HTTPS URL explicitly.
