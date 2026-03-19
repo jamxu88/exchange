@@ -21,7 +21,7 @@ describe("TradeRestClient", () => {
     const responses = [
       [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }],
       { trader_id: "trader-1", username: "alice" },
-      [{ asset: "USD", free: 1000, locked: 0 }],
+      [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }],
       [],
       [],
     ];
@@ -114,7 +114,10 @@ describe("TradeRestClient", () => {
       vi.fn().mockResolvedValue({
         ok: false,
         status: 409,
-        text: async () => JSON.stringify({ error: "insufficient balance for asset USD" }),
+        text: async () =>
+          JSON.stringify({
+            error: "projected net position for BTC-USD would be 1005; limit is +/-1000",
+          }),
       }) as unknown as typeof fetch,
     );
 
@@ -130,7 +133,7 @@ describe("TradeRestClient", () => {
       }),
     ).rejects.toEqual(
       expect.objectContaining<Partial<ExchangeApiError>>({
-        message: "insufficient balance for asset USD",
+        message: "projected net position for BTC-USD would be 1005; limit is +/-1000",
         status: 409,
       }),
     );

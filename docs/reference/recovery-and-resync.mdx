@@ -54,7 +54,7 @@ If the user event stream lags, the backend sends:
 Do this:
 
 1. re-fetch `/api/v1/user`
-2. re-fetch `/api/v1/balance`
+2. re-fetch `/api/v1/positions`
 3. re-fetch `/api/v1/open-orders`
 4. re-fetch `/api/v1/fills`
 5. reconnect the socket if your client cannot confidently recover local order state
@@ -64,7 +64,7 @@ Do this:
 On backend restart:
 
 - open orders are recovered from storage into the in-memory orderbooks
-- persisted balances are reconciled so locked amounts match those recovered open orders
+- persisted positions remain available through storage-backed account reads
 - market-data sequence counters restart from `0`
 - no historical replay is available
 
@@ -75,7 +75,7 @@ That means clients should treat a reconnect after restart as a fresh session and
 Implemented:
 
 - open-order recovery into the in-memory book
-- startup lock reconciliation for persisted balances
+- persisted position reads after restart
 - market-data gap detection
 - user-event lag detection
 

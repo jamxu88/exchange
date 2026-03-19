@@ -23,13 +23,14 @@ https://exchange.jamesxu.dev/docs
 | `POST` | `/api/v1/admin/markets` | admin bearer token | create or replace one market definition |
 | `PATCH` | `/api/v1/admin/markets/{market_id}` | admin bearer token | update market status or limits |
 | `DELETE` | `/api/v1/admin/markets/{market_id}` | admin bearer token | delete a market with no open orders |
-| `POST` | `/api/v1/admin/markets/{market_id}/settle` | admin bearer token | cancel resting orders and settle market balances |
+| `POST` | `/api/v1/admin/markets/{market_id}/settle` | admin bearer token | cancel resting orders and settle open net positions at a supplied true value per share |
 | `POST` | `/api/v1/admin/config/load` | admin bearer token | bulk-load exchange config / market definitions |
 | `GET` | `/api/v1/admin/messages` | admin bearer token | recent admin messages |
 | `POST` | `/api/v1/admin/messages` | admin bearer token | send broadcast or user-targeted admin message |
+| `POST` | `/api/v1/admin/users/reset` | admin bearer token | clear all user positions, orders, and fills |
 | `GET` | `/api/v1/admin/leaderboard` | admin bearer token | leaderboard snapshot |
 | `GET` | `/api/v1/user` | `x-api-key` | authenticated user profile |
-| `GET` | `/api/v1/balance` | `x-api-key` | user balances |
+| `GET` | `/api/v1/positions` | `x-api-key` | user positions |
 | `GET` | `/api/v1/portfolio` | `x-api-key` | simple portfolio snapshot |
 | `GET` | `/api/v1/leaderboard` | `x-api-key` | leaderboard snapshot |
 | `GET` | `/api/v1/open-orders` | `x-api-key` | open orders, optional `market` filter |
@@ -150,6 +151,8 @@ curl \
   -d '{"settlement_price":150}'
 ```
 
+`settlement_price` is the admin-entered true value for one share in that market. Settlement realizes PnL against each trader's signed net position and then flattens the market to zero position.
+
 ## Send an admin message
 
 ```bash
@@ -170,7 +173,10 @@ curl \
 ## Current data model notes
 
 - `side` is `BUY` or `SELL`
-- `price`, `quantity`, `remaining`, `free`, and `locked` are integer `u64` values
+- `price`, `quantity`, and `remaining` are integer `u64` values
+- user risk is position-based, with a fixed per-market net limit of `+/-1000`
+- traders can sell from flat and go short; order admission is based on worst-case net exposure if resting open orders were to execute
+- realized PnL is tracked on positions; the runtime does not require pre-seeded inventory or cash balances to open a long or short position
 - `open-orders` and `fills` support an optional `market` query param
-- `leaderboard` ranks by current marked equity using settled prices, orderbook marks, or market reference prices
+- `leaderboard` ranks by current marked net PnL using settled prices, orderbook marks, or market reference prices
 - pagination is not implemented yet

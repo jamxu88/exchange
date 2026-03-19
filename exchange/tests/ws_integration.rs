@@ -6,7 +6,6 @@ use exchange::{
     build_app,
     config::Config,
     marketdata::{OrderStateStatus, ServerMessage},
-    settlement::SettlementEngine,
     state::AppState,
 };
 use chrono::Utc;
@@ -134,19 +133,6 @@ async fn authenticate(socket: &mut WsStream, api_key: &str) {
 async fn websocket_authenticate_and_subscribe_round_trip() {
     let state = test_state();
     let trader = provision_user(&state, "socket-user");
-    let response = exchange::trading::TradingService::submit_limit_order(
-        &state,
-        trader.profile.trader_id,
-        exchange::trading::SubmitOrderRequest {
-            market: "BTC-USD".to_string(),
-            side: exchange::orderbook::Side::Buy,
-            price: 100,
-            quantity: 2,
-        },
-    )
-    .await;
-    assert!(response.is_err(), "balance seed should be required");
-    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
     exchange::trading::TradingService::submit_limit_order(
         &state,
         trader.profile.trader_id,
@@ -198,7 +184,6 @@ async fn websocket_authenticate_and_subscribe_round_trip() {
 async fn websocket_submit_amend_cancel_flow_is_end_to_end() {
     let state = test_state();
     let trader = provision_user(&state, "edit-user");
-    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
 
     let (url, server) = spawn_server(state).await;
     let mut socket = connect_socket(&url).await;
@@ -295,8 +280,6 @@ async fn websocket_crossing_trade_delivers_fill_and_order_state_to_both_sockets(
     let state = test_state();
     let maker = provision_user(&state, "maker");
     let taker = provision_user(&state, "taker");
-    SettlementEngine::seed_balance(&state, maker.profile.trader_id, "BTC", 2);
-    SettlementEngine::seed_balance(&state, taker.profile.trader_id, "USD", 500);
 
     let (url, server) = spawn_server(state).await;
     let mut maker_socket = connect_socket(&url).await;

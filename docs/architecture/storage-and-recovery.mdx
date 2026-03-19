@@ -78,18 +78,18 @@ On process start, the backend:
 
 1. reads persisted open orders from the repository
 2. rebuilds in-memory orderbooks
-3. reconciles persisted balances so locked amounts match those recovered open orders
+3. serves position, fill, and order queries from the storage-backed cache
 4. starts serving traffic with those restored books
 
-This means resting orders survive a process restart if they were already flushed to PostgreSQL, and stale locked/free balance splits are corrected against the recovered open orders.
+This means resting orders survive a process restart if they were already flushed to PostgreSQL, and user positions remain queryable after the process comes back.
 
 ## What recovery does not do yet
 
 - no full replay-based settlement recovery
-- no historical recomputation of balances from the journal alone
+- no historical recomputation of positions and PnL from an event journal alone
 - no durable continuation of market-data sequence numbers
 - no crash guarantee for writes still queued but not flushed
 
 ## Operational meaning
 
-Today, restart recovery is good enough to restore live resting orders into the book and re-lock balances correctly, but it is not yet a complete replay-driven engine-state recovery system.
+Today, restart recovery is good enough to restore live resting orders into the book and keep persisted positions available, but it is not yet a complete replay-driven engine-state recovery system.

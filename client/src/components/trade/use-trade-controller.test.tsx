@@ -18,7 +18,7 @@ describe("useTradeController", () => {
     const bootstrapAccountData = vi.fn().mockResolvedValue({
       markets: runtime.markets,
       user: { traderId: "trader-1", username: "alice" },
-      balances: [{ asset: "BTC", free: 1, locked: 1 }],
+      positions: [{ market: "BTC-USD", netQuantity: 2, averageEntryPrice: 100, realizedPnl: 0 }],
       openOrders: [],
       fills: [],
       warnings: [],
@@ -95,7 +95,7 @@ describe("useTradeController", () => {
         bootstrapAccountData: vi.fn().mockResolvedValue({
           markets: runtime.markets,
           user: null,
-          balances: [],
+          positions: [],
           openOrders: [],
           fills: [],
           warnings: [],

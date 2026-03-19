@@ -38,7 +38,7 @@ description: "The current internal architecture of the exchange and client."
 
 1. Request arrives with `x-api-key`.
 2. Trading service validates exchange trading state, market status, tick size, quantity, and ownership.
-3. Settlement locks balances in memory.
+3. Trading risk checks worst-case net exposure against the fixed per-market `+/-1000` limit.
 4. Matching engine processes the order against the in-memory book.
 5. User and market events are broadcast.
 6. Durable state changes are enqueued to the PostgreSQL writer.
@@ -62,7 +62,7 @@ description: "The current internal architecture of the exchange and client."
 
 - Matching state: in memory inside the exchange process
 - Open order recovery source: persisted open orders in PostgreSQL
-- User, balances, order ledger, fills, audit state: storage repository
+- User, positions, order ledger, fills, audit state: storage repository
 - Exchange controls, market definitions, and admin messages: storage repository
 - Market-data sequencing: in-memory per-market sequence counters
 

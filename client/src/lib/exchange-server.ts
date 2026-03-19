@@ -80,10 +80,10 @@ export type ExchangeLeaderboardRow = {
   rank: number;
   trader_id: string;
   username: string;
-  equity: number;
-  available_cash: number;
-  locked_cash: number;
-  position_value: number;
+  net_pnl: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  gross_exposure: number;
 };
 
 export class ExchangeServerError extends Error {

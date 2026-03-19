@@ -12,7 +12,7 @@ What exists today:
 - WebSocket API-key auth handshake for competition users
 - In-memory matching engine and orderbook
 - Local trading service for submit / cancel / amend
-- In-memory settlement and balance locking for spot-style markets
+- Position-based risk model with per-market net limit enforcement
 - Local auth system with operator-provisioned users, simple admin bearer-token auth, and assigned API-key auth for competition users
 - Admin provisioning audit logging through the storage layer
 - Persisted operator control plane for:
@@ -22,7 +22,7 @@ What exists today:
   - admin broadcast / user-targeted messages
   - leaderboard generation
 - Per-user in-memory rate limiting on authenticated REST account and trading routes
-- PostgreSQL-oriented repository abstraction for balances, open orders, fills, identity lookups, and admin audit records
+- PostgreSQL-oriented repository abstraction for positions, open orders, fills, identity lookups, and admin audit records
 - In-memory repository backend plus a live PostgreSQL repository backend behind the same boundary
 - Background PostgreSQL writer thread with batched flushes, retry/backpressure handling, and health telemetry behind the storage boundary
 - EC2-hosted internal test deployment is live at `http://16.59.150.9:8080` with WS at `ws://16.59.150.9:8080/ws`
@@ -39,7 +39,7 @@ Target constraints:
 - Operators provision competition accounts
 - Each participant should receive a unique assigned API key that serves as both login identity and API access
 - Matching remains in memory inside the exchange process
-- Durable account, order, fill, and audit data should live in local PostgreSQL on the EC2 machine
+- Durable position, order, fill, and audit data should live in local PostgreSQL on the EC2 machine
 - PostgreSQL writes must happen off the main exchange thread and be flushed in batches
 - HA, multi-region failover, and public-internet hardening are out of scope for now
 
@@ -48,7 +48,7 @@ What is still true:
 - Persistence and recovery are only partially implemented
 - Settlement now persists a journal, but full replay-based recovery is still incomplete
 - WS trading is implemented end-to-end, but restart reconciliation is still incomplete
-- Startup recovery now rebuilds in-memory orderbooks from persisted open orders and reconciles locked balances against those recovered orders
+- Startup recovery now rebuilds in-memory orderbooks from persisted open orders, while positions remain available from storage-backed reads
 - The backend admin control plane is implemented, and the Next.js client now validates login keys against the backend and uses the live admin/trader surfaces
 
 ## Progress Snapshot
@@ -70,7 +70,7 @@ What is still true:
   - `GET /api/v1/admin/leaderboard`
   - `GET /api/v1/markets`
   - `GET /api/v1/user`
-  - `GET /api/v1/balance`
+  - `GET /api/v1/positions`
   - `GET /api/v1/portfolio`
   - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
@@ -90,23 +90,24 @@ What is still true:
 - REST tests pass
 - Admin provisioning endpoint is tested end-to-end
 - Admin trading-control, market lifecycle, config-load, messaging, settlement, and leaderboard routes are tested end-to-end
+- Admin reset-all-users route is tested end-to-end
 - Local submit / cancel / amend flows are tested end-to-end
 - Direct API-key trading flow is tested end-to-end
 - Cross-account order isolation is tested end-to-end
 - Register route removal is tested end-to-end
 - Login route removal is tested end-to-end
 - Per-user `100 ops/sec` REST rate limiting is tested end-to-end
-- Balance locking and in-memory fill settlement are tested
+- Position-limit admission and signed-position fill settlement are tested
 - Admin provisioning is protected by a configured bearer token and emits audit records
 - Storage access is routed through a repository layer instead of raw app-state maps
 - Repository backend trait exists with in-memory and PostgreSQL backends
 - PostgreSQL initial schema exists for users, api keys, balances, orders, fills, positions, pending positions, pnl snapshots, and admin audit logs
 - PostgreSQL initial schema now also persists exchange controls, market definitions, and admin messages
-- PostgreSQL repository writes are wired through a dedicated batched writer thread for identity, exchange controls, markets, admin messages, balances, orders, fills, and admin audit logs
+- PostgreSQL repository writes are wired through a dedicated batched writer thread for identity, exchange controls, markets, admin messages, positions, orders, fills, and admin audit logs
 - PostgreSQL writer health now exposes queue depth, flush latency, retry/failure counts, and degraded status through `/health`
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders
 - Market configs now enforce trading-enabled state plus per-market enable/disable, tick size, and minimum order quantity
-- Market settlement exists as an admin operation and converts base-asset balances into quote balances at a configured settlement price
+- Market settlement exists as an admin operation and flattens open net positions at a configured settlement price
 - Public health and WebSocket auth/snapshot probes succeeded over Elastic IP `16.59.150.9`
 - GitHub repo sync is in place for the EC2 host, and the deployed tree fast-forwards cleanly from `origin/main`
 - Matching hot path was improved:
@@ -137,10 +138,10 @@ What is still true:
   - user-scoped `fill` and `order_state` events exist
   - `resync_required` messages exist for market-data sequence gaps and lagged receivers
   - socket-level integration tests exist for auth, subscribe, trading, and user-event delivery
-- Settlement:
-  - balance locking / release / fill application exists
-  - settlement balance mutations are now journaled through the storage layer
-  - startup reconciliation now restores locked/free balance splits against recovered open orders
+- Settlement and risk:
+  - per-market `+/-1000` net position limit enforcement exists
+  - signed-position fill application exists
+  - settlement now realizes PnL and flattens open positions
   - full replay-based recovery is still not implemented
 - Docs:
   - OpenAPI exists for the current REST surface
@@ -308,16 +309,15 @@ Trading should be via WS events.
 
 ### Current
 
-- In-memory settlement exists for local trading flows
-- No persistence or restart reconciliation
+- Signed-position settlement exists for local trading flows
+- Full replay-based recovery is still incomplete
 
 ### Required
 
-- [x] Lock funds before accepting orders
-- [x] Release funds on cancel
-- [x] Apply debits / credits on fill
-- [x] Persist settlement journal through the background PostgreSQL writer
-- [x] Reconcile locked balances against recovered open orders after restart
+- [x] Enforce per-market net position limit before accepting orders
+- [x] Update signed positions and realized PnL on fill
+- [x] Flatten positions on market settlement
+- [x] Keep persisted positions queryable after restart
 - [x] Handle persistence queue failures and backpressure safely
 - [ ] Define idempotent settlement flow
 - [ ] Add invariants and reconciliation jobs
@@ -350,7 +350,7 @@ We need a trading API that allows competition users to programmatically interact
 
 - [ ] Keep health and account reads on REST
 - [ ] Expand REST coverage for:
-  - balances
+  - positions
   - portfolio
   - open orders
   - fills
@@ -371,7 +371,7 @@ We need a trading API that allows competition users to programmatically interact
 ### Required
 
 - [x] Make local PostgreSQL the default source of truth for deployed account/query state
-- [x] Move durable writes for orders, fills, balances, and audit events onto the dedicated persistence worker
+- [x] Move durable writes for orders, fills, position snapshots, and audit events onto the dedicated persistence worker
 - [x] Batch durable writes with bounded size and latency thresholds
 - [ ] Add market filtering for open orders
 - [ ] Add pagination for fills and orders
@@ -379,7 +379,7 @@ We need a trading API that allows competition users to programmatically interact
 - [ ] Add richer portfolio semantics if needed
 - [ ] Ensure returned data matches WS event stream state
 - [x] Rebuild in-memory orderbooks from persisted open orders after restart
-- [x] Reconcile persisted balance locks against recovered open orders after restart
+- [x] Rebuild recovered orderbooks against persisted signed-position state after restart
 - [ ] Add full replay-based reconciliation behavior from local PostgreSQL after restart
 
 ## 10. L3 Data
@@ -408,7 +408,7 @@ Local PostgreSQL is the durable store for the internal competition deployment. I
 
 - [x] Add PostgreSQL schema for:
   - traders
-  - balances
+  - position snapshots
   - orders
   - fills
   - settlement journal
@@ -421,7 +421,7 @@ Local PostgreSQL is the durable store for the internal competition deployment. I
   - order acceptance
   - order state transitions
   - fills
-  - balances / settlement events
+  - positions / settlement events
   - audit records
 - [x] Define flush triggers:
   - max batch size
@@ -429,7 +429,7 @@ Local PostgreSQL is the durable store for the internal competition deployment. I
   - queue pressure thresholds
 - [x] Add backpressure, retry, and failure-handling policy for the persistence queue
 - [x] Rebuild in-memory orderbooks from persisted open orders on startup
-- [x] Persist settlement journal entries alongside balance mutations
+- [x] Persist settlement journal entries alongside position and realized-PnL mutations
 - [x] Persist exchange controls, market definitions, and admin messages through the same writer path
 - [ ] Add replayable snapshots and full recovery procedures
 - [ ] Define local backup retention and restore drills
@@ -474,9 +474,10 @@ We need internal docs, not public-product polish.
 - [x] Add full socket-level WS integration tests
 - [x] Add `resync_required` handling for market-data gaps and lag
 - [x] Add queue depth, flush latency, and DB failure metrics
-- [x] Persist a settlement journal through the background PostgreSQL writer
-- [x] Reconcile locked balances against recovered open orders on startup
+- [x] Persist positions through the background PostgreSQL writer
+- [x] Keep positions available after startup recovery of open orders
 - [x] Add backend endpoints for start / stop trading, market lifecycle, config load, settlement, admin messages, and leaderboard
+- [x] Add admin reset-all-users control path
 - [ ] Add full replay-based settlement recovery using local PostgreSQL
 - [x] Make PostgreSQL the default deployed backend and validate it on the EC2 box
 - [x] Validate API keys against the backend during client login

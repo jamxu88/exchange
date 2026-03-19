@@ -109,6 +109,10 @@ function teamLabelForUser(traderId?: string) {
   return match ? `Team ${match[1]}` : `Team ${traderId}`;
 }
 
+function formatNetQuantity(value: number) {
+  return value > 0 ? `+${value}` : String(value);
+}
+
 type TradeConsoleViewProps = {
   controller: ReturnType<typeof useTradeController>;
 };
@@ -261,7 +265,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
 
                 <div className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-center border-b border-[#2c2d31] px-[20px] text-[16px] font-bold leading-none text-white">
                   <span>Product</span>
-                  <span>{state.positionFilter === "active" ? "Position" : "Shares"}</span>
+                  <span>{state.positionFilter === "active" ? "Net" : "Qty"}</span>
                   <span className="justify-self-end">
                     {state.positionFilter === "active" ? "Avg. Cost" : "Order"}
                   </span>
@@ -285,7 +289,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                             >
                               {position.product}
                             </span>
-                            <span>{position.shares}</span>
+                            <span>{formatNetQuantity(position.netQuantity)}</span>
                             <span className="justify-self-end">
                               {formatMaybePrice(position.avgCost)}
                             </span>

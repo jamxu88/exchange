@@ -55,11 +55,13 @@ pub fn build_app(app_state: AppState) -> Router {
             "/api/v1/admin/messages",
             get(rest::list_admin_messages).post(rest::send_admin_message),
         )
+        .route("/api/v1/admin/users/reset", post(rest::reset_all_users))
         .route("/api/v1/admin/leaderboard", get(rest::get_admin_leaderboard))
         .with_state(app_state.clone());
 
     let protected_routes = Router::new()
         .route("/api/v1/user", get(rest::get_user))
+        .route("/api/v1/positions", get(rest::get_positions))
         .route("/api/v1/balance", get(rest::get_balance))
         .route("/api/v1/portfolio", get(rest::get_portfolio))
         .route("/api/v1/leaderboard", get(rest::get_leaderboard))

@@ -19,13 +19,13 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
   - leaderboard queries
 - Per-user `100 ops/sec` rate limiting on authenticated REST account/trading routes
 - Matching engine + in-memory orderbook skeleton
-- PostgreSQL-oriented repository abstraction for user/account/order/fill state
+- PostgreSQL-oriented repository abstraction for user/position/order/fill state
 - Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
 - OpenAPI docs + Swagger UI at `/docs`
 - REST endpoints for trader visibility:
   - `GET /api/v1/markets`
   - `GET /api/v1/user`
-  - `GET /api/v1/balance`
+  - `GET /api/v1/positions`
   - `GET /api/v1/portfolio`
   - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
@@ -43,6 +43,7 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
   - `POST /api/v1/admin/markets/{market_id}/settle`
   - `POST /api/v1/admin/config/load`
   - `GET|POST /api/v1/admin/messages`
+  - `POST /api/v1/admin/users/reset`
   - `GET /api/v1/admin/leaderboard`
 - WebSocket endpoint for market data and trading events:
   - `GET /ws`
@@ -72,14 +73,16 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 ## Storage direction
 
 - Matching remains in memory.
-- Durable account, order, fill, and audit data can be routed to local PostgreSQL.
+- Durable position, order, fill, and audit data can be routed to local PostgreSQL.
 - Exchange controls, market definitions, and admin messages are persisted through the same storage boundary.
 - `STORAGE_BACKEND=postgres` enables the PostgreSQL-backed repository.
 - The PostgreSQL backend keeps an in-memory cache for reads and pushes writes to a dedicated background writer thread.
 - The background writer uses a bounded queue plus transaction batches so the exchange path does not perform direct database writes.
 - The writer retries failed batches in order, applies backpressure by blocking enqueue when the queue is saturated, and reports queue/flush health through `/health`.
-- Settlement balance mutations are journaled durably through the storage layer.
-- Startup recovery rebuilds in-memory orderbooks from persisted open orders and reconciles locked/free balances against those recovered orders before the exchange begins serving traffic.
+- User risk is position-based, with a fixed per-market net position limit of `+/-1000`.
+- Traders can buy from flat, sell from flat, go long, and go short; there is no inventory pre-seeding requirement to place a sell order.
+- Realized PnL accumulates as positions are reduced, flipped, or settled.
+- Startup recovery rebuilds in-memory orderbooks from persisted open orders before the exchange begins serving traffic.
 - The initial schema lives at `sql/migrations/001_initial.sql`.
 
 ## Current deployed test endpoint

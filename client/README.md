@@ -81,7 +81,7 @@ curl https://exchange.jamesxu.dev/health
 
 ## What to implement next
 
-- Add trader-facing balance and buying-power presentation where it improves decision making
+- Add trader-facing position-limit and exposure presentation where it improves decision making
 - Decide whether the browser client should move order submit/cancel/amend from REST onto the existing WS trading protocol
 - Add operational actions in admin panel (pause market, risk thresholds)
 - Add end-to-end auth and authorization tests

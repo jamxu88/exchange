@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::marketdata::{BroadcastEvent, ServerMessage, UserBroadcastEvent};
 use crate::orderbook::{Order, OrderBook};
 use crate::rate_limit::PerUserRateLimiter;
-use crate::settlement::SettlementEngine;
 use crate::storage::StorageRepository;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -19,10 +19,22 @@ pub struct Balance {
     pub locked: u64,
 }
 
+pub const NET_POSITION_LIMIT: i64 = 1_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct Position {
+    pub market: String,
+    pub net_quantity: i64,
+    pub average_entry_price: Option<u64>,
+    pub realized_pnl: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PortfolioSnapshot {
     pub trader_id: Uuid,
-    pub balances: Vec<Balance>,
+    pub position_limit: i64,
+    pub positions: Vec<Position>,
 }
 
 #[derive(Clone)]
@@ -85,8 +97,6 @@ impl AppState {
                 .insert(market.clone(), Arc::new(Mutex::new(orderbook)));
             self.market_sequences.entry(market).or_insert(0);
         }
-        SettlementEngine::reconcile_balances_after_restart(self, &open_orders)
-            .unwrap_or_else(|error| panic!("failed to reconcile balances after restart: {error}"));
     }
 }
 

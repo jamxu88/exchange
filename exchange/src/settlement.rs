@@ -1,5 +1,7 @@
-use crate::orderbook::{Order, Side};
-use crate::state::{AppState, Balance};
+use crate::orderbook::Side;
+#[cfg(test)]
+use crate::orderbook::Order;
+use crate::state::{AppState, NET_POSITION_LIMIT, Position};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -12,18 +14,13 @@ pub enum SettlementError {
     InvalidMarket,
     #[error("settlement price must be greater than zero")]
     InvalidSettlementPrice,
-    #[error("insufficient free balance for asset {asset}")]
-    InsufficientFreeBalance { asset: String },
-    #[error("insufficient locked balance for asset {asset}")]
-    InsufficientLockedBalance { asset: String },
     #[error(
-        "persisted balances for trader {trader_id} cannot cover recovered locked amount for asset {asset} (total={total}, required_locked={required_locked})"
+        "projected net position for {market} would be {projected}; limit is +/-{limit}"
     )]
-    RecoveryBalanceMismatch {
-        trader_id: Uuid,
-        asset: String,
-        total: u64,
-        required_locked: u64,
+    PositionLimitExceeded {
+        market: String,
+        projected: i64,
+        limit: i64,
     },
     #[error("numeric overflow")]
     Overflow,
@@ -61,78 +58,132 @@ pub struct MarketSettlementSummary {
 pub struct SettlementEngine;
 
 impl SettlementEngine {
-    pub fn lock_order(state: &AppState, order: &Order) -> Result<(), SettlementError> {
-        let (asset, amount) = hold_requirement(order)?;
-        if amount == 0 {
+    pub fn position_limit() -> i64 {
+        NET_POSITION_LIMIT
+    }
+
+    pub fn ensure_order_within_limit(
+        state: &AppState,
+        trader_id: Uuid,
+        market: &str,
+        side: Side,
+        quantity: u64,
+        skip_order_id: Option<Uuid>,
+    ) -> Result<(), SettlementError> {
+        validate_market_symbol(market)?;
+        if quantity == 0 {
             return Ok(());
         }
 
-        let mut balances = state.storage.list_balances(order.trader_id);
-        let balance = ensure_balance_entry(&mut balances, &asset);
-        if balance.free < amount {
-            return Err(SettlementError::InsufficientFreeBalance { asset });
+        let current_net = state
+            .storage
+            .list_positions(trader_id)
+            .into_iter()
+            .find(|position| position.market == market)
+            .map(|position| position.net_quantity)
+            .unwrap_or(0);
+
+        let mut pending_buy_quantity = 0_i64;
+        let mut pending_sell_quantity = 0_i64;
+        for order in state.storage.list_open_orders(trader_id, Some(market)) {
+            if skip_order_id == Some(order.id) {
+                continue;
+            }
+            let remaining = i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
+            match order.side {
+                Side::Buy => {
+                    pending_buy_quantity = pending_buy_quantity
+                        .checked_add(remaining)
+                        .ok_or(SettlementError::Overflow)?;
+                }
+                Side::Sell => {
+                    pending_sell_quantity = pending_sell_quantity
+                        .checked_add(remaining)
+                        .ok_or(SettlementError::Overflow)?;
+                }
+            }
         }
 
-        balance.free -= amount;
-        balance.locked = balance
-            .locked
-            .checked_add(amount)
-            .ok_or(SettlementError::Overflow)?;
+        let requested = i64::try_from(quantity).map_err(|_| SettlementError::Overflow)?;
+        match side {
+            Side::Buy => {
+                pending_buy_quantity = pending_buy_quantity
+                    .checked_add(requested)
+                    .ok_or(SettlementError::Overflow)?;
+            }
+            Side::Sell => {
+                pending_sell_quantity = pending_sell_quantity
+                    .checked_add(requested)
+                    .ok_or(SettlementError::Overflow)?;
+            }
+        }
 
-        persist_settlement_update(
-            state,
-            order.trader_id,
-            balances,
-            vec![SettlementJournalEntry {
-                journal_id: Uuid::new_v4(),
-                trader_id: order.trader_id,
-                asset,
-                free_delta: negative_delta(amount)?,
-                locked_delta: positive_delta(amount)?,
-                reason: SettlementJournalReason::OrderHoldLocked,
-                order_id: Some(order.id),
-                fill_id: None,
-                occurred_at: Utc::now(),
-            }],
-        );
+        let max_long = current_net
+            .checked_add(pending_buy_quantity)
+            .ok_or(SettlementError::Overflow)?;
+        if max_long > NET_POSITION_LIMIT {
+            return Err(SettlementError::PositionLimitExceeded {
+                market: market.to_string(),
+                projected: max_long,
+                limit: NET_POSITION_LIMIT,
+            });
+        }
+
+        let max_short = current_net
+            .checked_sub(pending_sell_quantity)
+            .ok_or(SettlementError::Overflow)?;
+        if max_short < -NET_POSITION_LIMIT {
+            return Err(SettlementError::PositionLimitExceeded {
+                market: market.to_string(),
+                projected: max_short,
+                limit: NET_POSITION_LIMIT,
+            });
+        };
+
         Ok(())
     }
 
-    pub fn release_order_hold(state: &AppState, order: &Order) -> Result<(), SettlementError> {
-        let (asset, amount) = hold_requirement(order)?;
-        if amount == 0 {
-            return Ok(());
+    pub fn projected_bounds_with_open_orders(
+        state: &AppState,
+        trader_id: Uuid,
+        market: &str,
+    ) -> Result<(i64, i64), SettlementError> {
+        validate_market_symbol(market)?;
+
+        let current_net = state
+            .storage
+            .list_positions(trader_id)
+            .into_iter()
+            .find(|position| position.market == market)
+            .map(|position| position.net_quantity)
+            .unwrap_or(0);
+
+        let mut pending_buy_quantity = 0_i64;
+        let mut pending_sell_quantity = 0_i64;
+        for order in state.storage.list_open_orders(trader_id, Some(market)) {
+            let remaining = i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
+            match order.side {
+                Side::Buy => {
+                    pending_buy_quantity = pending_buy_quantity
+                        .checked_add(remaining)
+                        .ok_or(SettlementError::Overflow)?;
+                }
+                Side::Sell => {
+                    pending_sell_quantity = pending_sell_quantity
+                        .checked_add(remaining)
+                        .ok_or(SettlementError::Overflow)?;
+                }
+            }
         }
 
-        let mut balances = state.storage.list_balances(order.trader_id);
-        let balance = ensure_balance_entry(&mut balances, &asset);
-        if balance.locked < amount {
-            return Err(SettlementError::InsufficientLockedBalance { asset });
-        }
-
-        balance.locked -= amount;
-        balance.free = balance
-            .free
-            .checked_add(amount)
-            .ok_or(SettlementError::Overflow)?;
-
-        persist_settlement_update(
-            state,
-            order.trader_id,
-            balances,
-            vec![SettlementJournalEntry {
-                journal_id: Uuid::new_v4(),
-                trader_id: order.trader_id,
-                asset,
-                free_delta: positive_delta(amount)?,
-                locked_delta: negative_delta(amount)?,
-                reason: SettlementJournalReason::OrderHoldReleased,
-                order_id: Some(order.id),
-                fill_id: None,
-                occurred_at: Utc::now(),
-            }],
-        );
-        Ok(())
+        Ok((
+            current_net
+                .checked_add(pending_buy_quantity)
+                .ok_or(SettlementError::Overflow)?,
+            current_net
+                .checked_sub(pending_sell_quantity)
+                .ok_or(SettlementError::Overflow)?,
+        ))
     }
 
     pub fn apply_fill(
@@ -140,203 +191,37 @@ impl SettlementEngine {
         trader_id: Uuid,
         side: Side,
         market: &str,
-        limit_price: u64,
         fill_price: u64,
         quantity: u64,
-        fill_id: Uuid,
     ) -> Result<(), SettlementError> {
+        validate_market_symbol(market)?;
         if quantity == 0 {
             return Ok(());
         }
 
-        let (base_asset, quote_asset) = parse_market(market)?;
-        let fill_quote = fill_price
-            .checked_mul(quantity)
-            .ok_or(SettlementError::Overflow)?;
+        let mut positions = state.storage.list_positions(trader_id);
+        let index = positions.iter().position(|position| position.market == market);
+        let mut position = index
+            .and_then(|idx| positions.get(idx).cloned())
+            .unwrap_or_else(|| Position {
+                market: market.to_string(),
+                net_quantity: 0,
+                average_entry_price: None,
+                realized_pnl: 0,
+                updated_at: Utc::now(),
+            });
 
-        let mut balances = state.storage.list_balances(trader_id);
-        let occurred_at = Utc::now();
-        let mut journal_entries = Vec::with_capacity(2);
+        apply_fill_to_position(&mut position, side, fill_price, quantity)?;
+        position.updated_at = Utc::now();
 
-        match side {
-            Side::Buy => {
-                let locked_quote = limit_price
-                    .checked_mul(quantity)
-                    .ok_or(SettlementError::Overflow)?;
-                let quote = ensure_balance_entry(&mut balances, &quote_asset);
-                if quote.locked < locked_quote {
-                    return Err(SettlementError::InsufficientLockedBalance {
-                        asset: quote_asset.clone(),
-                    });
-                }
-                quote.locked -= locked_quote;
-                let quote_refund = locked_quote
-                    .checked_sub(fill_quote)
-                    .ok_or(SettlementError::Overflow)?;
-                quote.free = quote
-                    .free
-                    .checked_add(quote_refund)
-                    .ok_or(SettlementError::Overflow)?;
-
-                let base = ensure_balance_entry(&mut balances, &base_asset);
-                base.free = base
-                    .free
-                    .checked_add(quantity)
-                    .ok_or(SettlementError::Overflow)?;
-
-                journal_entries.push(SettlementJournalEntry {
-                    journal_id: Uuid::new_v4(),
-                    trader_id,
-                    asset: quote_asset.clone(),
-                    free_delta: positive_delta(quote_refund)?,
-                    locked_delta: negative_delta(locked_quote)?,
-                    reason: SettlementJournalReason::FillSettled,
-                    order_id: None,
-                    fill_id: Some(fill_id),
-                    occurred_at,
-                });
-                journal_entries.push(SettlementJournalEntry {
-                    journal_id: Uuid::new_v4(),
-                    trader_id,
-                    asset: base_asset.clone(),
-                    free_delta: positive_delta(quantity)?,
-                    locked_delta: 0,
-                    reason: SettlementJournalReason::FillSettled,
-                    order_id: None,
-                    fill_id: Some(fill_id),
-                    occurred_at,
-                });
-            }
-            Side::Sell => {
-                let base = ensure_balance_entry(&mut balances, &base_asset);
-                if base.locked < quantity {
-                    return Err(SettlementError::InsufficientLockedBalance {
-                        asset: base_asset.clone(),
-                    });
-                }
-                base.locked -= quantity;
-
-                let quote = ensure_balance_entry(&mut balances, &quote_asset);
-                quote.free = quote
-                    .free
-                    .checked_add(fill_quote)
-                    .ok_or(SettlementError::Overflow)?;
-
-                journal_entries.push(SettlementJournalEntry {
-                    journal_id: Uuid::new_v4(),
-                    trader_id,
-                    asset: base_asset.clone(),
-                    free_delta: 0,
-                    locked_delta: negative_delta(quantity)?,
-                    reason: SettlementJournalReason::FillSettled,
-                    order_id: None,
-                    fill_id: Some(fill_id),
-                    occurred_at,
-                });
-                journal_entries.push(SettlementJournalEntry {
-                    journal_id: Uuid::new_v4(),
-                    trader_id,
-                    asset: quote_asset.clone(),
-                    free_delta: positive_delta(fill_quote)?,
-                    locked_delta: 0,
-                    reason: SettlementJournalReason::FillSettled,
-                    order_id: None,
-                    fill_id: Some(fill_id),
-                    occurred_at,
-                });
-            }
+        if let Some(existing) = index {
+            positions[existing] = position;
+        } else {
+            positions.push(position);
         }
 
-        persist_settlement_update(state, trader_id, balances, journal_entries);
-        Ok(())
-    }
-
-    pub fn seed_balance(state: &AppState, trader_id: Uuid, asset: &str, free: u64) {
-        persist_settlement_update(
-            state,
-            trader_id,
-            vec![Balance {
-                asset: asset.to_string(),
-                free,
-                locked: 0,
-            }],
-            vec![SettlementJournalEntry {
-                journal_id: Uuid::new_v4(),
-                trader_id,
-                asset: asset.to_string(),
-                free_delta: positive_delta(free).expect("seed balance should fit i64"),
-                locked_delta: 0,
-                reason: SettlementJournalReason::BalanceSeeded,
-                order_id: None,
-                fill_id: None,
-                occurred_at: Utc::now(),
-            }],
-        );
-    }
-
-    pub fn reconcile_balances_after_restart(
-        state: &AppState,
-        open_orders: &[Order],
-    ) -> Result<(), SettlementError> {
-        use std::collections::{BTreeMap, BTreeSet};
-
-        let mut expected_locks: BTreeMap<Uuid, BTreeMap<String, u64>> = BTreeMap::new();
-        for order in open_orders {
-            let (asset, amount) = hold_requirement(order)?;
-            let trader_locks = expected_locks.entry(order.trader_id).or_default();
-            let entry = trader_locks.entry(asset).or_insert(0);
-            *entry = entry.checked_add(amount).ok_or(SettlementError::Overflow)?;
-        }
-
-        let all_balances = state.storage.list_all_balances();
-        let mut affected_traders = BTreeSet::new();
-        affected_traders.extend(all_balances.iter().map(|(trader_id, _)| *trader_id));
-        affected_traders.extend(expected_locks.keys().copied());
-
-        for trader_id in affected_traders {
-            let mut balances = all_balances
-                .iter()
-                .find(|(candidate, _)| *candidate == trader_id)
-                .map(|(_, balances)| balances.clone())
-                .unwrap_or_default();
-            let expected_for_trader = expected_locks.remove(&trader_id).unwrap_or_default();
-            let before = balances.clone();
-
-            for balance in &mut balances {
-                if !expected_for_trader.contains_key(&balance.asset) {
-                    let total = balance
-                        .free
-                        .checked_add(balance.locked)
-                        .ok_or(SettlementError::Overflow)?;
-                    balance.free = total;
-                    balance.locked = 0;
-                }
-            }
-
-            for (asset, required_locked) in expected_for_trader {
-                let balance = ensure_balance_entry(&mut balances, &asset);
-                let total = balance
-                    .free
-                    .checked_add(balance.locked)
-                    .ok_or(SettlementError::Overflow)?;
-                if total < required_locked {
-                    return Err(SettlementError::RecoveryBalanceMismatch {
-                        trader_id,
-                        asset,
-                        total,
-                        required_locked,
-                    });
-                }
-                balance.free = total - required_locked;
-                balance.locked = required_locked;
-            }
-
-            balances.sort_by(|left, right| left.asset.cmp(&right.asset));
-            if balances != before {
-                state.storage.replace_balances(trader_id, balances);
-            }
-        }
-
+        normalize_positions(&mut positions);
+        state.storage.replace_positions(trader_id, positions);
         Ok(())
     }
 
@@ -345,148 +230,197 @@ impl SettlementEngine {
         market: &str,
         settlement_price: u64,
     ) -> Result<MarketSettlementSummary, SettlementError> {
+        validate_market_symbol(market)?;
         if settlement_price == 0 {
             return Err(SettlementError::InvalidSettlementPrice);
         }
-        let (base_asset, quote_asset) = parse_market(market)?;
-        let all_balances = state.storage.list_all_balances();
-        let occurred_at = Utc::now();
-        let mut affected_traders = 0_usize;
-        let mut settled_quantity = 0_u64;
 
-        for (trader_id, mut balances) in all_balances {
-            let Some(index) = balances.iter().position(|balance| balance.asset == base_asset) else {
+        let mut summary = MarketSettlementSummary {
+            affected_traders: 0,
+            settled_quantity: 0,
+        };
+
+        for (trader_id, mut positions) in state.storage.list_all_positions() {
+            let Some(position) = positions.iter_mut().find(|position| position.market == market)
+            else {
                 continue;
             };
-            let base_free = balances[index].free;
-            let base_locked = balances[index].locked;
-            let total_base = base_free
-                .checked_add(base_locked)
-                .ok_or(SettlementError::Overflow)?;
-            if total_base == 0 {
+            if position.net_quantity == 0 {
                 continue;
             }
 
-            let payout = total_base
-                .checked_mul(settlement_price)
-                .ok_or(SettlementError::Overflow)?;
-            balances[index].free = 0;
-            balances[index].locked = 0;
-            let quote = ensure_balance_entry(&mut balances, &quote_asset);
-            quote.free = quote
-                .free
-                .checked_add(payout)
+            summary.affected_traders += 1;
+            summary.settled_quantity = summary
+                .settled_quantity
+                .checked_add(position.net_quantity.unsigned_abs())
                 .ok_or(SettlementError::Overflow)?;
 
-            persist_settlement_update(
-                state,
-                trader_id,
-                balances,
-                vec![
-                    SettlementJournalEntry {
-                        journal_id: Uuid::new_v4(),
-                        trader_id,
-                        asset: base_asset.clone(),
-                        free_delta: negative_delta(base_free)?,
-                        locked_delta: negative_delta(base_locked)?,
-                        reason: SettlementJournalReason::MarketSettled,
-                        order_id: None,
-                        fill_id: None,
-                        occurred_at,
-                    },
-                    SettlementJournalEntry {
-                        journal_id: Uuid::new_v4(),
-                        trader_id,
-                        asset: quote_asset.clone(),
-                        free_delta: positive_delta(payout)?,
-                        locked_delta: 0,
-                        reason: SettlementJournalReason::MarketSettled,
-                        order_id: None,
-                        fill_id: None,
-                        occurred_at,
-                    },
-                ],
-            );
-            affected_traders += 1;
-            settled_quantity = settled_quantity
-                .checked_add(total_base)
-                .ok_or(SettlementError::Overflow)?;
+            settle_position(position, settlement_price)?;
+            position.updated_at = Utc::now();
+            normalize_positions(&mut positions);
+            state.storage.replace_positions(trader_id, positions);
         }
 
-        Ok(MarketSettlementSummary {
-            affected_traders,
-            settled_quantity,
-        })
+        Ok(summary)
+    }
+
+    pub fn seed_position(
+        state: &AppState,
+        trader_id: Uuid,
+        market: &str,
+        net_quantity: i64,
+        average_entry_price: Option<u64>,
+        realized_pnl: i64,
+    ) {
+        state.storage.upsert_position(
+            trader_id,
+            Position {
+                market: market.to_string(),
+                net_quantity,
+                average_entry_price,
+                realized_pnl,
+                updated_at: Utc::now(),
+            },
+        );
+    }
+
+    pub fn seed_balance(_state: &AppState, _trader_id: Uuid, _asset: &str, _free: u64) {
+        // Legacy tests still call this helper, but the runtime no longer uses balances
+        // for trading eligibility. Position-based tests should prefer `seed_position`.
     }
 }
 
-fn persist_settlement_update(
-    state: &AppState,
-    trader_id: Uuid,
-    balances: Vec<Balance>,
-    journal_entries: Vec<SettlementJournalEntry>,
-) {
-    state
-        .storage
-        .apply_settlement_update(trader_id, balances, journal_entries);
-}
-
-fn positive_delta(value: u64) -> Result<i64, SettlementError> {
-    i64::try_from(value).map_err(|_| SettlementError::Overflow)
-}
-
-fn negative_delta(value: u64) -> Result<i64, SettlementError> {
-    let positive = positive_delta(value)?;
-    positive.checked_neg().ok_or(SettlementError::Overflow)
-}
-
-fn hold_requirement(order: &Order) -> Result<(String, u64), SettlementError> {
-    let (base_asset, quote_asset) = parse_market(&order.market)?;
-    match order.side {
-        Side::Buy => Ok((
-            quote_asset,
-            order
-                .price
-                .checked_mul(order.remaining)
-                .ok_or(SettlementError::Overflow)?,
-        )),
-        Side::Sell => Ok((base_asset, order.remaining)),
-    }
-}
-
-fn parse_market(market: &str) -> Result<(String, String), SettlementError> {
+fn validate_market_symbol(market: &str) -> Result<(), SettlementError> {
     let Some((base, quote)) = market.split_once('-') else {
         return Err(SettlementError::InvalidMarket);
     };
     if base.is_empty() || quote.is_empty() {
         return Err(SettlementError::InvalidMarket);
     }
-    Ok((base.to_string(), quote.to_string()))
+    Ok(())
 }
 
-fn ensure_balance_entry<'a>(balances: &'a mut Vec<Balance>, asset: &str) -> &'a mut Balance {
-    if let Some(idx) = balances.iter().position(|balance| balance.asset == asset) {
-        return &mut balances[idx];
+fn normalize_positions(positions: &mut Vec<Position>) {
+    positions.retain(|position| position.net_quantity != 0 || position.realized_pnl != 0);
+    positions.sort_by(|left, right| left.market.cmp(&right.market));
+}
+
+fn apply_fill_to_position(
+    position: &mut Position,
+    side: Side,
+    fill_price: u64,
+    quantity: u64,
+) -> Result<(), SettlementError> {
+    let fill_delta = match side {
+        Side::Buy => i64::try_from(quantity).map_err(|_| SettlementError::Overflow)?,
+        Side::Sell => -i64::try_from(quantity).map_err(|_| SettlementError::Overflow)?,
+    };
+    let current_net = position.net_quantity;
+    let fill_price_i64 = i64::try_from(fill_price).map_err(|_| SettlementError::Overflow)?;
+
+    if current_net == 0 {
+        position.net_quantity = fill_delta;
+        position.average_entry_price = Some(fill_price);
+        return Ok(());
     }
 
-    balances.push(Balance {
-        asset: asset.to_string(),
-        free: 0,
-        locked: 0,
-    });
-    balances
-        .last_mut()
-        .expect("balance entry was just inserted")
+    if current_net.signum() == fill_delta.signum() {
+        let current_abs = current_net.unsigned_abs();
+        let fill_abs = fill_delta.unsigned_abs();
+        let next_abs = current_abs
+            .checked_add(fill_abs)
+            .ok_or(SettlementError::Overflow)?;
+        let average = position
+            .average_entry_price
+            .unwrap_or(fill_price);
+        let weighted = average
+            .checked_mul(current_abs)
+            .and_then(|value| fill_price.checked_mul(fill_abs).and_then(|delta| value.checked_add(delta)))
+            .ok_or(SettlementError::Overflow)?;
+        position.net_quantity = current_net
+            .checked_add(fill_delta)
+            .ok_or(SettlementError::Overflow)?;
+        position.average_entry_price = Some(weighted / next_abs);
+        return Ok(());
+    }
+
+    let current_abs = current_net.unsigned_abs();
+    let fill_abs = fill_delta.unsigned_abs();
+    let closed_quantity = current_abs.min(fill_abs);
+    let average = position.average_entry_price.unwrap_or(fill_price);
+    let average_i64 = i64::try_from(average).map_err(|_| SettlementError::Overflow)?;
+    let closed_i64 = i64::try_from(closed_quantity).map_err(|_| SettlementError::Overflow)?;
+    let realized_delta = if current_net > 0 {
+        fill_price_i64
+            .checked_sub(average_i64)
+            .and_then(|delta| delta.checked_mul(closed_i64))
+            .ok_or(SettlementError::Overflow)?
+    } else {
+        average_i64
+            .checked_sub(fill_price_i64)
+            .and_then(|delta| delta.checked_mul(closed_i64))
+            .ok_or(SettlementError::Overflow)?
+    };
+    position.realized_pnl = position
+        .realized_pnl
+        .checked_add(realized_delta)
+        .ok_or(SettlementError::Overflow)?;
+
+    let next_net = current_net
+        .checked_add(fill_delta)
+        .ok_or(SettlementError::Overflow)?;
+    position.net_quantity = next_net;
+    position.average_entry_price = if next_net == 0 {
+        None
+    } else if next_net.signum() == current_net.signum() {
+        position.average_entry_price
+    } else {
+        Some(fill_price)
+    };
+    Ok(())
+}
+
+fn settle_position(position: &mut Position, settlement_price: u64) -> Result<(), SettlementError> {
+    if position.net_quantity == 0 {
+        return Ok(());
+    }
+    let average = position
+        .average_entry_price
+        .unwrap_or(settlement_price);
+    let settlement_i64 =
+        i64::try_from(settlement_price).map_err(|_| SettlementError::Overflow)?;
+    let average_i64 = i64::try_from(average).map_err(|_| SettlementError::Overflow)?;
+    let quantity_i64 =
+        i64::try_from(position.net_quantity.unsigned_abs()).map_err(|_| SettlementError::Overflow)?;
+    let realized_delta = if position.net_quantity > 0 {
+        settlement_i64
+            .checked_sub(average_i64)
+            .and_then(|delta| delta.checked_mul(quantity_i64))
+            .ok_or(SettlementError::Overflow)?
+    } else {
+        average_i64
+            .checked_sub(settlement_i64)
+            .and_then(|delta| delta.checked_mul(quantity_i64))
+            .ok_or(SettlementError::Overflow)?
+    };
+
+    position.realized_pnl = position
+        .realized_pnl
+        .checked_add(realized_delta)
+        .ok_or(SettlementError::Overflow)?;
+    position.net_quantity = 0;
+    position.average_entry_price = None;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
-    use crate::storage::StorageRepository;
 
     fn test_state() -> AppState {
-        AppState::new(Config {
+        let state = AppState::new(Config {
             bind_addr: "127.0.0.1:0".to_string(),
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
@@ -497,149 +431,30 @@ mod tests {
             postgres_write_flush_interval_ms: 25,
             postgres_write_queue_capacity: 4_096,
             postgres_write_retry_backoff_ms: 250,
-        })
-    }
-
-    fn test_config() -> Config {
-        Config {
-            bind_addr: "127.0.0.1:0".to_string(),
-            database_url: "postgres://test".to_string(),
-            storage_backend: crate::storage::StorageBackendKind::InMemory,
-            ws_broadcast_buffer: 64,
-            per_user_requests_per_second: 100,
-            admin_api_token: "test-admin-token".to_string(),
-            postgres_write_batch_size: 128,
-            postgres_write_flush_interval_ms: 25,
-            postgres_write_queue_capacity: 4_096,
-            postgres_write_retry_backoff_ms: 250,
-        }
-    }
-
-    fn test_order(trader_id: Uuid, side: Side, price: u64, quantity: u64) -> Order {
-        Order {
-            id: Uuid::new_v4(),
-            trader_id,
-            market: "BTC-USD".to_string(),
-            side,
-            price,
-            quantity,
-            remaining: quantity,
-            created_at: Utc::now(),
-        }
+        });
+        let now = Utc::now();
+        state.storage.upsert_market(MarketDefinition {
+            market_id: "BTC-USD".to_string(),
+            display_name: "BTC-USD".to_string(),
+            base_asset: "BTC".to_string(),
+            quote_asset: "USD".to_string(),
+            tick_size: 1,
+            min_order_quantity: 1,
+            reference_price: Some(100),
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
+        state
     }
 
     #[test]
-    fn locking_buy_order_moves_quote_balance_from_free_to_locked() {
+    fn reject_when_same_side_resting_orders_would_break_limit() {
         let state = test_state();
         let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
-        let order = test_order(trader_id, Side::Buy, 100, 3);
-
-        SettlementEngine::lock_order(&state, &order).expect("lock should succeed");
-
-        let balances = state.storage.list_balances(trader_id);
-        let usd = balances
-            .iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("usd balance");
-        assert_eq!(usd.free, 700);
-        assert_eq!(usd.locked, 300);
-        assert_eq!(state.storage.list_settlement_journal().len(), 2);
-    }
-
-    #[test]
-    fn releasing_sell_order_restores_locked_base_balance() {
-        let state = test_state();
-        let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "BTC", 5);
-        let order = test_order(trader_id, Side::Sell, 100, 2);
-        SettlementEngine::lock_order(&state, &order).expect("lock should succeed");
-
-        SettlementEngine::release_order_hold(&state, &order).expect("release should succeed");
-
-        let balances = state.storage.list_balances(trader_id);
-        let btc = balances
-            .iter()
-            .find(|balance| balance.asset == "BTC")
-            .expect("btc balance");
-        assert_eq!(btc.free, 5);
-        assert_eq!(btc.locked, 0);
-        assert_eq!(state.storage.list_settlement_journal().len(), 3);
-    }
-
-    #[test]
-    fn applying_buy_fill_releases_price_improvement_and_credits_base() {
-        let state = test_state();
-        let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
-        let order = test_order(trader_id, Side::Buy, 105, 2);
-        SettlementEngine::lock_order(&state, &order).expect("lock should succeed");
-
-        SettlementEngine::apply_fill(
-            &state,
-            trader_id,
-            Side::Buy,
-            "BTC-USD",
-            105,
-            100,
-            2,
-            Uuid::new_v4(),
-        )
-        .expect("fill should settle");
-
-        let balances = state.storage.list_balances(trader_id);
-        let usd = balances
-            .iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("usd balance");
-        let btc = balances
-            .iter()
-            .find(|balance| balance.asset == "BTC")
-            .expect("btc balance");
-        assert_eq!(usd.free, 800);
-        assert_eq!(usd.locked, 0);
-        assert_eq!(btc.free, 2);
-        assert_eq!(state.storage.list_settlement_journal().len(), 4);
-    }
-
-    #[test]
-    fn reconcile_balances_releases_stale_locks_without_open_orders() {
-        let storage = StorageRepository::new_in_memory();
-        let trader_id = Uuid::new_v4();
-        storage.put_balance(
-            trader_id,
-            Balance {
-                asset: "USD".to_string(),
-                free: 700,
-                locked: 300,
-            },
-        );
-
-        let state = AppState::with_storage(test_config(), storage);
-
-        let usd = state
-            .storage
-            .list_balances(trader_id)
-            .into_iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("usd balance");
-        assert_eq!(usd.free, 1_000);
-        assert_eq!(usd.locked, 0);
-    }
-
-    #[test]
-    fn reconcile_balances_restores_locked_amount_for_recovered_open_orders() {
-        let storage = StorageRepository::new_in_memory();
-        let trader_id = Uuid::new_v4();
-        storage.put_balance(
-            trader_id,
-            Balance {
-                asset: "USD".to_string(),
-                free: 1_000,
-                locked: 0,
-            },
-        );
-        storage.upsert_open_order(
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", 900, Some(100), 0);
+        state.storage.upsert_open_order(
             trader_id,
             Order {
                 id: Uuid::new_v4(),
@@ -647,21 +462,136 @@ mod tests {
                 market: "BTC-USD".to_string(),
                 side: Side::Buy,
                 price: 100,
-                quantity: 2,
-                remaining: 2,
+                quantity: 50,
+                remaining: 50,
                 created_at: Utc::now(),
             },
         );
 
-        let state = AppState::with_storage(test_config(), storage);
+        let error = SettlementEngine::ensure_order_within_limit(
+            &state,
+            trader_id,
+            "BTC-USD",
+            Side::Buy,
+            75,
+            None,
+        )
+        .expect_err("should reject");
 
-        let usd = state
-            .storage
-            .list_balances(trader_id)
-            .into_iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("usd balance");
-        assert_eq!(usd.free, 800);
-        assert_eq!(usd.locked, 200);
+        assert!(matches!(
+            error,
+            SettlementError::PositionLimitExceeded { projected: 1_025, .. }
+        ));
+    }
+
+    #[test]
+    fn reject_when_existing_open_orders_already_imply_limit_breach() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", 950, Some(100), 0);
+        state.storage.upsert_open_order(
+            trader_id,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id,
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 100,
+                remaining: 100,
+                created_at: Utc::now(),
+            },
+        );
+
+        let error = SettlementEngine::ensure_order_within_limit(
+            &state,
+            trader_id,
+            "BTC-USD",
+            Side::Sell,
+            1,
+            None,
+        )
+        .expect_err("should reject when existing worst-case exposure is already invalid");
+
+        assert!(matches!(
+            error,
+            SettlementError::PositionLimitExceeded { projected: 1_050, .. }
+        ));
+    }
+
+    #[test]
+    fn projected_bounds_include_existing_open_orders() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", 100, Some(100), 0);
+        state.storage.upsert_open_order(
+            trader_id,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id,
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 75,
+                remaining: 75,
+                created_at: Utc::now(),
+            },
+        );
+        state.storage.upsert_open_order(
+            trader_id,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id,
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                price: 101,
+                quantity: 40,
+                remaining: 40,
+                created_at: Utc::now(),
+            },
+        );
+
+        let bounds = SettlementEngine::projected_bounds_with_open_orders(
+            &state,
+            trader_id,
+            "BTC-USD",
+        )
+        .expect("bounds should compute");
+
+        assert_eq!(bounds, (175, 60));
+    }
+
+    #[test]
+    fn fill_updates_short_position_and_realized_pnl() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", -10, Some(100), 5);
+
+        SettlementEngine::apply_fill(&state, trader_id, Side::Buy, "BTC-USD", 90, 4)
+            .expect("fill should apply");
+
+        let positions = state.storage.list_positions(trader_id);
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].net_quantity, -6);
+        assert_eq!(positions[0].average_entry_price, Some(100));
+        assert_eq!(positions[0].realized_pnl, 45);
+    }
+
+    #[test]
+    fn settlement_flattens_positions_and_realizes_pnl() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", 5, Some(80), 10);
+
+        let summary =
+            SettlementEngine::settle_market(&state, "BTC-USD", 90).expect("settlement should work");
+
+        assert_eq!(summary.affected_traders, 1);
+        assert_eq!(summary.settled_quantity, 5);
+        let positions = state.storage.list_positions(trader_id);
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].net_quantity, 0);
+        assert_eq!(positions[0].average_entry_price, None);
+        assert_eq!(positions[0].realized_pnl, 60);
     }
 }

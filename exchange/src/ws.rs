@@ -382,7 +382,7 @@ fn trading_error_code(error: &TradingError) -> &'static str {
         TradingError::InvalidAmend => "invalid_amend",
         TradingError::OrderNotFound => "order_not_found",
         TradingError::OrderNotOwned => "order_not_owned",
-        TradingError::InsufficientBalance { .. } => "insufficient_balance",
+        TradingError::PositionLimitExceeded { .. } => "position_limit_exceeded",
         TradingError::Overflow => "overflow",
     }
 }
@@ -422,7 +422,6 @@ mod tests {
     use crate::config::Config;
     use crate::marketdata::{BookDelta, L3Order, OrderStateStatus};
     use crate::orderbook::{Order, Side};
-    use crate::settlement::SettlementEngine;
     use crate::state::AppState;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
@@ -699,7 +698,6 @@ mod tests {
             },
         )
         .expect("provision user");
-        SettlementEngine::seed_balance(&state, provisioned.profile.trader_id, "USD", 500);
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
             authenticated_user: Some(AuthenticatedUser {
@@ -754,8 +752,6 @@ mod tests {
             },
         )
         .expect("taker");
-        SettlementEngine::seed_balance(&state, maker.profile.trader_id, "BTC", 2);
-        SettlementEngine::seed_balance(&state, taker.profile.trader_id, "USD", 500);
 
         let mut maker_connection = ClientConnection {
             authenticated_user: Some(AuthenticatedUser {
@@ -856,7 +852,6 @@ mod tests {
             },
         )
         .expect("trader");
-        SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 500);
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
             authenticated_user: Some(AuthenticatedUser {

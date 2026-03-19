@@ -27,7 +27,7 @@ This infrastructure plan should stay aligned with the actual product target:
 Purpose:
 
 - Store exchange application data needed by the backend
-- Provide durable transactional storage for account, order, fill, exchange-control, message, and audit state
+- Provide durable transactional storage for position, order, fill, exchange-control, message, and audit state
 - Run locally for the deployed EC2-based competition environment
 
 Work items:
@@ -38,7 +38,6 @@ Work items:
   - exchange_controls
   - markets
   - admin_messages
-  - balances
   - positions
   - pending_positions
   - orders
@@ -51,7 +50,7 @@ Work items:
   - order acceptance
   - order state transitions
   - fill recording
-  - balance / position updates
+  - position updates
   - settlement events
   - exchange control / market config updates
   - admin message persistence
@@ -154,7 +153,6 @@ These need to be considered while building the exchange locally.
 - [x] Introduce a repository/storage abstraction before wiring persistence
 - [ ] Separate in-memory engine state from durable account/order records
 - [ ] Define canonical source of truth for:
-  - balances
   - positions
   - pending positions
   - orders
@@ -171,13 +169,12 @@ These need to be considered while building the exchange locally.
 
 Current local status:
 
-- The exchange now uses a repository layer for identity, balances, open orders, and fills.
+- The exchange now uses a repository layer for identity, positions, open orders, and fills.
 - A PostgreSQL schema has been defined in `exchange/sql/migrations/001_initial.sql`.
 - A live PostgreSQL backend exists behind the same repository boundary as the in-memory backend.
 - The live matching orderbook still stays in-memory in the process, separate from durable account/query state.
 - Dedicated persistence-thread batching is implemented and deployed.
-- Settlement journal rows are now persisted through the same background writer path as balance updates.
-- Startup recovery now reconciles persisted balance locks against recovered open orders.
+- Startup recovery now rebuilds in-memory orderbooks from persisted open orders while positions remain available from the storage-backed cache.
 - The exchange is running on EC2 with Elastic IP `16.59.150.9`.
 - The EC2 host now runs from a GitHub clone at `/home/ec2-user/exchange-v2`.
 - The exchange env file lives at `/home/ec2-user/exchange-v2/exchange.env`.

@@ -4,6 +4,7 @@ import {
   createMarketAction,
   deleteMarketAction,
   loadConfigAction,
+  resetAllUsersAction,
   sendMessageAction,
   settleMarketAction,
   startTradingAction,
@@ -31,6 +32,10 @@ function formatCurrency(value: number) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function formatSignedCurrency(value: number) {
+  return value > 0 ? `+${formatCurrency(value)}` : value < 0 ? `-${formatCurrency(Math.abs(value))}` : formatCurrency(0);
 }
 
 function formatTimestamp(value: string) {
@@ -160,6 +165,14 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                   type="submit"
                 >
                   Stop trading
+                </button>
+              </form>
+              <form action={resetAllUsersAction}>
+                <button
+                  className="rounded-2xl border border-[rgba(255,211,122,0.35)] bg-[rgba(255,211,122,0.12)] px-4 py-3 text-base font-semibold text-white"
+                  type="submit"
+                >
+                  Reset all users
                 </button>
               </form>
             </div>
@@ -379,7 +392,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         className="rounded-2xl border border-[var(--surface-stroke)] bg-black/20 px-4 py-2 text-base text-white outline-none"
                         min="1"
                         name="settlementPrice"
-                        placeholder="Settlement price"
+                        placeholder="True value per share"
                         required
                         type="number"
                       />
@@ -424,12 +437,13 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     #{row.rank} {row.username}
                   </p>
                   <p>
-                    Cash {formatCurrency(row.available_cash)} · Positions{" "}
-                    {formatCurrency(row.position_value)}
+                    Realized {formatSignedCurrency(row.realized_pnl)} · Unrealized{" "}
+                    {formatSignedCurrency(row.unrealized_pnl)} · Exposure{" "}
+                    {formatCurrency(row.gross_exposure)}
                   </p>
                 </div>
                 <p className="text-xl font-semibold text-white">
-                  {formatCurrency(row.equity)}
+                  {formatSignedCurrency(row.net_pnl)}
                 </p>
               </div>
             ))}

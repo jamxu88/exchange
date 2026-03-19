@@ -15,9 +15,8 @@ function bootstrapData(): TradeBootstrapData {
   return {
     markets,
     user: { traderId: "trader-1", username: "alice" },
-    balances: [
-      { asset: "BTC", free: 2, locked: 1 },
-      { asset: "USD", free: 10_000, locked: 0 },
+    positions: [
+      { market: "BTC-USD", netQuantity: 3, averageEntryPrice: 95, realizedPnl: 10 },
     ],
     openOrders: [
       {
@@ -37,7 +36,7 @@ function bootstrapData(): TradeBootstrapData {
 }
 
 describe("tradeReducer", () => {
-  it("hydrates balances and open orders from bootstrap data", () => {
+  it("hydrates positions and open orders from bootstrap data", () => {
     const initial = createInitialTradeState(markets);
     const next = tradeReducer(initial, {
       type: "bootstrap-success",
@@ -48,9 +47,9 @@ describe("tradeReducer", () => {
 
     expect(next.user?.username).toBe("alice");
     expect(next.positionsByMarket["BTC-USD"]).toEqual({
-      shares: 3,
-      avgCost: null,
-      realizedPnl: 0,
+      netQuantity: 3,
+      avgCost: 95,
+      realizedPnl: 10,
     });
     expect(next.pendingOrders).toHaveLength(1);
     expect(next.bootstrapStatus).toBe("ready");
@@ -162,7 +161,7 @@ describe("tradeReducer", () => {
     });
 
     expect(state.isSubmitting).toBe(false);
-    expect(state.positionsByMarket["BTC-USD"].shares).toBe(6);
+    expect(state.positionsByMarket["BTC-USD"].netQuantity).toBe(6);
     expect(state.pendingOrders.find((order) => order.id === "order-2")?.shares).toBe(1);
     expect(state.filledOrders).toBe(1);
   });
@@ -189,7 +188,7 @@ describe("tradeReducer", () => {
 
   it("computes pnl metrics from known cost basis and live marks", () => {
     let state = createInitialTradeState(markets);
-    state.positionsByMarket["BTC-USD"] = { shares: 2, avgCost: 90, realizedPnl: 20 };
+    state.positionsByMarket["BTC-USD"] = { netQuantity: 2, avgCost: 90, realizedPnl: 20 };
     state = tradeReducer(state, {
       type: "ws-snapshot",
       marketId: "BTC-USD",

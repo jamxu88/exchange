@@ -8,7 +8,7 @@ use crate::auth::{
     AuthError, AuthService, AuthenticatedAdmin, AuthenticatedUser, ProvisionUserRequest,
     ProvisionUserResponse,
 };
-use crate::state::{AppState, Balance, PortfolioSnapshot};
+use crate::state::{AppState, PortfolioSnapshot, Position, NET_POSITION_LIMIT};
 use crate::storage::{PersistenceMode, PersistenceStatus};
 use crate::trading::{
     AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, SubmitOrderRequest,
@@ -72,7 +72,7 @@ impl TradingError {
             TradingError::OrderNotOwned => StatusCode::FORBIDDEN,
             TradingError::MarketDisabled
             | TradingError::MarketSettled
-            | TradingError::InsufficientBalance { .. } => StatusCode::CONFLICT,
+            | TradingError::PositionLimitExceeded { .. } => StatusCode::CONFLICT,
             TradingError::Overflow => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -156,17 +156,24 @@ pub async fn get_user(State(state): State<AppState>, auth: AuthenticatedUser) ->
 
 #[utoipa::path(
     get,
-    path = "/api/v1/balance",
+    path = "/api/v1/positions",
     tag = "account",
     responses(
-        (status = 200, description = "Balances", body = [Balance])
+        (status = 200, description = "Positions", body = [Position])
     )
 )]
+pub async fn get_positions(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> impl IntoResponse {
+    Json(state.storage.list_positions(auth.trader_id))
+}
+
 pub async fn get_balance(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
 ) -> impl IntoResponse {
-    Json(state.storage.list_balances(auth.trader_id))
+    Json(state.storage.list_positions(auth.trader_id))
 }
 
 #[utoipa::path(
@@ -183,7 +190,8 @@ pub async fn get_portfolio(
 ) -> impl IntoResponse {
     Json(PortfolioSnapshot {
         trader_id: auth.trader_id,
-        balances: state.storage.list_balances(auth.trader_id),
+        position_limit: NET_POSITION_LIMIT,
+        positions: state.storage.list_positions(auth.trader_id),
     })
 }
 
@@ -241,7 +249,7 @@ pub async fn get_fills(
     responses(
         (status = 201, description = "Limit order accepted", body = SubmitOrderResponse),
         (status = 400, description = "Invalid order", body = ApiError),
-        (status = 409, description = "Insufficient balance", body = ApiError)
+        (status = 409, description = "Projected position limit breach", body = ApiError)
     )
 )]
 pub async fn submit_order(
@@ -452,6 +460,22 @@ pub async fn settle_market(
                 }),
             )
         })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/users/reset",
+    tag = "admin",
+    responses(
+        (status = 200, description = "All user trading state reset", body = crate::admin::ResetUsersResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
+pub async fn reset_all_users(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::reset_all_users(&state, &admin))
 }
 
 pub async fn get_admin_leaderboard(

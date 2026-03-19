@@ -6,8 +6,8 @@ use exchange::{
     admin::{
         AdminMessageEntry, AdminMessageLevel, AdminStateResponse, DeleteMarketResponse,
         LeaderboardRow, LoadExchangeConfigRequest, LoadExchangeConfigResponse, MarketDefinition,
-        MarketStatus, SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse,
-        TradingControlResponse, UpdateMarketRequest, UpsertMarketRequest,
+        MarketStatus, ResetUsersResponse, SendAdminMessageRequest, SettleMarketRequest,
+        SettleMarketResponse, TradingControlResponse, UpdateMarketRequest, UpsertMarketRequest,
     },
     accounts::UserProfile,
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
@@ -16,7 +16,7 @@ use exchange::{
     orderbook::{Fill, Order, Side},
     rest::HealthResponse,
     settlement::SettlementEngine,
-    state::{AppState, Balance, PortfolioSnapshot},
+    state::{AppState, PortfolioSnapshot, Position, NET_POSITION_LIMIT},
     trading::{
         AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, SubmitOrderRequest,
         SubmitOrderResponse,
@@ -338,61 +338,61 @@ async fn provisioned_api_key_can_read_profile() {
 }
 
 #[tokio::test]
-async fn api_key_request_can_access_balance() {
+async fn api_key_request_can_access_positions() {
     let state = test_state();
     let app = build_app(state.clone());
     let registered = provision_user(&state, "maker");
-    state.storage.put_balance(
+    SettlementEngine::seed_position(
+        &state,
         registered.profile.trader_id,
-        Balance {
-            asset: "USD".to_string(),
-            free: 250_000,
-            locked: 10_000,
-        },
+        "BTC-USD",
+        5,
+        Some(100),
+        10,
     );
 
     let response = app
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &registered.profile.api_key,
         ))
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    let balances: Vec<Balance> = json_body(response).await;
-    assert_eq!(balances.len(), 1);
-    assert_eq!(balances[0].asset, "USD");
+    let positions: Vec<Position> = json_body(response).await;
+    assert_eq!(positions.len(), 1);
+    assert_eq!(positions[0].market, "BTC-USD");
 }
 
 #[tokio::test]
-async fn balance_and_portfolio_endpoints_return_trader_state() {
+async fn positions_and_portfolio_endpoints_return_trader_state() {
     let state = test_state();
     let app = build_app(state.clone());
     let registered = provision_user(&state, "portfolio-user");
-    state.storage.put_balance(
+    SettlementEngine::seed_position(
+        &state,
         registered.profile.trader_id,
-        Balance {
-            asset: "USD".to_string(),
-            free: 250_000,
-            locked: 10_000,
-        },
+        "BTC-USD",
+        -3,
+        Some(110),
+        25,
     );
 
-    let balance_response = app
+    let positions_response = app
         .clone()
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &registered.profile.api_key,
         ))
         .await
         .expect("response");
-    assert_eq!(balance_response.status(), StatusCode::OK);
-    let balances: Vec<Balance> = json_body(balance_response).await;
-    assert_eq!(balances.len(), 1);
-    assert_eq!(balances[0].asset, "USD");
-    assert_eq!(balances[0].free, 250_000);
+    assert_eq!(positions_response.status(), StatusCode::OK);
+    let positions: Vec<Position> = json_body(positions_response).await;
+    assert_eq!(positions.len(), 1);
+    assert_eq!(positions[0].market, "BTC-USD");
+    assert_eq!(positions[0].net_quantity, -3);
 
     let portfolio_response = app
         .oneshot(api_key_request(
@@ -405,15 +405,15 @@ async fn balance_and_portfolio_endpoints_return_trader_state() {
     assert_eq!(portfolio_response.status(), StatusCode::OK);
     let portfolio: PortfolioSnapshot = json_body(portfolio_response).await;
     assert_eq!(portfolio.trader_id, registered.profile.trader_id);
-    assert_eq!(portfolio.balances.len(), 1);
+    assert_eq!(portfolio.position_limit, NET_POSITION_LIMIT);
+    assert_eq!(portfolio.positions.len(), 1);
 }
 
 #[tokio::test]
-async fn submit_amend_cancel_order_flow_updates_open_orders_and_balances() {
+async fn submit_amend_cancel_order_flow_updates_open_orders_and_positions() {
     let state = test_state();
     let app = build_app(state.clone());
     let registered = provision_user(&state, "trader-a");
-    SettlementEngine::seed_balance(&state, registered.profile.trader_id, "USD", 1_000);
 
     let submit_response = app
         .clone()
@@ -476,22 +476,17 @@ async fn submit_amend_cancel_order_flow_updates_open_orders_and_balances() {
     let canceled: CancelOrderResponse = json_body(cancel_response).await;
     assert_eq!(canceled.order.id, submitted.order.id);
 
-    let balances_response = app
+    let positions_response = app
         .clone()
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &registered.profile.api_key,
         ))
         .await
         .expect("response");
-    let balances: Vec<Balance> = json_body(balances_response).await;
-    let usd = balances
-        .iter()
-        .find(|balance| balance.asset == "USD")
-        .expect("usd balance");
-    assert_eq!(usd.free, 1_000);
-    assert_eq!(usd.locked, 0);
+    let positions: Vec<Position> = json_body(positions_response).await;
+    assert!(positions.is_empty());
 
     let open_orders_response = app
         .oneshot(api_key_request(
@@ -506,13 +501,11 @@ async fn submit_amend_cancel_order_flow_updates_open_orders_and_balances() {
 }
 
 #[tokio::test]
-async fn matching_order_flow_updates_fills_balances_and_open_orders() {
+async fn matching_order_flow_allows_short_seller_and_updates_positions_and_open_orders() {
     let state = test_state();
     let app = build_app(state.clone());
     let maker = provision_user(&state, "maker-user");
     let taker = provision_user(&state, "taker-user");
-    SettlementEngine::seed_balance(&state, maker.profile.trader_id, "BTC", 5);
-    SettlementEngine::seed_balance(&state, taker.profile.trader_id, "USD", 1_000);
 
     let maker_response = app
         .clone()
@@ -577,70 +570,50 @@ async fn matching_order_flow_updates_fills_balances_and_open_orders() {
     assert_eq!(taker_fills.len(), 1);
     assert_eq!(taker_fills[0].quantity, 2);
 
-    let maker_balances_response = app
+    let maker_positions_response = app
         .clone()
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &maker.profile.api_key,
         ))
         .await
         .expect("response");
-    let maker_balances: Vec<Balance> = json_body(maker_balances_response).await;
+    let maker_positions: Vec<Position> = json_body(maker_positions_response).await;
     assert_eq!(
-        maker_balances
+        maker_positions
             .iter()
-            .find(|balance| balance.asset == "BTC")
-            .expect("maker btc"),
-        &Balance {
-            asset: "BTC".to_string(),
-            free: 3,
-            locked: 0,
-        }
+            .find(|position| position.market == "BTC-USD")
+            .expect("maker position")
+            .net_quantity,
+        -2
     );
     assert_eq!(
-        maker_balances
+        maker_positions
             .iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("maker usd"),
-        &Balance {
-            asset: "USD".to_string(),
-            free: 200,
-            locked: 0,
-        }
+            .find(|position| position.market == "BTC-USD")
+            .expect("maker position")
+            .average_entry_price,
+        Some(100)
     );
 
-    let taker_balances_response = app
+    let taker_positions_response = app
         .clone()
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &taker.profile.api_key,
         ))
         .await
         .expect("response");
-    let taker_balances: Vec<Balance> = json_body(taker_balances_response).await;
+    let taker_positions: Vec<Position> = json_body(taker_positions_response).await;
     assert_eq!(
-        taker_balances
+        taker_positions
             .iter()
-            .find(|balance| balance.asset == "USD")
-            .expect("taker usd"),
-        &Balance {
-            asset: "USD".to_string(),
-            free: 800,
-            locked: 0,
-        }
-    );
-    assert_eq!(
-        taker_balances
-            .iter()
-            .find(|balance| balance.asset == "BTC")
-            .expect("taker btc"),
-        &Balance {
-            asset: "BTC".to_string(),
-            free: 2,
-            locked: 0,
-        }
+            .find(|position| position.market == "BTC-USD")
+            .expect("taker position")
+            .net_quantity,
+        2
     );
 
     let maker_open_orders_response = app
@@ -672,7 +645,6 @@ async fn api_key_order_flow_supports_submit_and_account_queries() {
     let state = test_state();
     let app = build_app(state.clone());
     let trader = provision_user(&state, "api-trader");
-    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 2_000);
 
     let submit_response = app
         .clone()
@@ -707,24 +679,17 @@ async fn api_key_order_flow_supports_submit_and_account_queries() {
     assert_eq!(open_orders.len(), 1);
     assert_eq!(open_orders[0].id, submitted.order.id);
 
-    let balance_response = app
+    let positions_response = app
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &trader.profile.api_key,
         ))
         .await
         .expect("response");
-    assert_eq!(balance_response.status(), StatusCode::OK);
-    let balances: Vec<Balance> = json_body(balance_response).await;
-    assert_eq!(
-        balances.iter().find(|balance| balance.asset == "USD"),
-        Some(&Balance {
-            asset: "USD".to_string(),
-            free: 1_600,
-            locked: 400,
-        })
-    );
+    assert_eq!(positions_response.status(), StatusCode::OK);
+    let positions: Vec<Position> = json_body(positions_response).await;
+    assert!(positions.is_empty());
 }
 
 #[tokio::test]
@@ -733,8 +698,6 @@ async fn trader_cannot_amend_or_cancel_another_traders_order() {
     let app = build_app(state.clone());
     let owner = provision_user(&state, "owner-user");
     let intruder = provision_user(&state, "intruder-user");
-    SettlementEngine::seed_balance(&state, owner.profile.trader_id, "USD", 1_000);
-    SettlementEngine::seed_balance(&state, intruder.profile.trader_id, "USD", 1_000);
 
     let submit_response = app
         .clone()
@@ -797,15 +760,13 @@ async fn per_user_rate_limit_is_enforced_on_authenticated_routes() {
     let app = build_app(state.clone());
     let first = provision_user(&state, "rate-user-a");
     let second = provision_user(&state, "rate-user-b");
-    SettlementEngine::seed_balance(&state, first.profile.trader_id, "USD", 100);
-    SettlementEngine::seed_balance(&state, second.profile.trader_id, "USD", 100);
 
     for _ in 0..2 {
         let response = app
             .clone()
             .oneshot(api_key_request(
                 Method::GET,
-                "/api/v1/balance",
+                "/api/v1/positions",
                 &first.profile.api_key,
             ))
             .await
@@ -817,7 +778,7 @@ async fn per_user_rate_limit_is_enforced_on_authenticated_routes() {
         .clone()
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &first.profile.api_key,
         ))
         .await
@@ -827,7 +788,7 @@ async fn per_user_rate_limit_is_enforced_on_authenticated_routes() {
     let second_user = app
         .oneshot(api_key_request(
             Method::GET,
-            "/api/v1/balance",
+            "/api/v1/positions",
             &second.profile.api_key,
         ))
         .await
@@ -875,7 +836,6 @@ async fn admin_can_stop_and_start_trading() {
     let state = test_state();
     let app = build_app(state.clone());
     let trader = provision_user(&state, "trade-toggle-user");
-    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
 
     let stop_response = app
         .clone()
@@ -944,7 +904,6 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
     let state = test_state();
     let app = build_app(state.clone());
     let trader = provision_user(&state, "market-admin-user");
-    SettlementEngine::seed_balance(&state, trader.profile.trader_id, "USD", 1_000);
 
     let create_response = app
         .clone()
@@ -1095,13 +1054,77 @@ async fn admin_messages_and_state_endpoint_round_trip() {
 }
 
 #[tokio::test]
+async fn admin_can_reset_all_user_trading_state() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "reset-maker");
+    let taker = provision_user(&state, "reset-taker");
+
+    let maker_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                price: 100,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(maker_submit.status(), StatusCode::CREATED);
+
+    let taker_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &taker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(taker_submit.status(), StatusCode::CREATED);
+
+    let reset_response = app
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/users/reset",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(reset_response.status(), StatusCode::OK);
+    let reset: ResetUsersResponse = json_body(reset_response).await;
+    assert_eq!(reset.cleared_orders, 1);
+    assert_eq!(reset.cleared_positions, 2);
+    assert_eq!(reset.cleared_fills, 2);
+
+    assert!(state.storage.list_all_open_orders().is_empty());
+    assert!(state
+        .storage
+        .list_all_positions()
+        .into_iter()
+        .all(|(_, positions)| positions.is_empty()));
+    assert!(state.storage.list_fills(maker.profile.trader_id, None).is_empty());
+    assert!(state.storage.list_fills(taker.profile.trader_id, None).is_empty());
+}
+
+#[tokio::test]
 async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     let state = test_state();
     let app = build_app(state.clone());
     let maker = provision_user(&state, "settle-maker");
-    let taker = provision_user(&state, "settle-taker");
-    SettlementEngine::seed_balance(&state, maker.profile.trader_id, "BTC", 3);
-    SettlementEngine::seed_balance(&state, taker.profile.trader_id, "USD", 200);
+    SettlementEngine::seed_position(&state, maker.profile.trader_id, "BTC-USD", 3, Some(100), 0);
 
     let submit_response = app
         .clone()
@@ -1138,18 +1161,11 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     assert_eq!(settled.market.status, MarketStatus::Settled);
     assert_eq!(settled.canceled_orders, 1);
 
-    let maker_balances = state.storage.list_balances(maker.profile.trader_id);
-    let maker_btc = maker_balances
-        .iter()
-        .find(|balance| balance.asset == "BTC")
-        .expect("maker btc");
-    let maker_usd = maker_balances
-        .iter()
-        .find(|balance| balance.asset == "USD")
-        .expect("maker usd");
-    assert_eq!(maker_btc.free, 0);
-    assert_eq!(maker_btc.locked, 0);
-    assert_eq!(maker_usd.free, 450);
+    let maker_positions = state.storage.list_positions(maker.profile.trader_id);
+    assert_eq!(maker_positions.len(), 1);
+    assert_eq!(maker_positions[0].market, "BTC-USD");
+    assert_eq!(maker_positions[0].net_quantity, 0);
+    assert_eq!(maker_positions[0].realized_pnl, 150);
 
     let leaderboard_response = app
         .oneshot(api_key_request(
@@ -1162,5 +1178,5 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     assert_eq!(leaderboard_response.status(), StatusCode::OK);
     let leaderboard: Vec<LeaderboardRow> = json_body(leaderboard_response).await;
     assert_eq!(leaderboard[0].username, "settle-maker");
-    assert_eq!(leaderboard[0].equity, 450);
+    assert_eq!(leaderboard[0].net_pnl, 150);
 }

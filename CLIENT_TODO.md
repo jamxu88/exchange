@@ -293,7 +293,7 @@ Using the referenced Figma node as the target:
 - [x] Show order ACK / reject state
 - [x] Show fills and order lifecycle updates
 - [x] Show current positions
-- [ ] Show balances / buying power if needed
+- [ ] Show net position limit / exposure cues where needed
 - [x] Keep UI state consistent with server events
 
 ## 11. Documentation

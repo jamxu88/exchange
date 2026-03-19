@@ -57,6 +57,15 @@ export async function stopTradingAction() {
   await runMutation("/api/v1/admin/trading/stop", "POST", undefined, "Trading stopped.");
 }
 
+export async function resetAllUsersAction() {
+  await runMutation(
+    "/api/v1/admin/users/reset",
+    "POST",
+    undefined,
+    "All user positions, orders, and fills were reset.",
+  );
+}
+
 export async function createMarketAction(formData: FormData) {
   await runMutation(
     "/api/v1/admin/markets",

@@ -25,7 +25,7 @@ export type TradeState = {
   connectionStatus: ConnectionStatus;
   bootstrapStatus: "idle" | "loading" | "ready" | "error";
   user: TradeUser | null;
-  balances: { asset: string; free: number; locked: number }[];
+  positions: TradeBootstrapData["positions"];
   positionsByMarket: Record<MarketId, PositionState>;
   pendingOrders: PendingOrder[];
   fills: TradeFill[];
@@ -182,23 +182,23 @@ function pushMessage(messages: MessageEntry[], message: MessageEntry) {
   return [...messages, { ...message, id: nextId }].slice(-MAX_MESSAGES);
 }
 
-function positionMapFromBalances(
+function positionMapFromSnapshots(
   markets: MarketDefinition[],
-  balances: TradeBootstrapData["balances"],
+  positions: TradeBootstrapData["positions"],
   previous: Record<MarketId, PositionState>,
 ) {
   return markets.reduce<Record<MarketId, PositionState>>((next, market) => {
-    const assetBalance = balances.find((balance) => balance.asset === market.baseAsset);
+    const snapshot = positions.find((position) => position.market === market.id);
     const previousPosition = previous[market.id] ?? {
-      shares: 0,
+      netQuantity: 0,
       avgCost: null,
       realizedPnl: 0,
     };
 
     next[market.id] = {
-      shares: (assetBalance?.free ?? 0) + (assetBalance?.locked ?? 0),
-      avgCost: previousPosition.avgCost,
-      realizedPnl: previousPosition.realizedPnl,
+      netQuantity: snapshot?.netQuantity ?? 0,
+      avgCost: snapshot?.averageEntryPrice ?? previousPosition.avgCost,
+      realizedPnl: snapshot?.realizedPnl ?? previousPosition.realizedPnl,
     };
     return next;
   }, {});
@@ -207,7 +207,7 @@ function positionMapFromBalances(
 function syncMarketDefinitions(
   currentState: TradeState,
   markets: MarketDefinition[],
-  balances: TradeBootstrapData["balances"],
+  positions: TradeBootstrapData["positions"],
 ) {
   const nextMarkets = markets.length > 0 ? markets : currentState.availableMarkets;
   const nextMarketBooks = nextMarkets.reduce<Record<MarketId, MarketBookState>>((next, market) => {
@@ -223,9 +223,9 @@ function syncMarketDefinitions(
   return {
     availableMarkets: nextMarkets,
     marketBooks: nextMarketBooks,
-    positionsByMarket: positionMapFromBalances(
+    positionsByMarket: positionMapFromSnapshots(
       nextMarkets,
-      balances,
+      positions,
       currentState.positionsByMarket,
     ),
     selectedMarketId: nextSelectedMarketId,
@@ -347,31 +347,45 @@ function applyOwnFillToPosition(
   }
 
   const executionPrice = weightedFillPrice(result.fills) ?? result.effectivePrice;
+  const fillDelta = result.side === "buy" ? executedQuantity : -executedQuantity;
+  const currentNet = position.netQuantity;
 
-  if (result.side === "buy") {
-    const nextShares = position.shares + executedQuantity;
-    const nextAvgCost =
-      position.avgCost === null && position.shares > 0
-        ? null
-        : position.avgCost === null
-          ? executionPrice
-          : (position.avgCost * position.shares + executionPrice * executedQuantity) /
-            nextShares;
-
+  if (currentNet === 0) {
     return {
       ...position,
-      shares: nextShares,
-      avgCost: nextAvgCost,
+      netQuantity: fillDelta,
+      avgCost: executionPrice,
     };
   }
 
-  const nextShares = Math.max(0, position.shares - executedQuantity);
+  if (Math.sign(currentNet) === Math.sign(fillDelta)) {
+    const currentAbs = Math.abs(currentNet);
+    const fillAbs = Math.abs(fillDelta);
+    const nextAbs = currentAbs + fillAbs;
+    const avgCost =
+      position.avgCost === null
+        ? executionPrice
+        : (position.avgCost * currentAbs + executionPrice * fillAbs) / nextAbs;
+
+    return {
+      ...position,
+      netQuantity: currentNet + fillDelta,
+      avgCost,
+    };
+  }
+
+  const closedQuantity = Math.min(Math.abs(currentNet), Math.abs(fillDelta));
   const realizedDelta =
-    position.avgCost === null ? 0 : (executionPrice - position.avgCost) * executedQuantity;
+    position.avgCost === null
+      ? 0
+      : currentNet > 0
+        ? (executionPrice - position.avgCost) * closedQuantity
+        : (position.avgCost - executionPrice) * closedQuantity;
+  const nextNet = currentNet + fillDelta;
 
   return {
-    shares: nextShares,
-    avgCost: nextShares === 0 ? null : position.avgCost,
+    netQuantity: nextNet,
+    avgCost: nextNet === 0 ? null : Math.sign(nextNet) === Math.sign(currentNet) ? position.avgCost : executionPrice,
     realizedPnl: position.realizedPnl + realizedDelta,
   };
 }
@@ -383,7 +397,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
   }, {});
 
   const positionsByMarket = markets.reduce<Record<MarketId, PositionState>>((next, market) => {
-    next[market.id] = { shares: 0, avgCost: null, realizedPnl: 0 };
+    next[market.id] = { netQuantity: 0, avgCost: null, realizedPnl: 0 };
     return next;
   }, {});
 
@@ -393,7 +407,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
     connectionStatus: "connecting",
     bootstrapStatus: "idle",
     user: null,
-    balances: [],
+    positions: [],
     positionsByMarket,
     pendingOrders: [],
     fills: [],
@@ -414,13 +428,13 @@ function applyBootstrapDataToState(
   currentState: TradeState,
   data: TradeBootstrapData,
 ) {
-  const synced = syncMarketDefinitions(currentState, data.markets, data.balances);
+  const synced = syncMarketDefinitions(currentState, data.markets, data.positions);
   return {
     ...currentState,
     availableMarkets: synced.availableMarkets,
     selectedMarketId: synced.selectedMarketId,
     user: data.user ?? currentState.user,
-    balances: data.balances,
+    positions: data.positions,
     pendingOrders: data.openOrders,
     fills: data.fills,
     marketBooks: synced.marketBooks,
@@ -715,7 +729,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
       });
       const currentPosition =
         state.positionsByMarket[action.result.marketId] ?? {
-          shares: 0,
+          netQuantity: 0,
           avgCost: null,
           realizedPnl: 0,
         };
@@ -801,9 +815,9 @@ export function selectActiveRows(state: TradeState) {
     .map((market) => ({
       marketId: market.id,
       product: market.name,
-      shares: state.positionsByMarket[market.id]?.shares ?? 0,
+      netQuantity: state.positionsByMarket[market.id]?.netQuantity ?? 0,
       avgCost: state.positionsByMarket[market.id]?.avgCost ?? null,
-      active: (state.positionsByMarket[market.id]?.shares ?? 0) > 0,
+      active: (state.positionsByMarket[market.id]?.netQuantity ?? 0) !== 0,
     }))
     .filter((position) => position.active);
 }
@@ -858,7 +872,7 @@ export function selectPnlMetrics(state: TradeState): PnlMetric[] {
   const totals = state.availableMarkets.reduce(
     (next, market) => {
       const position = state.positionsByMarket[market.id] ?? {
-        shares: 0,
+        netQuantity: 0,
         avgCost: null,
         realizedPnl: 0,
       };
@@ -876,10 +890,10 @@ export function selectPnlMetrics(state: TradeState): PnlMetric[] {
 
       const mark = summary.midPrice ?? summary.lastPrice;
       if (mark !== null) {
-        next.exposure += position.shares * mark;
+        next.exposure += Math.abs(position.netQuantity) * mark;
       }
       if (mark !== null && position.avgCost !== null) {
-        next.unrealized += (mark - position.avgCost) * position.shares;
+        next.unrealized += (mark - position.avgCost) * position.netQuantity;
       }
       next.realized += position.realizedPnl;
       return next;

@@ -6,7 +6,7 @@ use crate::admin::{
 use crate::config::Config;
 use crate::orderbook::{Fill, Order, Side};
 use crate::settlement::{SettlementJournalEntry, SettlementJournalReason};
-use crate::state::Balance;
+use crate::state::{Balance, Position};
 use chrono::Utc;
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
@@ -143,6 +143,10 @@ pub trait StorageBackend: Send + Sync {
         journal_entries: Vec<SettlementJournalEntry>,
     );
     fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry>;
+    fn list_positions(&self, trader_id: Uuid) -> Vec<Position>;
+    fn list_all_positions(&self) -> Vec<(Uuid, Vec<Position>)>;
+    fn upsert_position(&self, trader_id: Uuid, position: Position);
+    fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>);
     fn upsert_order_ledger(&self, order: Order);
     fn close_order_ledger(&self, trader_id: Uuid, order_id: Uuid, remaining: u64);
     fn list_all_open_orders(&self) -> Vec<Order>;
@@ -152,6 +156,7 @@ pub trait StorageBackend: Send + Sync {
     fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order>;
     fn append_fill(&self, trader_id: Uuid, fill: Fill);
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill>;
+    fn reset_all_trading_state(&self);
 }
 
 #[derive(Clone)]
@@ -277,6 +282,22 @@ impl StorageRepository {
         self.backend.list_settlement_journal()
     }
 
+    pub fn list_positions(&self, trader_id: Uuid) -> Vec<Position> {
+        self.backend.list_positions(trader_id)
+    }
+
+    pub fn list_all_positions(&self) -> Vec<(Uuid, Vec<Position>)> {
+        self.backend.list_all_positions()
+    }
+
+    pub fn upsert_position(&self, trader_id: Uuid, position: Position) {
+        self.backend.upsert_position(trader_id, position)
+    }
+
+    pub fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
+        self.backend.replace_positions(trader_id, positions)
+    }
+
     pub fn upsert_order_ledger(&self, order: Order) {
         self.backend.upsert_order_ledger(order)
     }
@@ -313,6 +334,10 @@ impl StorageRepository {
     pub fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill> {
         self.backend.list_fills(trader_id, market)
     }
+
+    pub fn reset_all_trading_state(&self) {
+        self.backend.reset_all_trading_state()
+    }
 }
 
 #[derive(Default)]
@@ -331,6 +356,7 @@ struct InMemoryRepository {
 #[derive(Default)]
 struct AccountPartition {
     balances: BTreeMap<String, Balance>,
+    positions: BTreeMap<String, Position>,
     open_orders: BTreeMap<Uuid, Order>,
     fills: BTreeMap<Uuid, Fill>,
 }
@@ -539,6 +565,48 @@ impl StorageBackend for InMemoryRepository {
         entries
     }
 
+    fn list_positions(&self, trader_id: Uuid) -> Vec<Position> {
+        let mut positions = self.with_account(trader_id, |account| {
+            account.positions.values().cloned().collect::<Vec<_>>()
+        });
+        positions.sort_by(|left, right| left.market.cmp(&right.market));
+        positions
+    }
+
+    fn list_all_positions(&self) -> Vec<(Uuid, Vec<Position>)> {
+        let mut positions = Vec::new();
+        for entry in &self.accounts {
+            let trader_id = *entry.key();
+            let mut trader_positions = entry
+                .value()
+                .lock()
+                .expect("account partition lock")
+                .positions
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            trader_positions.sort_by(|left, right| left.market.cmp(&right.market));
+            positions.push((trader_id, trader_positions));
+        }
+        positions.sort_by_key(|(trader_id, _)| *trader_id);
+        positions
+    }
+
+    fn upsert_position(&self, trader_id: Uuid, position: Position) {
+        self.with_account_mut(trader_id, |account| {
+            account.positions.insert(position.market.clone(), position);
+        });
+    }
+
+    fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
+        self.with_account_mut(trader_id, |account| {
+            account.positions = positions
+                .into_iter()
+                .map(|position| (position.market.clone(), position))
+                .collect();
+        });
+    }
+
     fn upsert_order_ledger(&self, _order: Order) {}
 
     fn close_order_ledger(&self, _trader_id: Uuid, _order_id: Uuid, _remaining: u64) {}
@@ -595,6 +663,20 @@ impl StorageBackend for InMemoryRepository {
         }
         fills.sort_by_key(|fill| (fill.occurred_at, fill.fill_id));
         fills
+    }
+
+    fn reset_all_trading_state(&self) {
+        for entry in &self.accounts {
+            let mut account = entry.value().lock().expect("account partition lock");
+            account.balances.clear();
+            account.positions.clear();
+            account.open_orders.clear();
+            account.fills.clear();
+        }
+        self.settlement_journal
+            .lock()
+            .expect("settlement journal lock")
+            .clear();
     }
 }
 
@@ -774,6 +856,28 @@ impl StorageBackend for PostgresRepository {
         self.cache.list_settlement_journal()
     }
 
+    fn list_positions(&self, trader_id: Uuid) -> Vec<Position> {
+        self.cache.list_positions(trader_id)
+    }
+
+    fn list_all_positions(&self) -> Vec<(Uuid, Vec<Position>)> {
+        self.cache.list_all_positions()
+    }
+
+    fn upsert_position(&self, trader_id: Uuid, position: Position) {
+        self.cache.upsert_position(trader_id, position.clone());
+        self.writer
+            .enqueue(PersistOp::UpsertPosition { trader_id, position });
+    }
+
+    fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
+        self.cache.replace_positions(trader_id, positions.clone());
+        self.writer.enqueue(PersistOp::ReplacePositions {
+            trader_id,
+            positions,
+        });
+    }
+
     fn upsert_order_ledger(&self, order: Order) {
         self.writer.enqueue(PersistOp::UpsertOrderLedger(order));
     }
@@ -814,6 +918,11 @@ impl StorageBackend for PostgresRepository {
 
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill> {
         self.cache.list_fills(trader_id, market)
+    }
+
+    fn reset_all_trading_state(&self) {
+        self.cache.reset_all_trading_state();
+        self.writer.enqueue(PersistOp::ResetAllTradingState);
     }
 }
 
@@ -1041,6 +1150,14 @@ enum PersistOp {
         balances: Vec<Balance>,
         journal_entries: Vec<SettlementJournalEntry>,
     },
+    UpsertPosition {
+        trader_id: Uuid,
+        position: Position,
+    },
+    ReplacePositions {
+        trader_id: Uuid,
+        positions: Vec<Position>,
+    },
     UpsertOrderLedger(Order),
     CloseOrderLedger {
         trader_id: Uuid,
@@ -1048,6 +1165,7 @@ enum PersistOp {
         remaining: u64,
     },
     AppendFill(Fill),
+    ResetAllTradingState,
 }
 
 fn writer_loop(
@@ -1325,6 +1443,33 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
                 .map_err(|error| format!("postgres settlement journal insert failed: {error}"))?;
             }
         }
+        PersistOp::UpsertPosition { trader_id, position } => {
+            let updated_at = position.updated_at;
+            tx.execute(
+                "INSERT INTO positions (trader_id, market, net_quantity, average_entry_price, realized_pnl, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (trader_id, market) DO UPDATE SET \
+                   net_quantity = EXCLUDED.net_quantity, \
+                   average_entry_price = EXCLUDED.average_entry_price, \
+                   realized_pnl = EXCLUDED.realized_pnl, \
+                   updated_at = EXCLUDED.updated_at",
+                &[
+                    trader_id,
+                    &position.market,
+                    &position.net_quantity,
+                    &position.average_entry_price.map(u64_to_i64),
+                    &position.realized_pnl,
+                    &updated_at,
+                ],
+            )
+            .map_err(|error| format!("postgres position upsert failed: {error}"))?;
+        }
+        PersistOp::ReplacePositions {
+            trader_id,
+            positions,
+        } => {
+            persist_position_snapshot(tx, *trader_id, positions)?;
+        }
         PersistOp::UpsertOrderLedger(order) => {
             let updated_at = Utc::now();
             tx.execute(
@@ -1385,6 +1530,12 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
             )
             .map_err(|error| format!("postgres fill insert failed: {error}"))?;
         }
+        PersistOp::ResetAllTradingState => {
+            tx.batch_execute(
+                "TRUNCATE TABLE fills, orders, positions, pending_positions, balances, settlement_journal, pnl_snapshots RESTART IDENTITY",
+            )
+            .map_err(|error| format!("postgres trading reset failed: {error}"))?;
+        }
     }
 
     Ok(())
@@ -1398,6 +1549,7 @@ fn hydrate_cache(client: &mut Client, cache: &InMemoryRepository) {
     hydrate_admin_messages(client, cache);
     hydrate_balances(client, cache);
     hydrate_settlement_journal(client, cache);
+    hydrate_positions(client, cache);
     hydrate_open_orders(client, cache);
     hydrate_fills(client, cache);
 }
@@ -1511,6 +1663,21 @@ fn hydrate_settlement_journal(client: &mut Client, cache: &InMemoryRepository) {
         .extend(entries);
 }
 
+fn hydrate_positions(client: &mut Client, cache: &InMemoryRepository) {
+    let rows = client
+        .query(
+            "SELECT trader_id, market, net_quantity, average_entry_price, realized_pnl, updated_at \
+             FROM positions ORDER BY trader_id ASC, market ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres position hydrate failed: {error}"));
+
+    for row in rows {
+        let trader_id: Uuid = row.get("trader_id");
+        cache.upsert_position(trader_id, position_from_row(row));
+    }
+}
+
 fn hydrate_open_orders(client: &mut Client, cache: &InMemoryRepository) {
     let rows = client
         .query(
@@ -1615,6 +1782,18 @@ fn balance_from_row(row: Row) -> Balance {
         asset: row.get("asset"),
         free: i64_to_u64(row.get("free")),
         locked: i64_to_u64(row.get("locked")),
+    }
+}
+
+fn position_from_row(row: Row) -> Position {
+    Position {
+        market: row.get("market"),
+        net_quantity: row.get("net_quantity"),
+        average_entry_price: row
+            .get::<_, Option<i64>>("average_entry_price")
+            .map(i64_to_u64),
+        realized_pnl: row.get("realized_pnl"),
+        updated_at: row.get("updated_at"),
     }
 }
 
@@ -1749,6 +1928,33 @@ fn persist_balance_snapshot(
             ],
         )
         .map_err(|error| format!("postgres balance insert failed: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn persist_position_snapshot(
+    tx: &mut Transaction<'_>,
+    trader_id: Uuid,
+    positions: &[Position],
+) -> Result<(), String> {
+    tx.execute("DELETE FROM positions WHERE trader_id = $1", &[&trader_id])
+        .map_err(|error| format!("postgres position delete failed: {error}"))?;
+
+    for position in positions {
+        tx.execute(
+            "INSERT INTO positions (trader_id, market, net_quantity, average_entry_price, realized_pnl, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                &trader_id,
+                &position.market,
+                &position.net_quantity,
+                &position.average_entry_price.map(u64_to_i64),
+                &position.realized_pnl,
+                &position.updated_at,
+            ],
+        )
+        .map_err(|error| format!("postgres position insert failed: {error}"))?;
     }
 
     Ok(())

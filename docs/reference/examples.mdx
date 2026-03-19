@@ -21,7 +21,7 @@ curl -H "x-api-key: YOUR_API_KEY" \
   https://exchange.jamesxu.dev/api/v1/user
 
 curl -H "x-api-key: YOUR_API_KEY" \
-  https://exchange.jamesxu.dev/api/v1/balance
+  https://exchange.jamesxu.dev/api/v1/positions
 
 curl -H "x-api-key: YOUR_API_KEY" \
   'https://exchange.jamesxu.dev/api/v1/open-orders?market=BTC-USD'
@@ -51,6 +51,8 @@ if (!response.ok) {
 const payload = await response.json();
 console.log(payload);
 ```
+
+Sell orders can be submitted from flat inventory. The backend enforces only the per-market worst-case net position limit, so a trader can go short as long as all currently open orders plus current net position remain within `+/-1000`.
 
 ## WebSocket session example
 

@@ -2,7 +2,7 @@ use crate::accounts::UserProfile;
 use crate::auth::{ProvisionUserRequest, ProvisionUserResponse};
 use crate::orderbook::{Fill, Order, Side};
 use crate::rest::{ApiError, HealthResponse};
-use crate::state::{Balance, PortfolioSnapshot};
+use crate::state::{PortfolioSnapshot, Position};
 use crate::trading::{
     AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, SubmitOrderRequest,
     SubmitOrderResponse,
@@ -15,13 +15,14 @@ use utoipa::OpenApi;
         crate::rest::health,
         crate::rest::provision_user,
         crate::rest::get_user,
-        crate::rest::get_balance,
+        crate::rest::get_positions,
         crate::rest::get_portfolio,
         crate::rest::get_open_orders,
         crate::rest::get_fills,
         crate::rest::submit_order,
         crate::rest::cancel_order,
-        crate::rest::amend_order
+        crate::rest::amend_order,
+        crate::rest::reset_all_users
     ),
     components(
         schemas(
@@ -31,7 +32,7 @@ use utoipa::OpenApi;
             Side,
             Order,
             Fill,
-            Balance,
+            Position,
             PortfolioSnapshot,
             ProvisionUserRequest,
             ProvisionUserResponse,
@@ -39,7 +40,8 @@ use utoipa::OpenApi;
             SubmitOrderResponse,
             CancelOrderResponse,
             AmendOrderRequest,
-            AmendOrderResponse
+            AmendOrderResponse,
+            crate::admin::ResetUsersResponse
         )
     ),
     tags(

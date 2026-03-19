@@ -1,5 +1,5 @@
 import type {
-  AccountBalance,
+  AccountPosition,
   MarketDefinition,
   PendingOrder,
   SubmitOrderIntent,
@@ -22,10 +22,11 @@ type UserResponse = {
   username: string;
 };
 
-type BalanceResponse = {
-  asset: string;
-  free: number;
-  locked: number;
+type PositionResponse = {
+  market: string;
+  net_quantity: number;
+  average_entry_price: number | null;
+  realized_pnl: number;
 };
 
 type OpenOrderResponse = {
@@ -134,18 +135,18 @@ export class TradeRestClient {
       return {
         markets: [],
         user: null,
-        balances: [],
+        positions: [],
         openOrders: [],
         fills: [],
         warnings: ["No exchange API key configured. Account bootstrap skipped."],
       };
     }
 
-    const [marketsResult, userResult, balanceResult, openOrdersResult, fillsResult] =
+    const [marketsResult, userResult, positionsResult, openOrdersResult, fillsResult] =
       await Promise.allSettled([
         this.request<MarketResponse[]>("/api/v1/markets", { includeAuth: false }),
         this.request<UserResponse>("/api/v1/user"),
-        this.request<BalanceResponse[]>("/api/v1/balance"),
+        this.request<PositionResponse[]>("/api/v1/positions"),
         this.request<OpenOrderResponse[]>("/api/v1/open-orders"),
         this.request<FillResponse[]>("/api/v1/fills"),
       ]);
@@ -161,16 +162,17 @@ export class TradeRestClient {
       traderId: value.trader_id,
       username: value.username,
     }));
-    const balances = pickSettledValue(
-      balanceResult,
-      (value): AccountBalance[] =>
-        value.map((balance) => ({
-          asset: balance.asset,
-          free: balance.free,
-          locked: balance.locked,
+    const positions = pickSettledValue(
+      positionsResult,
+      (value): AccountPosition[] =>
+        value.map((position) => ({
+          market: position.market,
+          netQuantity: position.net_quantity,
+          averageEntryPrice: position.average_entry_price,
+          realizedPnl: position.realized_pnl,
         })),
       warnings,
-      "Balance bootstrap failed.",
+      "Position bootstrap failed.",
     );
     const openOrders = pickSettledValue(
       openOrdersResult,
@@ -192,7 +194,7 @@ export class TradeRestClient {
     return {
       markets,
       user: user ?? null,
-      balances,
+      positions,
       openOrders,
       fills,
       warnings,

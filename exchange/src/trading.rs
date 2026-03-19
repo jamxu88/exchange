@@ -73,8 +73,12 @@ pub enum TradingError {
     OrderNotFound,
     #[error("order does not belong to trader")]
     OrderNotOwned,
-    #[error("insufficient balance for asset {asset}")]
-    InsufficientBalance { asset: String },
+    #[error("projected net position for {market} would be {projected}; limit is +/-{limit}")]
+    PositionLimitExceeded {
+        market: String,
+        projected: i64,
+        limit: i64,
+    },
     #[error("numeric overflow")]
     Overflow,
 }
@@ -84,11 +88,15 @@ impl From<SettlementError> for TradingError {
         match value {
             SettlementError::InvalidMarket => Self::InvalidMarket,
             SettlementError::InvalidSettlementPrice => Self::InvalidPrice,
-            SettlementError::InsufficientFreeBalance { asset }
-            | SettlementError::InsufficientLockedBalance { asset } => {
-                Self::InsufficientBalance { asset }
-            }
-            SettlementError::RecoveryBalanceMismatch { .. } => Self::Overflow,
+            SettlementError::PositionLimitExceeded {
+                market,
+                projected,
+                limit,
+            } => Self::PositionLimitExceeded {
+                market,
+                projected,
+                limit,
+            },
             SettlementError::Overflow => Self::Overflow,
         }
     }
@@ -121,8 +129,15 @@ impl TradingService {
             created_at: Utc::now(),
         };
 
+        SettlementEngine::ensure_order_within_limit(
+            state,
+            trader_id,
+            &order.market,
+            order.side,
+            order.quantity,
+            None,
+        )?;
         state.storage.upsert_order_ledger(order.clone());
-        SettlementEngine::lock_order(state, &order)?;
 
         let book_handle = market_orderbook(state, &order.market);
         let executions;
@@ -163,20 +178,16 @@ impl TradingService {
                 trader_id,
                 order.side,
                 &order.market,
-                order.price,
                 execution.price,
                 execution.quantity,
-                fill.fill_id,
             )?;
             SettlementEngine::apply_fill(
                 state,
                 execution.maker_trader_id,
                 execution.maker_side,
                 &order.market,
-                execution.maker_limit_price,
                 execution.price,
                 execution.quantity,
-                fill.fill_id,
             )?;
 
             state.storage.append_fill(trader_id, fill.clone());
@@ -302,7 +313,6 @@ impl TradingService {
                 .expect("book order should still cancel after lookup")
         };
 
-        SettlementEngine::release_order_hold(state, &removed)?;
         sync_open_order(state, trader_id, order_id, None, Some(removed.remaining));
         publish_user_order_state(
             state,
@@ -336,7 +346,7 @@ impl TradingService {
         let market = find_order_market(state, trader_id, order_id)?;
         ensure_market_allows_entry(state, &market)?;
         let book_handle = market_orderbook(state, &market);
-        let (before, after) = {
+        let after = {
             let mut book = book_handle.lock().await;
             let Some(before) = book.get_order(order_id).cloned() else {
                 return Err(TradingError::OrderNotFound);
@@ -353,14 +363,9 @@ impl TradingService {
                 .get_order(order_id)
                 .cloned()
                 .expect("order should remain after non-zero amend");
-            (before, after)
+            after
         };
 
-        if before.remaining > after.remaining {
-            let mut released = before.clone();
-            released.remaining = before.remaining - after.remaining;
-            SettlementEngine::release_order_hold(state, &released)?;
-        }
         sync_open_order(state, trader_id, order_id, Some(after.clone()), None);
         publish_user_order_state(state, trader_id, after.clone(), OrderStateStatus::Open);
         publish_market_delta(
@@ -497,8 +502,7 @@ mod tests {
     use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
     use crate::marketdata::BookDelta;
-    use crate::settlement::SettlementEngine;
-    use crate::state::Balance;
+    use crate::state::Position;
     use chrono::Utc;
 
     fn test_state() -> AppState {
@@ -536,29 +540,37 @@ mod tests {
         });
     }
 
-    fn balance_for(state: &AppState, trader_id: Uuid, asset: &str) -> BalanceSnapshot {
-        let balances = state.storage.list_balances(trader_id);
-        let balance = balances
-            .iter()
-            .find(|balance| balance.asset == asset)
-            .expect("asset balance");
-        BalanceSnapshot {
-            free: balance.free,
-            locked: balance.locked,
+    fn position_for(state: &AppState, trader_id: Uuid, market: &str) -> PositionSnapshot {
+        let position = state
+            .storage
+            .list_positions(trader_id)
+            .into_iter()
+            .find(|position| position.market == market)
+            .unwrap_or(Position {
+                market: market.to_string(),
+                net_quantity: 0,
+                average_entry_price: None,
+                realized_pnl: 0,
+                updated_at: Utc::now(),
+            });
+        PositionSnapshot {
+            net_quantity: position.net_quantity,
+            average_entry_price: position.average_entry_price,
+            realized_pnl: position.realized_pnl,
         }
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    struct BalanceSnapshot {
-        free: u64,
-        locked: u64,
+    struct PositionSnapshot {
+        net_quantity: i64,
+        average_entry_price: Option<u64>,
+        realized_pnl: i64,
     }
 
     #[tokio::test]
-    async fn submit_resting_buy_order_locks_quote_and_tracks_open_order() {
+    async fn submit_resting_buy_order_tracks_open_order_without_changing_position() {
         let state = test_state();
         let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
 
         let response = TradingService::submit_limit_order(
             &state,
@@ -575,25 +587,17 @@ mod tests {
 
         assert!(response.resting);
         assert!(response.fills.is_empty());
-        assert_eq!(
-            balance_for(&state, trader_id, "USD"),
-            BalanceSnapshot {
-                free: 700,
-                locked: 300,
-            }
-        );
+        assert_eq!(state.storage.list_positions(trader_id).len(), 0);
         let orders = state.storage.list_open_orders(trader_id, None);
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].remaining, 3);
     }
 
     #[tokio::test]
-    async fn submit_crossing_order_settles_both_traders_and_records_fills() {
+    async fn submit_crossing_order_updates_positions_and_records_fills() {
         let state = test_state();
         let maker_id = Uuid::new_v4();
         let taker_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, maker_id, "BTC", 5);
-        SettlementEngine::seed_balance(&state, taker_id, "USD", 1_000);
 
         TradingService::submit_limit_order(
             &state,
@@ -625,26 +629,20 @@ mod tests {
         assert_eq!(response.fills.len(), 1);
         assert_eq!(response.fills[0].price, 100);
         assert_eq!(
-            balance_for(&state, maker_id, "BTC"),
-            BalanceSnapshot { free: 3, locked: 0 }
-        );
-        assert_eq!(
-            balance_for(&state, maker_id, "USD"),
-            BalanceSnapshot {
-                free: 200,
-                locked: 0,
+            position_for(&state, maker_id, "BTC-USD"),
+            PositionSnapshot {
+                net_quantity: -2,
+                average_entry_price: Some(100),
+                realized_pnl: 0,
             }
         );
         assert_eq!(
-            balance_for(&state, taker_id, "USD"),
-            BalanceSnapshot {
-                free: 800,
-                locked: 0,
+            position_for(&state, taker_id, "BTC-USD"),
+            PositionSnapshot {
+                net_quantity: 2,
+                average_entry_price: Some(100),
+                realized_pnl: 0,
             }
-        );
-        assert_eq!(
-            balance_for(&state, taker_id, "BTC"),
-            BalanceSnapshot { free: 2, locked: 0 }
         );
         assert_eq!(state.storage.list_open_orders(maker_id, None).len(), 0);
         assert_eq!(state.storage.list_fills(maker_id, None).len(), 1);
@@ -669,21 +667,6 @@ mod tests {
 
         storage.upsert_order_ledger(maker_order.clone());
         storage.upsert_open_order(maker_id, maker_order.clone());
-        storage.replace_balances(
-            maker_id,
-            vec![
-                Balance {
-                    asset: "BTC".to_string(),
-                    free: 0,
-                    locked: 2,
-                },
-                Balance {
-                    asset: "USD".to_string(),
-                    free: 0,
-                    locked: 0,
-                },
-            ],
-        );
         let now = Utc::now();
         storage.upsert_market(MarketDefinition {
             market_id: "BTC-USD".to_string(),
@@ -714,7 +697,6 @@ mod tests {
             },
             storage,
         );
-        SettlementEngine::seed_balance(&state, taker_id, "USD", 500);
 
         let response = TradingService::submit_limit_order(
             &state,
@@ -733,23 +715,27 @@ mod tests {
         assert!(!response.resting);
         assert_eq!(state.storage.list_open_orders(maker_id, None).len(), 0);
         assert_eq!(
-            balance_for(&state, maker_id, "USD"),
-            BalanceSnapshot {
-                free: 200,
-                locked: 0,
+            position_for(&state, maker_id, "BTC-USD"),
+            PositionSnapshot {
+                net_quantity: -2,
+                average_entry_price: Some(100),
+                realized_pnl: 0,
             }
         );
         assert_eq!(
-            balance_for(&state, taker_id, "BTC"),
-            BalanceSnapshot { free: 2, locked: 0 }
+            position_for(&state, taker_id, "BTC-USD"),
+            PositionSnapshot {
+                net_quantity: 2,
+                average_entry_price: Some(100),
+                realized_pnl: 0,
+            }
         );
     }
 
     #[tokio::test]
-    async fn cancel_releases_locked_balance() {
+    async fn cancel_clears_resting_order_without_touching_positions() {
         let state = test_state();
         let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
 
         let response = TradingService::submit_limit_order(
             &state,
@@ -768,21 +754,14 @@ mod tests {
             .await
             .expect("cancel should succeed");
 
-        assert_eq!(
-            balance_for(&state, trader_id, "USD"),
-            BalanceSnapshot {
-                free: 1_000,
-                locked: 0,
-            }
-        );
+        assert!(state.storage.list_positions(trader_id).is_empty());
         assert_eq!(state.storage.list_open_orders(trader_id, None).len(), 0);
     }
 
     #[tokio::test]
-    async fn amend_down_releases_excess_locked_balance() {
+    async fn amend_down_reduces_resting_quantity() {
         let state = test_state();
         let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
 
         let response = TradingService::submit_limit_order(
             &state,
@@ -807,20 +786,15 @@ mod tests {
         .expect("amend should succeed");
 
         assert_eq!(amended.order.remaining, 2);
-        assert_eq!(
-            balance_for(&state, trader_id, "USD"),
-            BalanceSnapshot {
-                free: 800,
-                locked: 200,
-            }
-        );
+        let open_orders = state.storage.list_open_orders(trader_id, Some("BTC-USD"));
+        assert_eq!(open_orders.len(), 1);
+        assert_eq!(open_orders[0].remaining, 2);
     }
 
     #[tokio::test]
     async fn submit_amend_cancel_publish_snapshot_delta_events_in_sequence() {
         let state = test_state();
         let trader_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, trader_id, "USD", 1_000);
         let mut rx = state.events_tx.subscribe();
 
         let submitted = TradingService::submit_limit_order(
@@ -882,8 +856,6 @@ mod tests {
         let state = test_state();
         let maker_id = Uuid::new_v4();
         let taker_id = Uuid::new_v4();
-        SettlementEngine::seed_balance(&state, maker_id, "BTC", 5);
-        SettlementEngine::seed_balance(&state, taker_id, "USD", 1_000);
         let mut rx = state.events_tx.subscribe();
 
         let maker_submit = TradingService::submit_limit_order(

@@ -47,7 +47,7 @@ export type MarketBookState = {
 };
 
 export type PositionState = {
-  shares: number;
+  netQuantity: number;
   avgCost: number | null;
   realizedPnl: number;
 };
@@ -75,10 +75,11 @@ export type TradeUser = {
   username: string;
 };
 
-export type AccountBalance = {
-  asset: string;
-  free: number;
-  locked: number;
+export type AccountPosition = {
+  market: string;
+  netQuantity: number;
+  averageEntryPrice: number | null;
+  realizedPnl: number;
 };
 
 export type TradeFill = {
@@ -94,7 +95,7 @@ export type TradeFill = {
 export type TradeBootstrapData = {
   markets: MarketDefinition[];
   user: TradeUser | null;
-  balances: AccountBalance[];
+  positions: AccountPosition[];
   openOrders: PendingOrder[];
   fills: TradeFill[];
   warnings: string[];

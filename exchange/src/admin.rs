@@ -1,5 +1,7 @@
 use crate::auth::AuthenticatedAdmin;
-use crate::marketdata::{ServerMessage, UserBroadcastEvent};
+use crate::marketdata::{
+    BookDelta, BroadcastEvent, OrderStateStatus, ServerMessage, UserBroadcastEvent,
+};
 use crate::settlement::{SettlementEngine, SettlementError};
 use crate::state::AppState;
 use crate::storage::PersistenceStatus;
@@ -142,10 +144,10 @@ pub struct LeaderboardRow {
     pub rank: usize,
     pub trader_id: Uuid,
     pub username: String,
-    pub equity: u64,
-    pub available_cash: u64,
-    pub locked_cash: u64,
-    pub position_value: u64,
+    pub net_pnl: i64,
+    pub realized_pnl: i64,
+    pub unrealized_pnl: i64,
+    pub gross_exposure: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -164,6 +166,13 @@ pub struct DeleteMarketResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TradingControlResponse {
     pub controls: ExchangeControls,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResetUsersResponse {
+    pub cleared_orders: usize,
+    pub cleared_positions: usize,
+    pub cleared_fills: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -229,9 +238,7 @@ impl From<SettlementError> for AdminError {
     fn from(value: SettlementError) -> Self {
         match value {
             SettlementError::InvalidMarket => Self::MissingMarketId,
-            SettlementError::InsufficientFreeBalance { .. }
-            | SettlementError::InsufficientLockedBalance { .. }
-            | SettlementError::RecoveryBalanceMismatch { .. } => {
+            SettlementError::PositionLimitExceeded { .. } => {
                 Self::SettlementFailed(value.to_string())
             }
             SettlementError::Overflow => Self::Overflow,
@@ -595,13 +602,79 @@ impl AdminService {
         })
     }
 
+    pub fn reset_all_users(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> ResetUsersResponse {
+        let open_orders = state.storage.list_all_open_orders();
+        let cleared_orders = open_orders.len();
+        let cleared_positions = state
+            .storage
+            .list_all_positions()
+            .into_iter()
+            .map(|(_, positions)| positions.len())
+            .sum();
+        let cleared_fills = state
+            .storage
+            .list_users()
+            .into_iter()
+            .map(|user| state.storage.list_fills(user.profile.trader_id, None).len())
+            .sum();
+
+        for order in &open_orders {
+            publish_user_event(
+                state,
+                order.trader_id,
+                ServerMessage::OrderState {
+                    order: order.clone(),
+                    status: OrderStateStatus::Canceled,
+                },
+            );
+            publish_market_delta(
+                state,
+                &order.market,
+                BookDelta::OrderRemoved {
+                    order_id: order.id,
+                    side: order.side,
+                    price: order.price,
+                },
+            );
+        }
+
+        state.storage.reset_all_trading_state();
+        state.orderbooks.clear();
+        let _ = state.system_events_tx.send(ServerMessage::ResyncRequired {
+            channel: "account".to_string(),
+            market: None,
+            expected_sequence: None,
+            current_sequence: None,
+            reason: "admin reset all users".to_string(),
+        });
+
+        record_admin_audit(
+            state,
+            admin.username.clone(),
+            "reset_all_users",
+            None,
+            None,
+            format!(
+                "cleared_orders={} cleared_positions={} cleared_fills={}",
+                cleared_orders, cleared_positions, cleared_fills
+            ),
+        );
+
+        ResetUsersResponse {
+            cleared_orders,
+            cleared_positions,
+            cleared_fills,
+        }
+    }
+
     pub async fn leaderboard(state: &AppState, limit: Option<usize>) -> Vec<LeaderboardRow> {
         let markets = state.storage.list_markets();
         let mut market_marks = std::collections::BTreeMap::new();
-        let mut base_asset_markets = std::collections::BTreeMap::new();
         for market in &markets {
             market_marks.insert(market.market_id.clone(), market_mark_price(state, market).await);
-            base_asset_markets.insert(market.base_asset.clone(), market.clone());
         }
 
         let mut rows = state
@@ -609,38 +682,43 @@ impl AdminService {
             .list_users()
             .into_iter()
             .map(|user| {
-                let mut available_cash = 0_u64;
-                let mut locked_cash = 0_u64;
-                let mut position_value = 0_u64;
-                for balance in state.storage.list_balances(user.profile.trader_id) {
-                    let total = balance.free.saturating_add(balance.locked);
-                    if let Some(market) = base_asset_markets.get(&balance.asset) {
-                        let mark = market_marks.get(&market.market_id).copied().unwrap_or(0);
-                        position_value =
-                            position_value.saturating_add(total.saturating_mul(mark));
-                    } else {
-                        available_cash = available_cash.saturating_add(balance.free);
-                        locked_cash = locked_cash.saturating_add(balance.locked);
+                let mut realized_pnl = 0_i64;
+                let mut unrealized_pnl = 0_i64;
+                let mut gross_exposure = 0_u64;
+                for position in state.storage.list_positions(user.profile.trader_id) {
+                    realized_pnl = realized_pnl.saturating_add(position.realized_pnl);
+                    let mark = market_marks.get(&position.market).copied().unwrap_or(0);
+                    gross_exposure = gross_exposure
+                        .saturating_add(position.net_quantity.unsigned_abs().saturating_mul(mark));
+                    if position.net_quantity != 0 {
+                        if let Some(average_entry_price) = position.average_entry_price {
+                            let mark_i64 = i64::try_from(mark).unwrap_or(i64::MAX);
+                            let average_i64 =
+                                i64::try_from(average_entry_price).unwrap_or(i64::MAX);
+                            let delta = mark_i64.saturating_sub(average_i64);
+                            unrealized_pnl = unrealized_pnl.saturating_add(
+                                delta.saturating_mul(position.net_quantity),
+                            );
+                        }
                     }
                 }
+                let net_pnl = realized_pnl.saturating_add(unrealized_pnl);
                 LeaderboardRow {
                     rank: 0,
                     trader_id: user.profile.trader_id,
                     username: user.profile.username,
-                    equity: available_cash
-                        .saturating_add(locked_cash)
-                        .saturating_add(position_value),
-                    available_cash,
-                    locked_cash,
-                    position_value,
+                    net_pnl,
+                    realized_pnl,
+                    unrealized_pnl,
+                    gross_exposure,
                 }
             })
             .collect::<Vec<_>>();
 
         rows.sort_by(|left, right| {
             right
-                .equity
-                .cmp(&left.equity)
+                .net_pnl
+                .cmp(&left.net_pnl)
                 .then_with(|| left.username.cmp(&right.username))
                 .then_with(|| left.trader_id.cmp(&right.trader_id))
         });
@@ -738,6 +816,20 @@ fn publish_admin_message(state: &AppState, entry: AdminMessageEntry) {
     let _ = state.system_events_tx.send(message);
 }
 
+fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
+    let _ = state.events_tx.send(BroadcastEvent {
+        market: market.to_string(),
+        sequence: state.next_market_sequence(market),
+        event,
+    });
+}
+
+fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage) {
+    let _ = state
+        .user_events_tx
+        .send(UserBroadcastEvent { trader_id, message });
+}
+
 fn record_admin_audit(
     state: &AppState,
     actor_username: String,
@@ -819,7 +911,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn leaderboard_marks_base_asset_balances_using_market_reference_prices() {
+    async fn leaderboard_marks_positions_using_market_reference_prices() {
         let state = test_state();
         let trader_a = UserRecord {
             profile: UserProfile {
@@ -854,30 +946,29 @@ mod tests {
             },
         )
         .expect("market");
-        state.storage.put_balance(
+        SettlementEngine::seed_position(
+            &state,
             trader_a.profile.trader_id,
-            crate::state::Balance {
-                asset: "USD".to_string(),
-                free: 100,
-                locked: 0,
-            },
+            "BTC-USD",
+            2,
+            Some(80),
+            0,
         );
-        state.storage.put_balance(
-            trader_a.profile.trader_id,
-            crate::state::Balance {
-                asset: "BTC".to_string(),
-                free: 2,
-                locked: 0,
-            },
+        SettlementEngine::seed_position(
+            &state,
+            trader_b.profile.trader_id,
+            "BTC-USD",
+            1,
+            Some(75),
+            0,
         );
-        SettlementEngine::seed_balance(&state, trader_b.profile.trader_id, "USD", 250);
 
         let leaderboard = AdminService::leaderboard(&state, None).await;
 
         assert_eq!(leaderboard.len(), 2);
         assert_eq!(leaderboard[0].username, "alice");
-        assert_eq!(leaderboard[0].equity, 300);
+        assert_eq!(leaderboard[0].net_pnl, 40);
         assert_eq!(leaderboard[1].username, "bob");
-        assert_eq!(leaderboard[1].equity, 250);
+        assert_eq!(leaderboard[1].net_pnl, 25);
     }
 }
