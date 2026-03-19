@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readSessionFromCookieValue, SESSION_COOKIE } from "./src/lib/auth";
+import { buildExternalUrl } from "./src/lib/request-origin";
 
 const PUBLIC_PATHS = ["/", "/login", "/api/health", "/api/auth/mock-login"];
 const ADMIN_PATHS = ["/admin"];
@@ -16,12 +17,12 @@ export function middleware(request: NextRequest) {
 
   const session = readSessionFromCookieValue(request.cookies.get(SESSION_COOKIE)?.value);
   if (!session) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(buildExternalUrl("/login", request));
   }
 
   const isAdminRoute = ADMIN_PATHS.some((path) => pathname.startsWith(path));
   if (isAdminRoute && session.role !== "admin") {
-    return NextResponse.redirect(new URL("/trade", request.url));
+    return NextResponse.redirect(buildExternalUrl("/trade", request));
   }
 
   return NextResponse.next();
