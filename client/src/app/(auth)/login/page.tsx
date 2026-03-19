@@ -37,48 +37,24 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const errorMessage = errorCopy(resolvedSearchParams?.error);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-8 lg:px-10">
-      <section className="surface-panel grid gap-8 overflow-hidden px-6 py-6 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-8">
-        <div className="flex flex-col justify-between gap-8">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
-              Access
-            </p>
-            <h1 className="mt-3 text-5xl font-extrabold leading-none text-white sm:text-6xl">
-              Sign in to the exchange client.
-            </h1>
-            <p className="mt-4 max-w-xl text-2xl leading-tight text-[var(--muted-strong)]">
-              Enter the API key assigned to you for the internal competition.
-              The same key is used for the authenticated trade session and the
-              live exchange connection.
-            </p>
-          </div>
-          <div className="surface-panel-soft grid gap-4 p-5 text-xl text-[var(--muted-strong)]">
-            <p className="font-semibold text-white">Session notes</p>
-            <p>Each user signs in with an assigned API key.</p>
-            <p>The login route validates the key directly against the exchange backend.</p>
-            <p>The trade client reuses the same session for REST and WS access.</p>
-          </div>
-        </div>
-
+    <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-6 py-8">
+      <section className="surface-panel overflow-hidden px-6 py-6 lg:px-8 lg:py-8">
         <form
-          className="surface-panel-soft space-y-5 p-6"
+          className="mx-auto flex w-full max-w-md flex-col gap-5"
           action="/api/auth/login"
           method="post"
         >
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[var(--muted)]">
-              Authentication
+          <div className="text-center">
+            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
+              Exchange Access
             </p>
-            <p className="mt-2 text-3xl font-bold text-white">API key login</p>
           </div>
-          <label className="block text-xl font-semibold text-white">
-            Assigned API key
+          <label className="block">
             <input
               autoComplete="off"
-              className="mt-2 block w-full rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-xl text-white outline-none"
+              className="block w-full rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-xl text-white outline-none"
               name="apiKey"
-              placeholder="paste your competition key"
+              placeholder="API key"
               spellCheck={false}
               type="password"
             />
@@ -94,9 +70,6 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           >
             Start session
           </button>
-          <p className="text-lg text-[var(--muted)]">
-            Trader or admin access is determined by the exchange when the key is validated.
-          </p>
         </form>
       </section>
     </main>
