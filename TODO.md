@@ -27,6 +27,7 @@ What exists today:
 - Background PostgreSQL writer thread with batched flushes, retry/backpressure handling, and health telemetry behind the storage boundary
 - EC2-hosted internal test deployment is live at `http://16.59.150.9:8080` with WS at `ws://16.59.150.9:8080/ws`
 - Public browser-safe access is live at `https://exchange.jamesxu.dev` with WS at `wss://exchange.jamesxu.dev/ws`
+- ECS client stack is live at `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`, pending ACM validation and final DNS cutover for `exchange.jamesxu.dev`
 - GitHub is now the source of truth for deployment updates, and the EC2 host runs from a Git clone at `~/exchange-v2`
 - Mintlify-based internal docs now exist under `docs/`
 - OpenAPI generation and Swagger UI
@@ -110,6 +111,7 @@ What is still true:
 - Market settlement exists as an admin operation and flattens open net positions at a configured settlement price
 - Public health and WebSocket auth/snapshot probes succeeded over Elastic IP `16.59.150.9`
 - GitHub repo sync is in place for the EC2 host, and the deployed tree fast-forwards cleanly from `origin/main`
+- ECS deployment assets now exist under `infra/client-ecs/`
 - Matching hot path was improved:
   - lightweight execution records added
   - fewer hot-path lookups
@@ -166,6 +168,7 @@ What is still true:
 - Local PostgreSQL backup / restore and restart-recovery playbooks
 - Full replay-based settlement recovery from durable state
 - Real EC2 load test and saturation validation against competition-like traffic
+- Final ACM validation and DNS cutover for the ALB-hosted client
 
 ## Main Workstreams
 

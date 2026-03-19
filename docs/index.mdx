@@ -54,9 +54,9 @@ npx mintlify dev
 
 ## Important current caveats
 
-- Public traffic now lands on Caddy over `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`.
-- The exchange origin is loopback-only on the EC2 host at `127.0.0.1:8080`.
-- Public port `80` still times out, so use the HTTPS URL directly instead of relying on automatic `http` to `https` redirects.
+- The ECS client stack is live behind the ALB test host `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- Final HTTPS on `exchange.jamesxu.dev` is waiting on ACM DNS validation and external DNS cutover.
+- The exchange backend origin now listens on `0.0.0.0:8080` on the EC2 host so the ALB target group can reach it.
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders and keeps persisted positions queryable, but it does not yet replay full settlement history.
 - Sequence numbers are per-market and in-memory; they reset on process restart.
 - The EC2 host currently pulls from GitHub using a temporary stored PAT. Replace that with a deploy key or machine-user SSH key and revoke the PAT.

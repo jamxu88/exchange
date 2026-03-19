@@ -1,13 +1,14 @@
 ---
 title: "Deployment And Ops"
-description: "How the current EC2 deployment is structured and how to update it safely."
+description: "How the split ECS plus EC2 deployment is structured and how to update it safely."
 ---
 
 ## Deployed shape
 
-- one EC2 instance
-- one Rust exchange service
-- one local PostgreSQL instance
+- one ECS/Fargate service for the Next.js client
+- one ALB in front of both client and backend paths
+- one EC2 instance for the Rust exchange service
+- one local PostgreSQL instance on the EC2 host
 - one systemd service named `exchange`
 - GitHub-backed checkout at `/home/ec2-user/exchange-v2`
 
@@ -16,8 +17,8 @@ description: "How the current EC2 deployment is structured and how to update it 
 - repo: `/home/ec2-user/exchange-v2`
 - backend env: `/home/ec2-user/exchange-v2/exchange.env`
 - binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
-- caddy binary: `/usr/local/bin/caddy`
-- caddy config: `/etc/caddy/Caddyfile`
+- ECS stack: `exchange-client`
+- ALB test host: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
 ## Update procedure
 
@@ -25,6 +26,9 @@ From your local machine:
 
 ```bash
 git push origin main
+AWS_PROFILE=personal infra/client-ecs/build_and_push.sh
+IMAGE_URI=490004617163.dkr.ecr.us-east-2.amazonaws.com/exchange-client:TAG \
+infra/client-ecs/deploy_stack.sh
 ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
   cd ~/exchange-v2 &&
   git pull --ff-only &&
@@ -39,7 +43,8 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
 Verify:
 
 ```bash
-curl https://exchange.jamesxu.dev/health
+curl http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com/api/health
+curl http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com/health
 ```
 
 ## Current backend env model
@@ -75,43 +80,32 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 ## Current public edge
 
-Public endpoint:
+Final intended endpoint:
 
 - `https://exchange.jamesxu.dev`
 - `wss://exchange.jamesxu.dev/ws`
 
-Current host-level shape:
+Current pre-cutover test endpoint:
+
+- `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+
+Target edge shape:
 
 ```text
-Internet / Cloudflare DNS
+Internet / external DNS
         |
-       443
-        |
-      Caddy
-        |
-  127.0.0.1:8080
-        |
-    exchange
+       ALB
+      /   \
+   ECS     EC2:8080
 ```
 
 Current reality:
 
-- `exchange.jamesxu.dev` resolves to `16.59.150.9`
-- Caddy listens on `80` and `443`
-- the exchange process listens on `127.0.0.1:8080`
-- Caddy manages the Let's Encrypt certificate for `exchange.jamesxu.dev`
-- public `https://exchange.jamesxu.dev/health` is live
-- public port `80` still times out, so `http://exchange.jamesxu.dev` does not currently redirect to HTTPS
-
-Current Caddy config:
-
-```caddyfile
-exchange.jamesxu.dev {
-  reverse_proxy 127.0.0.1:8080
-}
-```
-
-If Cloudflare proxying is enabled later, it should stay in front of this same `443` origin setup instead of trying to send browser traffic directly to origin port `8080`.
+- the ALB is live and already serving both ECS client traffic and EC2 backend traffic on its AWS hostname
+- the exchange process listens on `0.0.0.0:8080` on the EC2 host so the ALB backend target group can reach it
+- ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/ecd7873d-9eec-4bcd-a8bc-febccceff330` is requested for `exchange.jamesxu.dev`
+- the certificate is still waiting on DNS validation at the external DNS provider
+- after validation, `exchange.jamesxu.dev` should be changed to a `CNAME` pointing at `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
 ## Current credential debt
 

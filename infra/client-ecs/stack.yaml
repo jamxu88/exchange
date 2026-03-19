@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Exchange client ECS/Fargate stack with ALB path routing to the existing EC2 exchange backend.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: exchange-client
+  DomainName:
+    Type: String
+    Default: exchange.jamesxu.dev
+  ContainerImage:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  BackendInstanceId:
+    Type: String
+  BackendSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DesiredCount:
+    Type: Number
+    Default: 1
+  ClientCpu:
+    Type: String
+    Default: "512"
+  ClientMemory:
+    Type: String
+    Default: "1024"
+  Markets:
+    Type: String
+    Default: BTC-USD,ETH-USD,SOL-USD
+  ExchangeServerUrl:
+    Type: String
+    Default: https://exchange.jamesxu.dev
+  CertificateArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ProjectName}
+
+  ClientLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ProjectName}
+      RetentionInDays: 14
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${ProjectName} ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb
+
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${ProjectName} ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-tasks
+
+  BackendIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref BackendSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets: !Ref PublicSubnets
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb
+
+  ClientTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-client
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckEnabled: true
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-399
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-client
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-backend
+      Port: 8080
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !Ref VpcId
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-399
+      Targets:
+        - Id: !Ref BackendInstanceId
+          Port: 8080
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-backend
+
+  HttpForwardListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ClientTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ClientTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+
+  HttpBackendRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/v1/*
+              - /ws
+              - /health
+              - /docs*
+              - /api-doc/*
+      ListenerArn: !Ref HttpForwardListener
+      Priority: 10
+
+  HttpsBackendRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasCertificate
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/v1/*
+              - /ws
+              - /health
+              - /docs*
+              - /api-doc/*
+      ListenerArn: !Ref HttpsListener
+      Priority: 10
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-task-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}
+      Cpu: !Ref ClientCpu
+      Memory: !Ref ClientMemory
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub ${ProjectName}
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: PORT
+              Value: "3000"
+            - Name: EXCHANGE_HTTP_URL
+              Value: !Ref ExchangeServerUrl
+            - Name: NEXT_PUBLIC_EXCHANGE_HTTP_URL
+              Value: !Sub https://${DomainName}
+            - Name: NEXT_PUBLIC_EXCHANGE_WS_URL
+              Value: !Sub wss://${DomainName}/ws
+            - Name: NEXT_PUBLIC_EXCHANGE_MARKETS
+              Value: !Ref Markets
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ClientLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpForwardListener
+    Properties:
+      Cluster: !Ref Cluster
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      ServiceName: !Sub ${ProjectName}
+      HealthCheckGracePeriodSeconds: 30
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ClientSecurityGroup
+          Subnets: !Ref PublicSubnets
+      LoadBalancers:
+        - ContainerName: !Sub ${ProjectName}
+          ContainerPort: 3000
+          TargetGroupArn: !Ref ClientTargetGroup
+      TaskDefinition: !Ref TaskDefinition
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerHostedZoneId:
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+  ClientTargetGroupArn:
+    Value: !Ref ClientTargetGroup
+  BackendTargetGroupArn:
+    Value: !Ref BackendTargetGroup
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup

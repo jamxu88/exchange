@@ -1,18 +1,24 @@
 ---
 title: "Current Deployment"
-description: "The live EC2 deployment shape and the important on-box paths."
+description: "The live split deployment shape: ECS client plus EC2 backend behind an ALB."
 ---
 
-## Live host
+## Live public hosts
 
 - Elastic IP: `16.59.150.9`
-- Public HTTPS: `https://exchange.jamesxu.dev`
-- Public health: `https://exchange.jamesxu.dev/health`
-- Public WebSocket: `wss://exchange.jamesxu.dev/ws`
+- Final public HTTPS hostname: `https://exchange.jamesxu.dev`
+- Final public health: `https://exchange.jamesxu.dev/health`
+- Final public WebSocket: `wss://exchange.jamesxu.dev/ws`
+- Current ALB test host: `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 - SSH user: `ec2-user`
-- On-box exchange origin: `http://127.0.0.1:8080`
+- On-box exchange origin: `http://0.0.0.0:8080`
 
-`exchange.jamesxu.dev` resolves to the Elastic IP. Caddy now terminates TLS on the host and reverse-proxies requests to the loopback-only exchange origin on `127.0.0.1:8080`.
+Current intended edge shape is ALB path routing:
+
+- ECS client for `/`, `/login`, `/trade`, `/admin`, `/api/auth/*`, `/api/health`
+- EC2 backend for `/api/v1/*`, `/ws`, `/health`, `/docs*`, `/api-doc/*`
+
+The ECS stack is already live. Final HTTPS on `exchange.jamesxu.dev` is blocked only on ACM DNS validation and external DNS cutover.
 
 ## Runtime layout on the EC2 host
 
@@ -20,9 +26,6 @@ description: "The live EC2 deployment shape and the important on-box paths."
 - Backend binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
 - Backend env file: `/home/ec2-user/exchange-v2/exchange.env`
 - Service: `exchange`
-- Caddy binary: `/usr/local/bin/caddy`
-- Caddy config: `/etc/caddy/Caddyfile`
-- Caddy service: `caddy`
 - Database: local PostgreSQL on the same EC2 machine
 
 ## Deployment source of truth
@@ -49,7 +52,8 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
 Check health:
 
 ```bash
-curl https://exchange.jamesxu.dev/health
+curl http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com/api/health
+curl http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com/health
 ```
 
 Check service state:
@@ -68,6 +72,7 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 ## Current deployment caveats
 
-- Public port `80` still times out, so `http://exchange.jamesxu.dev` does not currently redirect to HTTPS
 - GitHub access on the EC2 host is temporarily PAT-based
 - PostgreSQL is local to the instance, not managed RDS
+- ACM for `exchange.jamesxu.dev` is still `PENDING_VALIDATION`
+- External DNS still needs to cut `exchange.jamesxu.dev` over to the ALB hostname

@@ -1,13 +1,15 @@
 ---
 title: "Client Deployment"
-description: "Current client deployment assumptions and the path toward ECS."
+description: "Current ECS deployment shape for the Next.js client and the remaining cutover work."
 ---
 
 ## Current state
 
 - The exchange backend is live on EC2.
-- The client is not yet deployed as the canonical production UI.
-- Client deployment target remains ECS.
+- The Next.js client is deployed on ECS/Fargate behind an ALB.
+- The current ALB test hostname is `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- The final public hostname remains `https://exchange.jamesxu.dev`.
+- HTTPS cutover is waiting on ACM DNS validation at the external DNS provider.
 
 ## Environment variables
 
@@ -28,14 +30,31 @@ The repo already includes:
 - `client/Dockerfile`
 - standalone Next.js output configuration
 - `/api/health` route for container health checks
+- `infra/client-ecs/stack.yaml`
+- `infra/client-ecs/build_and_push.sh`
+- `infra/client-ecs/request_certificate.sh`
+- `infra/client-ecs/deploy_stack.sh`
+
+Current routing split at the ALB:
+
+- ECS client:
+  - `/`
+  - `/login`
+  - `/trade`
+  - `/admin`
+  - `/api/auth/*`
+  - `/api/health`
+- EC2 backend:
+  - `/api/v1/*`
+  - `/ws`
+  - `/health`
+  - `/docs*`
+  - `/api-doc/*`
 
 Still needed around deployment:
 
-- final ECS service definition
-- ALB and TLS setup
-- environment and secret injection
-- rollout and rollback procedure
-
-## Important current caveat
-
-The exchange origin is loopback-only on the EC2 host. Browser clients should use `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws` directly. Public port `80` is not currently redirecting, so use the HTTPS URL explicitly.
+- ACM DNS validation for `exchange.jamesxu.dev`
+- HTTPS listener attachment to the ALB
+- External DNS cutover of `exchange.jamesxu.dev` to the ALB hostname
+- Rollout and rollback procedure
+- Frontend runtime monitoring

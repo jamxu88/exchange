@@ -10,7 +10,7 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 - Health: `https://exchange.jamesxu.dev/health`
 - Swagger docs: `https://exchange.jamesxu.dev/docs`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
-- Public port `80` is not currently redirecting, so use the HTTPS URL directly.
+- Current ECS/ALB test host: `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
 ## Internal docs
 
@@ -20,8 +20,9 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 
 ## Current integration target
 
-- The live exchange backend on `https://exchange.jamesxu.dev` is the current integration target for the client.
-- That backend now runs from the GitHub-synced EC2 checkout, so client integration testing against the live host should track the latest deployed `main`.
+- The final public hostname remains `https://exchange.jamesxu.dev`.
+- The client is now deployed on ECS/Fargate behind an ALB, while backend exchange paths continue to route to the EC2 host.
+- Until ACM DNS validation and external DNS cutover are complete, the live pre-cutover test origin is `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
 - Keep client endpoint configuration externalized with `EXCHANGE_HTTP_URL`, `NEXT_PUBLIC_EXCHANGE_HTTP_URL`, and `NEXT_PUBLIC_EXCHANGE_WS_URL`; do not hardcode the domain in app logic.
 
 ## Included template features
@@ -74,9 +75,12 @@ curl https://exchange.jamesxu.dev/health
 
 ## Production deployment notes (ECS)
 
-- Build image using `Dockerfile`
-- Set `NODE_ENV=production`
-- Add load balancer health check to `/api/health`
+- Build and push with `infra/client-ecs/build_and_push.sh`
+- Request ACM DNS validation with `infra/client-ecs/request_certificate.sh exchange.jamesxu.dev`
+- Deploy/update the ECS stack with `infra/client-ecs/deploy_stack.sh`
+- The ALB path split is:
+  - ECS client: `/`, `/login`, `/trade`, `/admin`, `/api/auth/*`, `/api/health`
+  - EC2 backend: `/api/v1/*`, `/ws`, `/health`, `/docs*`, `/api-doc/*`
 - Keep auth secrets in AWS Secrets Manager / SSM Parameter Store
 
 ## What to implement next
