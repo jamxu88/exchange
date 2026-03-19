@@ -29,7 +29,7 @@ Use the API key directly against the live exchange:
 ```bash
 curl \
   -H "x-api-key: YOUR_API_KEY" \
-  https://quant.jamesxu.dev/api/v1/user
+  https://exchange.jamesxu.dev/api/v1/user
 ```
 
 Example response:
@@ -48,7 +48,7 @@ Example response:
 Open a socket to:
 
 ```text
-wss://quant.jamesxu.dev/ws
+wss://exchange.jamesxu.dev/ws
 ```
 
 Authenticate:
@@ -70,7 +70,7 @@ Then subscribe to market data:
 
 ## 6. Current operational caveats
 
-- The live endpoint is `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`.
+- The live endpoint is `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`.
 - Public port `80` is not currently redirecting, so use the HTTPS URL directly.
 - Market-data sequence numbers reset when the backend process restarts.
 - Restart recovery currently restores open orders into the in-memory book, but full settlement reconciliation is not implemented yet.

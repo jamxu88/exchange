@@ -39,7 +39,7 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
 Verify:
 
 ```bash
-curl https://quant.jamesxu.dev/health
+curl https://exchange.jamesxu.dev/health
 ```
 
 ## Current backend env model
@@ -77,8 +77,8 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 Public endpoint:
 
-- `https://quant.jamesxu.dev`
-- `wss://quant.jamesxu.dev/ws`
+- `https://exchange.jamesxu.dev`
+- `wss://exchange.jamesxu.dev/ws`
 
 Current host-level shape:
 
@@ -96,17 +96,17 @@ Internet / Cloudflare DNS
 
 Current reality:
 
-- `quant.jamesxu.dev` resolves to `16.59.150.9`
+- `exchange.jamesxu.dev` resolves to `16.59.150.9`
 - Caddy listens on `80` and `443`
 - the exchange process listens on `127.0.0.1:8080`
-- Caddy manages the Let's Encrypt certificate for `quant.jamesxu.dev`
-- public `https://quant.jamesxu.dev/health` is live
-- public port `80` still times out, so `http://quant.jamesxu.dev` does not currently redirect to HTTPS
+- Caddy manages the Let's Encrypt certificate for `exchange.jamesxu.dev`
+- public `https://exchange.jamesxu.dev/health` is live
+- public port `80` still times out, so `http://exchange.jamesxu.dev` does not currently redirect to HTTPS
 
 Current Caddy config:
 
 ```caddyfile
-quant.jamesxu.dev {
+exchange.jamesxu.dev {
   reverse_proxy 127.0.0.1:8080
 }
 ```

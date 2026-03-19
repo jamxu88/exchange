@@ -7,10 +7,10 @@ This documentation describes the exchange exactly as it exists today: a Rust bac
 
 ## Current live endpoints
 
-- HTTPS: `https://quant.jamesxu.dev`
-- Health: `https://quant.jamesxu.dev/health`
-- Swagger UI: `https://quant.jamesxu.dev/docs`
-- WebSocket: `wss://quant.jamesxu.dev/ws`
+- HTTPS: `https://exchange.jamesxu.dev`
+- Health: `https://exchange.jamesxu.dev/health`
+- Swagger UI: `https://exchange.jamesxu.dev/docs`
+- WebSocket: `wss://exchange.jamesxu.dev/ws`
 
 ## What this system is
 
@@ -54,7 +54,7 @@ npx mintlify dev
 
 ## Important current caveats
 
-- Public traffic now lands on Caddy over `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`.
+- Public traffic now lands on Caddy over `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`.
 - The exchange origin is loopback-only on the EC2 host at `127.0.0.1:8080`.
 - Public port `80` still times out, so use the HTTPS URL directly instead of relying on automatic `http` to `https` redirects.
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders and reconciles locked balances against those recovered orders, but it does not yet replay full settlement history.

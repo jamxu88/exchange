@@ -6,7 +6,7 @@ description: "The current REST surface for health, admin control, account reads,
 The backend also publishes OpenAPI and Swagger UI at:
 
 ```text
-https://quant.jamesxu.dev/docs
+https://exchange.jamesxu.dev/docs
 ```
 
 ## Endpoints
@@ -45,7 +45,7 @@ curl \
   -X POST \
   -H "Authorization: Bearer ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/admin/users \
+  https://exchange.jamesxu.dev/api/v1/admin/users \
   -d '{"username":"team-alpha"}'
 ```
 
@@ -69,7 +69,7 @@ curl \
   -X POST \
   -H "x-api-key: YOUR_API_KEY" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/orders \
+  https://exchange.jamesxu.dev/api/v1/orders \
   -d '{"market":"BTC-USD","side":"BUY","price":100,"quantity":2}'
 ```
 
@@ -106,7 +106,7 @@ curl \
   -X PATCH \
   -H "x-api-key: YOUR_API_KEY" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/orders/ORDER_ID \
+  https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID \
   -d '{"remaining":1}'
 ```
 
@@ -116,7 +116,7 @@ curl \
 curl \
   -X DELETE \
   -H "x-api-key: YOUR_API_KEY" \
-  https://quant.jamesxu.dev/api/v1/orders/ORDER_ID
+  https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID
 ```
 
 ## Create a market
@@ -126,7 +126,7 @@ curl \
   -X POST \
   -H "Authorization: Bearer ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/admin/markets \
+  https://exchange.jamesxu.dev/api/v1/admin/markets \
   -d '{
     "market_id":"BTC-USD",
     "display_name":"Bitcoin",
@@ -146,7 +146,7 @@ curl \
   -X POST \
   -H "Authorization: Bearer ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/admin/markets/BTC-USD/settle \
+  https://exchange.jamesxu.dev/api/v1/admin/markets/BTC-USD/settle \
   -d '{"settlement_price":150}'
 ```
 
@@ -157,7 +157,7 @@ curl \
   -X POST \
   -H "Authorization: Bearer ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/admin/messages \
+  https://exchange.jamesxu.dev/api/v1/admin/messages \
   -d '{
     "target_username":null,
     "market":"BTC-USD",

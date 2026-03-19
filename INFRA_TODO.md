@@ -12,8 +12,8 @@ Current intended deployment shape:
 - Source of truth for deploys: GitHub `origin/main`, pulled onto the EC2 host
 - Current internal test endpoint: `http://16.59.150.9:8080`
 - Current internal test WebSocket endpoint: `ws://16.59.150.9:8080/ws`
-- Public browser-safe endpoint: `https://quant.jamesxu.dev`
-- Public browser-safe WebSocket endpoint: `wss://quant.jamesxu.dev/ws`
+- Public browser-safe endpoint: `https://exchange.jamesxu.dev`
+- Public browser-safe WebSocket endpoint: `wss://exchange.jamesxu.dev/ws`
 
 This infrastructure plan should stay aligned with the actual product target:
 
@@ -184,7 +184,7 @@ Current local status:
 - The deployed update flow is `git pull --ff-only`, `cargo build --release`, and `sudo systemctl restart exchange`.
 - GitHub access on the EC2 host is temporarily PAT-based and should be replaced with a deploy key.
 - Public internal test endpoints are `http://16.59.150.9:8080`, `http://16.59.150.9:8080/health`, and `ws://16.59.150.9:8080/ws`.
-- Caddy is active on the host with `/etc/caddy/Caddyfile`, and `https://quant.jamesxu.dev/health` returns `200`.
+- Caddy is active on the host with `/etc/caddy/Caddyfile`, and `https://exchange.jamesxu.dev/health` returns `200`.
 - Mintlify-based internal docs now exist under `docs/`.
 
 ## 5. Suggested Order

@@ -19,7 +19,7 @@ What exists today:
 - Live exchange backend is available for integration testing at `http://16.59.150.9:8080` and `ws://16.59.150.9:8080/ws`
 - The live exchange backend now runs from a GitHub-synced EC2 checkout, so client integration should assume `main` is the deployed source of truth
 - Mintlify-based internal docs now exist under `docs/`
-- Public browser-safe exchange access is available at `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
+- Public browser-safe exchange access is available at `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
 
 What is still true:
 
@@ -320,7 +320,7 @@ Using the referenced Figma node as the target:
 ## Immediate Next Tasks
 
 - [x] Validate API keys against the backend during login instead of only after session bootstrap
-- [x] Point deployed client environments at `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
+- [x] Point deployed client environments at `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
 - [x] Document the exact client deploy env values to use against the current EC2 exchange endpoint
 - [x] Finish wiring live account/trading WS events end-to-end against the backend
 - [ ] Define admin panel actions and permissions for market controls and messaging

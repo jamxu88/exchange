@@ -14,8 +14,8 @@ description: "Current client deployment assumptions and the path toward ECS."
 Use these for a deployed client:
 
 ```text
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://exchange.jamesxu.dev/ws
 NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
 ```
 
@@ -38,4 +38,4 @@ Still needed around deployment:
 
 ## Important current caveat
 
-The exchange origin is loopback-only on the EC2 host. Browser clients should use `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws` directly. Public port `80` is not currently redirecting, so use the HTTPS URL explicitly.
+The exchange origin is loopback-only on the EC2 host. Browser clients should use `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws` directly. Public port `80` is not currently redirecting, so use the HTTPS URL explicitly.

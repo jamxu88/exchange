@@ -6,10 +6,10 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 
 ## Current deployed exchange endpoint
 
-- HTTP base: `https://quant.jamesxu.dev`
-- Health: `https://quant.jamesxu.dev/health`
-- Swagger docs: `https://quant.jamesxu.dev/docs`
-- WebSocket: `wss://quant.jamesxu.dev/ws`
+- HTTP base: `https://exchange.jamesxu.dev`
+- Health: `https://exchange.jamesxu.dev/health`
+- Swagger docs: `https://exchange.jamesxu.dev/docs`
+- WebSocket: `wss://exchange.jamesxu.dev/ws`
 - Public port `80` is not currently redirecting, so use the HTTPS URL directly.
 
 ## Internal docs
@@ -20,7 +20,7 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 
 ## Current integration target
 
-- The live exchange backend on `https://quant.jamesxu.dev` is the current integration target for the client.
+- The live exchange backend on `https://exchange.jamesxu.dev` is the current integration target for the client.
 - That backend now runs from the GitHub-synced EC2 checkout, so client integration testing against the live host should track the latest deployed `main`.
 - Keep client endpoint configuration externalized with `EXCHANGE_HTTP_URL`, `NEXT_PUBLIC_EXCHANGE_HTTP_URL`, and `NEXT_PUBLIC_EXCHANGE_WS_URL`; do not hardcode the domain in app logic.
 
@@ -46,9 +46,9 @@ npm run dev
 The local client defaults still target `localhost:8080`. To point a local client at the deployed exchange instead, set:
 
 ```bash
-EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://exchange.jamesxu.dev/ws
 ```
 
 ## Environment
@@ -58,9 +58,9 @@ Copy `.env.example` to `.env.local` and update values.
 For the current internal test deployment, use:
 
 ```bash
-EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://exchange.jamesxu.dev/ws
 NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
 ```
 
@@ -69,7 +69,7 @@ NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
 When validating the client against the live EC2 exchange, re-check the exchange health endpoint first:
 
 ```bash
-curl https://quant.jamesxu.dev/health
+curl https://exchange.jamesxu.dev/health
 ```
 
 ## Production deployment notes (ECS)

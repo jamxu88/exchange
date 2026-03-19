@@ -15,8 +15,8 @@ The trade client reads:
 Recommended live values:
 
 ```text
-NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://quant.jamesxu.dev
-NEXT_PUBLIC_EXCHANGE_WS_URL=wss://quant.jamesxu.dev/ws
+NEXT_PUBLIC_EXCHANGE_HTTP_URL=https://exchange.jamesxu.dev
+NEXT_PUBLIC_EXCHANGE_WS_URL=wss://exchange.jamesxu.dev/ws
 NEXT_PUBLIC_EXCHANGE_MARKETS=BTC-USD,ETH-USD,SOL-USD
 ```
 
@@ -68,6 +68,6 @@ The backend protocol also supports:
 
 - the browser ticket still submits, amends, and cancels over REST even though the backend also supports WS trading messages
 - client runtime defaults to localhost for local development
-- public browser traffic should use `https://quant.jamesxu.dev` and `wss://quant.jamesxu.dev/ws`
+- public browser traffic should use `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
 - the exchange origin is loopback-only on the EC2 host, so browser clients should not target raw origin addresses
 - public port `80` is not currently redirecting, so link users directly to the HTTPS URL

@@ -26,7 +26,7 @@ What exists today:
 - In-memory repository backend plus a live PostgreSQL repository backend behind the same boundary
 - Background PostgreSQL writer thread with batched flushes, retry/backpressure handling, and health telemetry behind the storage boundary
 - EC2-hosted internal test deployment is live at `http://16.59.150.9:8080` with WS at `ws://16.59.150.9:8080/ws`
-- Public browser-safe access is live at `https://quant.jamesxu.dev` with WS at `wss://quant.jamesxu.dev/ws`
+- Public browser-safe access is live at `https://exchange.jamesxu.dev` with WS at `wss://exchange.jamesxu.dev/ws`
 - GitHub is now the source of truth for deployment updates, and the EC2 host runs from a Git clone at `~/exchange-v2`
 - Mintlify-based internal docs now exist under `docs/`
 - OpenAPI generation and Swagger UI

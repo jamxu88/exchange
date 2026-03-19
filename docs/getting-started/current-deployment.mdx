@@ -6,13 +6,13 @@ description: "The live EC2 deployment shape and the important on-box paths."
 ## Live host
 
 - Elastic IP: `16.59.150.9`
-- Public HTTPS: `https://quant.jamesxu.dev`
-- Public health: `https://quant.jamesxu.dev/health`
-- Public WebSocket: `wss://quant.jamesxu.dev/ws`
+- Public HTTPS: `https://exchange.jamesxu.dev`
+- Public health: `https://exchange.jamesxu.dev/health`
+- Public WebSocket: `wss://exchange.jamesxu.dev/ws`
 - SSH user: `ec2-user`
 - On-box exchange origin: `http://127.0.0.1:8080`
 
-`quant.jamesxu.dev` resolves to the Elastic IP. Caddy now terminates TLS on the host and reverse-proxies requests to the loopback-only exchange origin on `127.0.0.1:8080`.
+`exchange.jamesxu.dev` resolves to the Elastic IP. Caddy now terminates TLS on the host and reverse-proxies requests to the loopback-only exchange origin on `127.0.0.1:8080`.
 
 ## Runtime layout on the EC2 host
 
@@ -49,7 +49,7 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
 Check health:
 
 ```bash
-curl https://quant.jamesxu.dev/health
+curl https://exchange.jamesxu.dev/health
 ```
 
 Check service state:
@@ -68,6 +68,6 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 ## Current deployment caveats
 
-- Public port `80` still times out, so `http://quant.jamesxu.dev` does not currently redirect to HTTPS
+- Public port `80` still times out, so `http://exchange.jamesxu.dev` does not currently redirect to HTTPS
 - GitHub access on the EC2 host is temporarily PAT-based
 - PostgreSQL is local to the instance, not managed RDS

@@ -10,7 +10,7 @@ curl \
   -X POST \
   -H "Authorization: Bearer ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
-  https://quant.jamesxu.dev/api/v1/admin/users \
+  https://exchange.jamesxu.dev/api/v1/admin/users \
   -d '{"username":"team-alpha"}'
 ```
 
@@ -18,19 +18,19 @@ curl \
 
 ```bash
 curl -H "x-api-key: YOUR_API_KEY" \
-  https://quant.jamesxu.dev/api/v1/user
+  https://exchange.jamesxu.dev/api/v1/user
 
 curl -H "x-api-key: YOUR_API_KEY" \
-  https://quant.jamesxu.dev/api/v1/balance
+  https://exchange.jamesxu.dev/api/v1/balance
 
 curl -H "x-api-key: YOUR_API_KEY" \
-  'https://quant.jamesxu.dev/api/v1/open-orders?market=BTC-USD'
+  'https://exchange.jamesxu.dev/api/v1/open-orders?market=BTC-USD'
 ```
 
 ## Submit an order from JavaScript
 
 ```ts
-const response = await fetch("https://quant.jamesxu.dev/api/v1/orders", {
+const response = await fetch("https://exchange.jamesxu.dev/api/v1/orders", {
   method: "POST",
   headers: {
     "content-type": "application/json",
@@ -55,7 +55,7 @@ console.log(payload);
 ## WebSocket session example
 
 ```js
-const socket = new WebSocket("wss://quant.jamesxu.dev/ws");
+const socket = new WebSocket("wss://exchange.jamesxu.dev/ws");
 
 socket.addEventListener("open", () => {
   socket.send(JSON.stringify({
@@ -79,7 +79,7 @@ socket.addEventListener("message", (event) => {
 ## Health check
 
 ```bash
-curl https://quant.jamesxu.dev/health
+curl https://exchange.jamesxu.dev/health
 ```
 
 ## Deployment update example

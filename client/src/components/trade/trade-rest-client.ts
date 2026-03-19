@@ -125,7 +125,8 @@ export class TradeRestClient {
   constructor(config: Pick<TradeRuntimeConfig, "httpUrl" | "apiKey">, fetchImpl?: FetchLike) {
     this.baseUrl = config.httpUrl;
     this.apiKey = config.apiKey;
-    this.fetchImpl = fetchImpl ?? fetch;
+    this.fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) =>
+      Reflect.apply(fetchImpl ?? fetch, globalThis, [input, init])) as FetchLike;
   }
 
   async bootstrapAccountData(): Promise<TradeBootstrapData> {

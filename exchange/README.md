@@ -84,10 +84,10 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 
 ## Current deployed test endpoint
 
-- HTTP base: `https://quant.jamesxu.dev`
-- Health: `https://quant.jamesxu.dev/health`
-- Swagger docs: `https://quant.jamesxu.dev/docs`
-- WebSocket: `wss://quant.jamesxu.dev/ws`
+- HTTP base: `https://exchange.jamesxu.dev`
+- Health: `https://exchange.jamesxu.dev/health`
+- Swagger docs: `https://exchange.jamesxu.dev/docs`
+- WebSocket: `wss://exchange.jamesxu.dev/ws`
 - The public TLS edge is handled by Caddy on the EC2 host.
 - Public port `80` is not currently redirecting, so use the HTTPS URL directly.
 
@@ -132,7 +132,7 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
 Verify the live service:
 
 ```bash
-curl https://quant.jamesxu.dev/health
+curl https://exchange.jamesxu.dev/health
 ```
 
 Current note: GitHub access on the EC2 host is temporarily configured with a stored PAT. Replace that with a GitHub deploy key or machine-user SSH key, then revoke the PAT.

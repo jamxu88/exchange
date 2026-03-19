@@ -8,6 +8,10 @@ type ExchangeRequestOptions = {
   body?: string;
 };
 
+type ExchangeErrorPayload = {
+  error?: string;
+};
+
 type ExchangeUserResponse = {
   trader_id: string;
   username: string;
@@ -100,6 +104,18 @@ function joinUrl(baseUrl: string, path: string) {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
+function parseExchangePayload<T>(text: string): T | ExchangeErrorPayload | string | null {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as T | ExchangeErrorPayload;
+  } catch {
+    return text;
+  }
+}
+
 async function exchangeRequest<T>(
   path: string,
   options: ExchangeRequestOptions = {},
@@ -126,14 +142,23 @@ async function exchangeRequest<T>(
     );
   }
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as T | { error?: string }) : null;
+  const payload = parseExchangePayload<T>(text);
 
   if (!response.ok) {
     const message =
       payload && typeof payload === "object" && "error" in payload && payload.error
         ? payload.error
+        : typeof payload === "string" && payload.trim().length > 0
+          ? payload
         : `Exchange request failed with ${response.status}`;
     throw new ExchangeServerError(message, response.status);
+  }
+
+  if (typeof payload === "string") {
+    throw new ExchangeServerError(
+      `Exchange returned a non-JSON success response from ${url}`,
+      502,
+    );
   }
 
   return payload as T;

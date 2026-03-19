@@ -89,6 +89,25 @@ describe("TradeRestClient", () => {
     expect(result.effectivePrice).toBe(101);
   });
 
+  it("invokes fetch with the global context so browser bootstrap does not fail", async () => {
+    const fetchMock = vi.fn(function (this: unknown) {
+      return Promise.resolve({
+        ok: true,
+        text: async () => JSON.stringify({ trader_id: "trader-1", username: "alice" }),
+      });
+    });
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    await expect(client["request"]("/api/v1/user")).resolves.toEqual({
+      trader_id: "trader-1",
+      username: "alice",
+    });
+    expect(fetchMock.mock.contexts[0]).toBe(globalThis);
+  });
+
   it("throws typed api errors for non-ok responses", async () => {
     const client = new TradeRestClient(
       { httpUrl: "http://localhost:8080", apiKey: "secret" },
