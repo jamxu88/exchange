@@ -69,5 +69,5 @@ The backend protocol also supports:
 - the browser ticket still submits, amends, and cancels over REST even though the backend also supports WS trading messages
 - client runtime defaults to localhost for local development
 - public browser traffic should use `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
-- before final cutover, the ECS client can be tested through `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- the ECS client can also be tested directly through `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 - browser clients should continue to target the ALB-backed public host rather than the EC2 origin directly

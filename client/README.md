@@ -10,7 +10,7 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 - Health: `https://exchange.jamesxu.dev/health`
 - Swagger docs: `https://exchange.jamesxu.dev/docs`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
-- Current ECS/ALB test host: `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
 ## Internal docs
 
@@ -20,9 +20,9 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 
 ## Current integration target
 
-- The final public hostname remains `https://exchange.jamesxu.dev`.
-- The client is now deployed on ECS/Fargate behind an ALB, while backend exchange paths continue to route to the EC2 host.
-- Until ACM DNS validation and external DNS cutover are complete, the live pre-cutover test origin is `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- The public hostname is `https://exchange.jamesxu.dev`.
+- The client is deployed on ECS/Fargate behind an ALB, while backend exchange paths continue to route to the EC2 host.
+- The ALB hostname remains available as `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com` for direct AWS-side debugging.
 - Keep client endpoint configuration externalized with `EXCHANGE_HTTP_URL`, `NEXT_PUBLIC_EXCHANGE_HTTP_URL`, and `NEXT_PUBLIC_EXCHANGE_WS_URL`; do not hardcode the domain in app logic.
 
 ## Included template features

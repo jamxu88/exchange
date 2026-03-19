@@ -6,10 +6,10 @@ description: "The live split deployment shape: ECS client plus EC2 backend behin
 ## Live public hosts
 
 - Elastic IP: `16.59.150.9`
-- Final public HTTPS hostname: `https://exchange.jamesxu.dev`
-- Final public health: `https://exchange.jamesxu.dev/health`
-- Final public WebSocket: `wss://exchange.jamesxu.dev/ws`
-- Current ALB test host: `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- Public HTTPS hostname: `https://exchange.jamesxu.dev`
+- Public health: `https://exchange.jamesxu.dev/health`
+- Public WebSocket: `wss://exchange.jamesxu.dev/ws`
+- ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 - SSH user: `ec2-user`
 - On-box exchange origin: `http://0.0.0.0:8080`
 
@@ -18,7 +18,7 @@ Current intended edge shape is ALB path routing:
 - ECS client for `/`, `/login`, `/trade`, `/admin`, `/api/auth/*`, `/api/health`
 - EC2 backend for `/api/v1/*`, `/ws`, `/health`, `/docs*`, `/api-doc/*`
 
-The ECS stack is already live. Final HTTPS on `exchange.jamesxu.dev` is blocked only on ACM DNS validation and external DNS cutover.
+The ECS stack is live, ACM is attached, and `exchange.jamesxu.dev` now terminates HTTPS at the ALB.
 
 ## Runtime layout on the EC2 host
 
@@ -74,5 +74,4 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 - GitHub access on the EC2 host is temporarily PAT-based
 - PostgreSQL is local to the instance, not managed RDS
-- ACM for `exchange.jamesxu.dev` is still `PENDING_VALIDATION`
-- External DNS still needs to cut `exchange.jamesxu.dev` over to the ALB hostname
+- The ALB hostname is still useful for direct AWS-side debugging even though the public hostname is live

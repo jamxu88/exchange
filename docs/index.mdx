@@ -54,8 +54,8 @@ npx mintlify dev
 
 ## Important current caveats
 
-- The ECS client stack is live behind the ALB test host `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
-- Final HTTPS on `exchange.jamesxu.dev` is waiting on ACM DNS validation and external DNS cutover.
+- The ECS client stack is live behind the ALB at `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- Final HTTPS on `exchange.jamesxu.dev` is live.
 - The exchange backend origin now listens on `0.0.0.0:8080` on the EC2 host so the ALB target group can reach it.
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders and keeps persisted positions queryable, but it does not yet replay full settlement history.
 - Sequence numbers are per-market and in-memory; they reset on process restart.

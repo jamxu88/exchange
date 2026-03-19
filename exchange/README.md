@@ -91,8 +91,8 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 - Health: `https://exchange.jamesxu.dev/health`
 - Swagger docs: `https://exchange.jamesxu.dev/docs`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
-- ECS/ALB pre-cutover test host: `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
-- The intended public edge is the ALB path split, with backend exchange routes forwarded to the EC2 service.
+- ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- The public edge is the ALB path split, with backend exchange routes forwarded to the EC2 service.
 
 ## Internal docs
 

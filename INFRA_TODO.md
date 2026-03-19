@@ -140,10 +140,10 @@ Work items:
 - [ ] Define static asset and caching strategy
 - [x] Define client-to-exchange network path and allowed origins
 - [ ] Define observability for frontend runtime and API errors
-- [ ] Complete ACM DNS validation for `exchange.jamesxu.dev`
-- [ ] Attach the HTTPS listener to the ALB after the cert is issued
-- [ ] Cut `exchange.jamesxu.dev` over to the ALB hostname at the external DNS provider
-- [ ] Remove direct public `8080` access after ALB cutover is verified
+- [x] Complete ACM DNS validation for `exchange.jamesxu.dev`
+- [x] Attach the HTTPS listener to the ALB after the cert is issued
+- [x] Cut `exchange.jamesxu.dev` over to the ALB hostname at the external DNS provider
+- [x] Remove direct public `8080` access after ALB cutover is verified
 
 Client implementation constraints:
 
@@ -187,10 +187,10 @@ Current local status:
 - GitHub access on the EC2 host is temporarily PAT-based and should be replaced with a deploy key.
 - Public internal test endpoints are `http://16.59.150.9:8080`, `http://16.59.150.9:8080/health`, and `ws://16.59.150.9:8080/ws`.
 - ECS stack `exchange-client` now exists in AWS.
-- The ALB test hostname is `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- The ALB hostname is `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
 - The ALB already routes ECS client traffic for `/`, `/login`, `/trade`, `/admin`, `/api/auth/*`, and `/api/health`.
 - The ALB already routes EC2 backend traffic for `/api/v1/*`, `/ws`, `/health`, `/docs*`, and `/api-doc/*`.
-- ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/ecd7873d-9eec-4bcd-a8bc-febccceff330` is requested for `exchange.jamesxu.dev` and is currently pending DNS validation.
+- ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/0ef4c31a-90b2-437c-bed8-8f23b74fc0f7` is issued for `exchange.jamesxu.dev` and attached to the ALB `443` listener.
 - Mintlify-based internal docs now exist under `docs/`.
 
 ## 5. Suggested Order

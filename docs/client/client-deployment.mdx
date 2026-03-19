@@ -1,15 +1,15 @@
 ---
 title: "Client Deployment"
-description: "Current ECS deployment shape for the Next.js client and the remaining cutover work."
+description: "Current ECS deployment shape for the Next.js client."
 ---
 
 ## Current state
 
 - The exchange backend is live on EC2.
 - The Next.js client is deployed on ECS/Fargate behind an ALB.
-- The current ALB test hostname is `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
-- The final public hostname remains `https://exchange.jamesxu.dev`.
-- HTTPS cutover is waiting on ACM DNS validation at the external DNS provider.
+- The ALB hostname is `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
+- The public hostname is `https://exchange.jamesxu.dev`.
+- HTTPS is terminated at the ALB with ACM.
 
 ## Environment variables
 
@@ -53,8 +53,5 @@ Current routing split at the ALB:
 
 Still needed around deployment:
 
-- ACM DNS validation for `exchange.jamesxu.dev`
-- HTTPS listener attachment to the ALB
-- External DNS cutover of `exchange.jamesxu.dev` to the ALB hostname
 - Rollout and rollback procedure
 - Frontend runtime monitoring

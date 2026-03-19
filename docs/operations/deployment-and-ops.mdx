@@ -18,7 +18,7 @@ description: "How the split ECS plus EC2 deployment is structured and how to upd
 - backend env: `/home/ec2-user/exchange-v2/exchange.env`
 - binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
 - ECS stack: `exchange-client`
-- ALB test host: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
 ## Update procedure
 
@@ -80,12 +80,12 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
 
 ## Current public edge
 
-Final intended endpoint:
+Public endpoint:
 
 - `https://exchange.jamesxu.dev`
 - `wss://exchange.jamesxu.dev/ws`
 
-Current pre-cutover test endpoint:
+ALB debug endpoint:
 
 - `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
@@ -103,9 +103,9 @@ Current reality:
 
 - the ALB is live and already serving both ECS client traffic and EC2 backend traffic on its AWS hostname
 - the exchange process listens on `0.0.0.0:8080` on the EC2 host so the ALB backend target group can reach it
-- ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/ecd7873d-9eec-4bcd-a8bc-febccceff330` is requested for `exchange.jamesxu.dev`
-- the certificate is still waiting on DNS validation at the external DNS provider
-- after validation, `exchange.jamesxu.dev` should be changed to a `CNAME` pointing at `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/0ef4c31a-90b2-437c-bed8-8f23b74fc0f7` is issued for `exchange.jamesxu.dev`
+- the ALB serves both `80` and `443`
+- `exchange.jamesxu.dev` now points at the ALB and serves both the client and backend paths
 
 ## Current credential debt
 

@@ -20,7 +20,7 @@ What exists today:
 - The live exchange backend now runs from a GitHub-synced EC2 checkout, so client integration should assume `main` is the deployed source of truth
 - Mintlify-based internal docs now exist under `docs/`
 - Public browser-safe exchange access is available at `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
-- ECS stack `exchange-client` is live behind the ALB test host `http://exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
+- ECS stack `exchange-client` is live behind the ALB and serving `https://exchange.jamesxu.dev`
 
 What is still true:
 
@@ -30,7 +30,7 @@ What is still true:
 - Real-time transport and trading UX are implemented client-side, but still depend on backend completeness and load validation
 - Individual authentication is not implemented for production
 - Admin workflows are now wired to the backend, but the operator UX still needs polish
-- ECS deployment is implemented in AWS, but HTTPS on `exchange.jamesxu.dev` is still waiting on ACM DNS validation and final DNS cutover
+- ECS deployment is implemented in AWS and serving the final public hostname
 
 ## Progress Snapshot
 
@@ -112,7 +112,7 @@ What is still true:
 ## Product Requirements
 
 - [x] Next.js app
-- [~] Hosted on ECS
+- [x] Hosted on ECS
 - [x] Clean UX/UI
 - [ ] Low latency
 - [ ] Low memory footprint
@@ -167,8 +167,8 @@ This should be treated as the source layout for the trading interface, not the c
 - [ ] Add CDN / caching strategy for static assets
 - [ ] Add rollout / rollback plan
 - [ ] Add monitoring for memory and response times
-- [ ] Complete ACM validation and ALB HTTPS listener attachment
-- [ ] Cut `exchange.jamesxu.dev` over to the ALB and verify browser flows on the final host
+- [x] Complete ACM validation and ALB HTTPS listener attachment
+- [x] Cut `exchange.jamesxu.dev` over to the ALB and verify browser flows on the final host
 
 ## 3. UX/UI
 
