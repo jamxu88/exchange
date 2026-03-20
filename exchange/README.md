@@ -2,7 +2,7 @@
 
 Rust template for an exchange core service, targeted for a single EC2 deployment for an internal competition.
 
-Canonical internal docs now live in `docs/` as a Mintlify site.
+Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only docs now live in `internal-docs/`.
 
 ## Included template features
 
@@ -94,11 +94,11 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 - ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 - The public edge is the ALB path split, with backend exchange routes forwarded to the EC2 service.
 
-## Internal docs
+## Docs
 
-- Mintlify docs root: `docs/`
-- Start there for architecture, auth, REST, WS, recovery, deployment, and operator runbooks.
-- Preview locally with `cd docs && npx mintlify dev`
+- Public Mintlify API docs root: `docs/`
+- Internal-only notes root: `internal-docs/`
+- Preview the public docs locally with `cd docs && npx mint validate` or `cd docs && npx mintlify dev`
 
 ## Current EC2 deployment
 

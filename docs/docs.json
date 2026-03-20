@@ -1,55 +1,50 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "Quant Exchange",
-  "description": "Internal documentation for the exchange backend, client, and EC2 deployment.",
+  "name": "Exchange API",
+  "description": "Public REST and WebSocket API documentation for the Exchange trading platform.",
   "favicon": "/favicon.ico",
   "colors": {
     "primary": "#1F7A5A"
   },
+  "api": {
+    "playground": {
+      "display": "simple"
+    },
+    "examples": {
+      "languages": [
+        "curl",
+        "javascript"
+      ],
+      "defaults": "required"
+    }
+  },
   "navigation": {
     "groups": [
       {
-        "group": "Getting Started",
+        "group": "Overview",
         "pages": [
           "index",
-          "getting-started/local-development",
-          "getting-started/competition-quickstart",
-          "getting-started/current-deployment"
+          "reference/authentication"
         ]
       },
       {
-        "group": "Architecture",
+        "group": "REST API",
         "pages": [
-          "architecture/system-architecture",
-          "architecture/storage-and-recovery"
-        ]
-      },
-      {
-        "group": "Reference",
-        "pages": [
-          "reference/authentication",
           "reference/rest-api",
-          "reference/websocket-api",
-          "reference/recovery-and-resync",
           "reference/error-codes",
           "reference/examples"
         ]
       },
       {
-        "group": "Client",
-        "pages": [
-          "client/client-integration",
-          "client/client-deployment",
-          "client/ui-and-figma",
-          "client/keybinds"
-        ]
+        "group": "REST Reference",
+        "openapi": "https://exchange.jamesxu.dev/api-doc/openapi.json"
       },
       {
-        "group": "Operations",
+        "group": "WebSocket API",
         "pages": [
-          "operations/deployment-and-ops",
-          "operations/runbook"
+          "reference/websocket-api",
+          "reference/recovery-and-resync"
         ]
       }
     ]

@@ -1,42 +1,41 @@
 ---
-title: "Quant Exchange"
-description: "Internal documentation for the exchange backend, client, and EC2 deployment."
+title: "Exchange API"
+description: "Public API documentation for Exchange REST and WebSocket integrations."
 ---
 
-This documentation describes the exchange exactly as it exists today: a Rust backend in `exchange/`, a Next.js client in `client/`, and a single EC2 deployment with local PostgreSQL for an internal competition.
+This site documents the public Exchange API surface for market data, trading, account state, and operator workflows.
 
-## Current live endpoints
+## Base URLs
 
-- HTTPS: `https://exchange.jamesxu.dev`
-- Health: `https://exchange.jamesxu.dev/health`
-- Swagger UI: `https://exchange.jamesxu.dev/docs`
+- REST: `https://exchange.jamesxu.dev`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
+- OpenAPI JSON: `https://exchange.jamesxu.dev/api-doc/openapi.json`
+- Swagger UI: `https://exchange.jamesxu.dev/docs`
 
-## What this system is
+## In this documentation
 
-- Internal competition exchange, not a public product
-- Operator-provisioned users only
-- Assigned API key per participant
-- In-memory matching engine and orderbooks
-- Local PostgreSQL for durable user, exchange-control, position, order, fill, message, and audit state
-- Background batched persistence writer so the matching path does not write directly to PostgreSQL
+- Authentication and request headers
+- REST endpoints for markets, account reads, orders, admin control, and leaderboard
+- WebSocket messages for authentication, market data, trading, and user events
+- Resync behavior for sequence gaps and reconnects
+- Error codes and concrete client examples
 
-## What this system is not
+## Authentication model
 
-- No public self-registration
-- No JWT, OAuth, or browser-style public auth model
-- No multi-node matching cluster
-- No durable replay log for market data
-- No full replay-based settlement recovery on restart yet
+- Trader routes use assigned API keys in `x-api-key`
+- Admin routes use a bearer token in `Authorization`
+- WebSocket sessions authenticate with `{"op":"authenticate","api_key":"..."}` on the socket
 
-## Use this site for
+## Quick links
 
-- Local development and environment setup
-- Competition-user onboarding
-- REST and WebSocket protocol details
-- Storage, recovery, and resync behavior
-- EC2 deployment and operator procedures
-- Client integration against the live exchange
+- [Authentication](/reference/authentication)
+- [REST API](/reference/rest-api)
+- [WebSocket API](/reference/websocket-api)
+- [Recovery and resync](/reference/recovery-and-resync)
+- [Error codes](/reference/error-codes)
+- [Examples](/reference/examples)
+
+The sidebar also includes a generated `REST Reference` section sourced from the live OpenAPI schema at `https://exchange.jamesxu.dev/api-doc/openapi.json`.
 
 ## Preview the docs locally
 
@@ -44,19 +43,3 @@ This documentation describes the exchange exactly as it exists today: a Rust bac
 cd docs
 npx mintlify dev
 ```
-
-## Canonical code locations
-
-- Backend: `exchange/`
-- Client: `client/`
-- Exchange runtime docs in code: `exchange/src/rest.rs`, `exchange/src/ws.rs`, `exchange/src/marketdata.rs`
-- OpenAPI generation: `exchange/src/docs.rs`
-
-## Important current caveats
-
-- The ECS client stack is live behind the ALB at `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`.
-- Final HTTPS on `exchange.jamesxu.dev` is live.
-- The exchange backend origin now listens on `0.0.0.0:8080` on the EC2 host so the ALB target group can reach it.
-- Startup recovery rebuilds in-memory orderbooks from persisted open orders and keeps persisted positions queryable, but it does not yet replay full settlement history.
-- Sequence numbers are per-market and in-memory; they reset on process restart.
-- The EC2 host currently pulls from GitHub using a temporary stored PAT. Replace that with a deploy key or machine-user SSH key and revoke the PAT.

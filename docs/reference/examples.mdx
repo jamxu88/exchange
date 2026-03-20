@@ -83,17 +83,3 @@ socket.addEventListener("message", (event) => {
 ```bash
 curl https://exchange.jamesxu.dev/health
 ```
-
-## Deployment update example
-
-```bash
-git push origin main
-ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
-  cd ~/exchange-v2 &&
-  git pull --ff-only &&
-  cd exchange &&
-  source "$HOME/.cargo/env" &&
-  cargo build --release &&
-  sudo systemctl restart exchange
-'
-```

@@ -191,7 +191,7 @@ Current local status:
 - The ALB already routes ECS client traffic for `/`, `/login`, `/trade`, `/admin`, `/api/auth/*`, and `/api/health`.
 - The ALB already routes EC2 backend traffic for `/api/v1/*`, `/ws`, `/health`, `/docs*`, and `/api-doc/*`.
 - ACM certificate `arn:aws:acm:us-east-2:490004617163:certificate/0ef4c31a-90b2-437c-bed8-8f23b74fc0f7` is issued for `exchange.jamesxu.dev` and attached to the ALB `443` listener.
-- Mintlify-based internal docs now exist under `docs/`.
+- Public Mintlify API docs now exist under `docs/`, and internal-only deployment notes now live under `internal-docs/`.
 
 ## 5. Suggested Order
 

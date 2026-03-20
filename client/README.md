@@ -2,7 +2,7 @@
 
 Next.js template for a low-latency exchange client UI, designed for ECS deployment.
 
-Canonical internal docs now live in `docs/` as a Mintlify site.
+Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only client and deployment notes now live in `internal-docs/`.
 
 ## Current deployed exchange endpoint
 
@@ -12,11 +12,11 @@ Canonical internal docs now live in `docs/` as a Mintlify site.
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
 - ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
-## Internal docs
+## Docs
 
-- Mintlify docs root: `docs/`
-- See the client pages there for integration, deployment, Figma mapping, and keybind reference.
-- Preview locally with `cd docs && npx mintlify dev`
+- Public Mintlify API docs root: `docs/`
+- Internal-only client and deployment notes root: `internal-docs/`
+- Preview the public docs locally with `cd docs && npx mint validate` or `cd docs && npx mintlify dev`
 
 ## Current integration target
 

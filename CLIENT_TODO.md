@@ -18,7 +18,7 @@ What exists today:
 - Health endpoint
 - Live exchange backend is available for integration testing at `http://16.59.150.9:8080` and `ws://16.59.150.9:8080/ws`
 - The live exchange backend now runs from a GitHub-synced EC2 checkout, so client integration should assume `main` is the deployed source of truth
-- Mintlify-based internal docs now exist under `docs/`
+- Public Mintlify API docs now exist under `docs/`, and internal-only client/deployment notes now live under `internal-docs/`
 - Public browser-safe exchange access is available at `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`
 - ECS stack `exchange-client` is live behind the ALB and serving `https://exchange.jamesxu.dev`
 

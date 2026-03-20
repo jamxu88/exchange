@@ -29,7 +29,7 @@ What exists today:
 - Public browser-safe access is live at `https://exchange.jamesxu.dev` with WS at `wss://exchange.jamesxu.dev/ws`
 - ECS client stack is live behind the ALB and serving `https://exchange.jamesxu.dev`
 - GitHub is now the source of truth for deployment updates, and the EC2 host runs from a Git clone at `~/exchange-v2`
-- Mintlify-based internal docs now exist under `docs/`
+- Public Mintlify API docs now exist under `docs/`, and internal-only notes now live under `internal-docs/`
 - OpenAPI generation and Swagger UI
 - Tests and latency checks for core paths
 
@@ -147,7 +147,8 @@ What is still true:
   - full replay-based recovery is still not implemented
 - Docs:
   - OpenAPI exists for the current REST surface
-  - Mintlify internal docs now cover architecture, auth, REST, WS, recovery, client integration, deployment, and runbooks
+  - public Mintlify API docs now cover auth, REST, WS, recovery, errors, and examples
+  - internal architecture, client, deployment, and runbook notes now live under `internal-docs/`
   - backup and restore guidance still needs deeper operational work
 - Admin control plane:
   - backend operator endpoints now exist
