@@ -18,8 +18,8 @@ Public and competitor-facing:
 - [GET /api/v1/open-orders](/rest/open-orders)
 - [GET /api/v1/fills](/rest/fills)
 - [POST /api/v1/orders](/rest/submit-order)
-- [PATCH /api/v1/orders/{order_id}](/rest/amend-order)
-- [DELETE /api/v1/orders/{order_id}](/rest/cancel-order)
+- [PATCH /api/v1/orders/](/rest/amend-order){order_id}
+- [DELETE /api/v1/orders/](/rest/cancel-order){order_id}
 
 ## Data model notes
 
@@ -29,7 +29,3 @@ Public and competitor-facing:
 - risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
 - `open-orders` and `fills` accept an optional `market` query parameter
 - leaderboard ranking is based on current marked PnL
-
-## What is intentionally omitted here
-
-Internal operator and admin endpoints are not part of the public competitor docs. The Mintlify site is meant to answer one question cleanly: how a competitor connects, reads state, and trades.
