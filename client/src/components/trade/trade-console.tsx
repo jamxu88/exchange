@@ -19,7 +19,7 @@ import type { AggregatedBookLevel, MessageTone, PnlMetric } from "@/components/t
 const desktopFrameColumns =
   "40px 179px 1fr 797px 1fr 86px 27px 30px 46px";
 const contentColumns = "349px 746px 298px";
-const leftColumnRows = "360px minmax(0,1fr)";
+const leftColumnRows = "420px minmax(0,1fr)";
 const rightColumnRows = "378px minmax(0,1fr)";
 const panelBaseClass = "rounded-[20px] border border-[#26272b] bg-[#141416]";
 const quickAdjustments = [-100, -10, 10, 100];
@@ -130,13 +130,13 @@ type TradeConsoleViewProps = {
 };
 
 export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
-  const [isPositionMenuOpen, setIsPositionMenuOpen] = useState(false);
   const [isOrderTypeMenuOpen, setIsOrderTypeMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { state, derived, actions } = controller;
   const selectedMarket = selectSelectedMarket(state);
   const activeRows = selectActiveRows(state);
   const pendingRows = selectPendingRows(state);
+  const hasPositionRows = activeRows.length > 0 || pendingRows.length > 0;
   const pnlMetrics = selectPnlMetrics(state);
   const visibleMessages = [...state.messages].reverse();
   const summary = derived.summary;
@@ -182,7 +182,16 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               ))}
             </div>
 
-            <div />
+            <div className="mt-[27px] flex items-center justify-end">
+              <a
+                className="rounded-full border border-[#2c2d31] bg-[#141416] px-[12px] py-[8px] text-[13px] font-semibold leading-none text-[#d9d9dc] hover:border-[#3a3b41] hover:text-white"
+                href="https://jamesxu.mintlify.app/"
+                rel="noreferrer"
+                target="_blank"
+              >
+                API Docs
+              </a>
+            </div>
             <div className="mt-[34px] flex items-center gap-[7px]">
               <span className={`h-[6px] w-[6px] rounded-full ${connection.dotClass}`} />
               <span className="text-[16px] font-medium leading-none text-white">
@@ -234,105 +243,105 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               style={{ gridTemplateRows: leftColumnRows, rowGap: "20px" }}
             >
               <section
-                className={`${panelBaseClass} grid h-full min-h-0 grid-rows-[48px_40px_1fr] overflow-hidden`}
+                className={`${panelBaseClass} grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
               >
                 <div className="flex items-center justify-between border-b border-[#2c2d31] px-[20px] pt-[10px]">
                   <h2 className="text-[21px] font-bold leading-none text-white">
                     Positions
                   </h2>
-
-                  <div className="relative">
-                    <button
-                      className="flex items-center gap-[6px] text-[15.477px] font-medium leading-none text-white"
-                      onClick={() => setIsPositionMenuOpen((current) => !current)}
-                      type="button"
-                    >
-                      {state.positionFilter === "active" ? "Active" : "Pending"}
-                      <Image alt="" height={14} src="/chevron.svg" width={14} />
-                    </button>
-
-                    {isPositionMenuOpen ? (
-                      <div className="absolute right-0 top-[calc(100%+8px)] z-10 w-[126px] rounded-[12px] border border-[#2c2d31] bg-[#18181b] p-[6px] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
-                        {(["active", "pending"] as const).map((filter) => (
-                          <button
-                            className={
-                              state.positionFilter === filter
-                                ? "flex w-full items-center justify-between rounded-[8px] bg-[#26272b] px-[10px] py-[8px] text-left text-[15px] font-semibold text-white"
-                                : "flex w-full items-center justify-between rounded-[8px] px-[10px] py-[8px] text-left text-[15px] font-medium text-[#b8b8bc]"
-                            }
-                            key={filter}
-                            onClick={() => {
-                              actions.setPositionFilter(filter);
-                              setIsPositionMenuOpen(false);
-                            }}
-                            type="button"
-                          >
-                            <span>{filter === "active" ? "Active" : "Pending"}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-center border-b border-[#2c2d31] px-[20px] text-[16px] font-bold leading-none text-white">
-                  <span>Product</span>
-                  <span>{state.positionFilter === "active" ? "Net" : "Qty"}</span>
-                  <span className="justify-self-end">
-                    {state.positionFilter === "active" ? "Avg. Cost" : "Order"}
-                  </span>
+                  <p className="text-[13px] font-medium leading-none text-[#8a8a92]">
+                    {activeRows.length} active · {pendingRows.length} pending
+                  </p>
                 </div>
 
                 <div className="min-h-0 overflow-y-auto px-[20px] py-[12px] text-[16px] font-medium leading-none text-white">
-                  {state.positionFilter === "active" ? (
-                    activeRows.length > 0 ? (
+                  {hasPositionRows ? (
+                    <div className="grid content-start gap-y-[22px]">
                       <div className="grid content-start gap-y-[14px]">
-                        {activeRows.map((position) => (
-                          <div
-                            className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-start gap-x-[10px]"
-                            key={position.marketId}
-                          >
-                            <span
-                              className={
-                                position.marketId === state.selectedMarketId
-                                  ? "max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#f5f5f5]"
-                                  : "max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#b8b8bc]"
-                              }
-                            >
-                              {position.product}
-                            </span>
-                            <span>{formatNetQuantity(position.netQuantity)}</span>
-                            <span className="justify-self-end">
-                              {formatMaybePrice(position.avgCost)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-center text-[16px] leading-[1.2] text-[#8a8a92]">
-                        No active positions.
-                      </div>
-                    )
-                  ) : pendingRows.length > 0 ? (
-                    <div className="grid content-start gap-y-[14px]">
-                      {pendingRows.map((order) => (
-                        <div
-                          className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-start gap-x-[10px]"
-                          key={order.id}
-                        >
-                          <span className="max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#f5f5f5]">
-                            {order.marketName}
-                          </span>
-                          <span>{order.shares}</span>
-                          <span className="justify-self-end text-right">
-                            {order.side === "buy" ? "B" : "S"} {formatPrice(order.limitPrice)}
-                          </span>
+                        <div className="flex items-center justify-between">
+                          <p className="text-[13px] font-semibold uppercase tracking-[0.18em] text-[#8a8a92]">
+                            Active
+                          </p>
+                          <p className="text-[12px] font-medium text-[#6f6f76]">
+                            Net exposure by market
+                          </p>
                         </div>
-                      ))}
+                        <div className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-center border-b border-[#2c2d31] pb-[10px] text-[14px] font-bold leading-none text-white">
+                          <span>Product</span>
+                          <span>Net</span>
+                          <span className="justify-self-end">Avg. Cost</span>
+                        </div>
+                        {activeRows.length > 0 ? (
+                          <div className="grid content-start gap-y-[14px]">
+                            {activeRows.map((position) => (
+                              <div
+                                className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-start gap-x-[10px]"
+                                key={position.marketId}
+                              >
+                                <span
+                                  className={
+                                    position.marketId === state.selectedMarketId
+                                      ? "max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#f5f5f5]"
+                                      : "max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#b8b8bc]"
+                                  }
+                                >
+                                  {position.product}
+                                </span>
+                                <span>{formatNetQuantity(position.netQuantity)}</span>
+                                <span className="justify-self-end">
+                                  {formatMaybePrice(position.avgCost)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[15px] leading-[1.2] text-[#8a8a92]">
+                            No active positions.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="grid content-start gap-y-[14px]">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[13px] font-semibold uppercase tracking-[0.18em] text-[#8a8a92]">
+                            Pending
+                          </p>
+                          <p className="text-[12px] font-medium text-[#6f6f76]">
+                            Resting orders
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-center border-b border-[#2c2d31] pb-[10px] text-[14px] font-bold leading-none text-white">
+                          <span>Product</span>
+                          <span>Qty</span>
+                          <span className="justify-self-end">Order</span>
+                        </div>
+                        {pendingRows.length > 0 ? (
+                          <div className="grid content-start gap-y-[14px]">
+                            {pendingRows.map((order) => (
+                              <div
+                                className="grid grid-cols-[1.25fr_0.7fr_0.8fr] items-start gap-x-[10px]"
+                                key={order.id}
+                              >
+                                <span className="max-h-[34px] min-w-0 overflow-hidden break-words leading-[17px] text-[#f5f5f5]">
+                                  {order.marketName}
+                                </span>
+                                <span>{order.shares}</span>
+                                <span className="justify-self-end text-right">
+                                  {order.side === "buy" ? "B" : "S"} {formatPrice(order.limitPrice)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[15px] leading-[1.2] text-[#8a8a92]">
+                            No pending orders.
+                          </p>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <div className="flex h-full items-center justify-center text-center text-[16px] leading-[1.2] text-[#8a8a92]">
-                      No pending orders.
+                      No positions or pending orders yet.
                     </div>
                   )}
                 </div>

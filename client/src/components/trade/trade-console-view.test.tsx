@@ -19,6 +19,23 @@ describe("TradeConsoleView", () => {
     const state = createInitialTradeState(runtime.markets);
     state.connectionStatus = "connected";
     state.user = { traderId: "trader-1", username: "alice" };
+    state.positionsByMarket["BTC-USD"] = {
+      netQuantity: 4,
+      avgCost: 96,
+      realizedPnl: 0,
+    };
+    state.pendingOrders = [
+      {
+        id: "order-1",
+        createdAt: "2026-03-17T09:30:00Z",
+        marketId: "BTC-USD",
+        marketName: "BTC-USD",
+        side: "buy",
+        shares: 2,
+        limitPrice: 102,
+        status: "open",
+      },
+    ];
     state.messages = [
       {
         id: 1,
@@ -92,12 +109,20 @@ describe("TradeConsoleView", () => {
     const user = userEvent.setup();
 
     expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getAllByText("BTC-USD")).toHaveLength(2);
+    expect(screen.getAllByText("BTC-USD").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Statistics")).toBeInTheDocument();
     expect(screen.getByText("Exposure")).toBeInTheDocument();
     expect(screen.getByText("Open Orders")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByText("+4")).toBeInTheDocument();
+    expect(screen.getByText(/B \$102\.00/)).toBeInTheDocument();
     expect(screen.getByText("Market data connected.")).toBeInTheDocument();
     expect(screen.getAllByText("$101.00").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "API Docs" })).toHaveAttribute(
+      "href",
+      "https://jamesxu.mintlify.app/",
+    );
 
     await user.click(screen.getByRole("button", { name: "Open profile menu" }));
 
