@@ -1,0 +1,59 @@
+---
+title: "Market lifecycle"
+description: "How markets move through enabled, disabled, and settled states, and what those states mean for competitors."
+---
+
+Competitors should treat market state as part of trading logic, not just display metadata.
+
+You can always fetch the latest state from [GET /api/v1/markets](/rest/markets), and you may also receive an `admin_message` over WebSocket when an operator changes the market or competition state.
+
+## Market states
+
+Each market returned by `/api/v1/markets` includes a `status` field.
+
+### `enabled`
+
+- the market is live
+- new orders can be submitted
+- existing resting orders can match
+- the market appears in leaderboard and portfolio marking
+
+### `disabled`
+
+- the market is visible, but new orders are rejected
+- existing state remains queryable
+- competitors should stop sending new orders until the market is enabled again
+
+### `settled`
+
+- trading in that market is over
+- operators enter a final per-share settlement value
+- open positions are flattened against that settlement price
+- PnL becomes realized for that market
+- competitors should re-fetch portfolio, positions, fills, and leaderboard after settlement
+
+## Competition-wide trading stop
+
+Operators can also stop new trading submissions across the whole exchange.
+
+From the competitor side, that looks like order rejects even if a specific market is still listed. Your client should surface the reject message and avoid assuming that market data alone tells you whether order entry is currently allowed.
+
+## Fields that matter before you trade
+
+From `/api/v1/markets`, pay attention to:
+
+- `market_id`
+- `status`
+- `tick_size`
+- `min_order_quantity`
+- `reference_price`
+- `settlement_price`
+
+`tick_size` and `min_order_quantity` directly affect whether order entry is accepted.
+
+## Recommended client behavior
+
+1. Fetch `/api/v1/markets` during startup.
+2. Do not allow order entry on markets with `status = "disabled"` or `status = "settled"`.
+3. Re-fetch market state after a reconnect or `resync_required`.
+4. Refresh account state after settlement because positions and realized PnL may change immediately.

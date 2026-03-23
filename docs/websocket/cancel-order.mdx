@@ -1,0 +1,32 @@
+---
+title: "cancel_order"
+description: "Cancel an existing open order over WebSocket."
+---
+
+## Client message
+
+```json
+{
+  "op": "cancel_order",
+  "request_id": "req-2",
+  "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5"
+}
+```
+
+## Success response
+
+```json
+{"type":"ack","op":"cancel_order","request_id":"req-2"}
+```
+
+## Failure response
+
+Failures are returned as `reject` messages. Common reasons are:
+
+- `unauthenticated`
+- `order_not_found`
+- `order_not_owned`
+
+## Notes
+
+- the server will also emit an `order_state` event if the cancel succeeds

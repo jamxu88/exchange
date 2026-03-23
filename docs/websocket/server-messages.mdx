@@ -1,0 +1,127 @@
+---
+title: "Server messages"
+description: "The message types competitors should handle after connecting over WebSocket."
+---
+
+These are the main message types a competitor client should expect from the server.
+
+## `heartbeat`
+
+```json
+{"type":"heartbeat"}
+```
+
+## `authenticated`
+
+```json
+{
+  "type": "authenticated",
+  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+  "username": "team-alpha"
+}
+```
+
+## `snapshot`
+
+```json
+{
+  "type": "snapshot",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 0,
+  "bids": [],
+  "asks": []
+}
+```
+
+## `delta`
+
+```json
+{
+  "type": "delta",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 1,
+  "events": [
+    {
+      "kind": "order_added",
+      "order": {
+        "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+        "side": "BUY",
+        "price": 100,
+        "remaining": 2,
+        "created_at": "2026-03-18T15:28:01.342510Z"
+      }
+    }
+  ]
+}
+```
+
+## `fill`
+
+```json
+{
+  "type": "fill",
+  "fill": {
+    "fill_id": "fef1b4fd-d0b0-4270-8831-b4c51aa43f1d",
+    "market": "BTC-USD",
+    "maker_order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
+    "taker_order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "price": 100,
+    "quantity": 1,
+    "occurred_at": "2026-03-18T15:28:04.132958Z"
+  }
+}
+```
+
+## `order_state`
+
+```json
+{
+  "type": "order_state",
+  "order": {
+    "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+    "market": "BTC-USD",
+    "side": "BUY",
+    "price": 100,
+    "quantity": 2,
+    "remaining": 1,
+    "created_at": "2026-03-18T15:28:01.342510Z"
+  },
+  "status": "open"
+}
+```
+
+## `admin_message`
+
+```json
+{
+  "type": "admin_message",
+  "message": {
+    "message_id": "26aa26f5-8d20-4a6c-9b66-99549585036f",
+    "target_username": null,
+    "target_trader_id": null,
+    "market": "BTC-USD",
+    "level": "info",
+    "title": "Desk notice",
+    "body": "Trading will stop in five minutes.",
+    "created_at": "2026-03-18T16:05:00.000000Z"
+  }
+}
+```
+
+## `resync_required`
+
+```json
+{
+  "type": "resync_required",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "expected_sequence": 5,
+  "current_sequence": 9,
+  "reason": "market data lagged by 3 messages; resubscribe for a fresh snapshot"
+}
+```
+
+Use [Recovery and resync](/reference/recovery-and-resync) for the recommended client response.

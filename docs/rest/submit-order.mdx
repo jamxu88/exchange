@@ -1,0 +1,69 @@
+---
+title: "POST /api/v1/orders"
+description: "Submit a new limit order."
+---
+
+Submit a new limit order through REST when you want simple request-response behavior. WebSocket order entry is also available if you prefer to keep everything on one low-latency socket.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Request body
+
+```json
+{
+  "market": "BTC-USD",
+  "side": "BUY",
+  "price": 100,
+  "quantity": 2
+}
+```
+
+## Request
+
+```bash
+curl \
+  -X POST \
+  -H "x-api-key: YOUR_API_KEY" \
+  -H "content-type: application/json" \
+  https://exchange.jamesxu.dev/api/v1/orders \
+  -d '{"market":"BTC-USD","side":"BUY","price":100,"quantity":2}'
+```
+
+## Example response
+
+```json
+{
+  "order": {
+    "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+    "market": "BTC-USD",
+    "side": "BUY",
+    "price": 100,
+    "quantity": 2,
+    "remaining": 2,
+    "created_at": "2026-03-18T15:28:01.342510Z"
+  },
+  "fills": [],
+  "resting": true
+}
+```
+
+## Validation rules
+
+- `price` must be greater than zero and aligned to the market `tick_size`
+- `quantity` must be greater than zero and at least the market `min_order_quantity`
+- the order must keep your worst-case per-market net position within `+/-1000`
+- you can sell from flat and go short
+
+## Common rejects
+
+- `trading is currently disabled`
+- `market is disabled`
+- `market has already been settled`
+- `price must align to tick size ...`
+- `quantity must be at least ...`
+- `projected net position for ... would be ...; limit is +/-1000`

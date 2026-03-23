@@ -1,0 +1,45 @@
+---
+title: "GET /api/v1/markets"
+description: "List markets, their lifecycle state, and the trading rules that matter before submitting orders."
+---
+
+Fetch this endpoint at startup and whenever you need to refresh market metadata.
+
+## Auth
+
+No authentication required.
+
+## Request
+
+```bash
+curl https://exchange.jamesxu.dev/api/v1/markets
+```
+
+## Example response
+
+```json
+[
+  {
+    "market_id": "BTC-USD",
+    "display_name": "Bitcoin",
+    "base_asset": "BTC",
+    "quote_asset": "USD",
+    "tick_size": 1,
+    "min_order_quantity": 1,
+    "reference_price": 100,
+    "settlement_price": null,
+    "status": "enabled",
+    "created_at": "2026-03-19T19:29:48.403522Z",
+    "updated_at": "2026-03-19T19:29:48.403522Z"
+  }
+]
+```
+
+## Why it matters
+
+- `status` tells you whether the market is live, disabled, or settled
+- `tick_size` controls valid prices
+- `min_order_quantity` controls valid order size
+- `settlement_price` becomes non-null after settlement
+
+For the higher-level state machine, see [Market lifecycle](/reference/market-lifecycle).

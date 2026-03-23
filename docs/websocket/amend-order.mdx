@@ -1,0 +1,35 @@
+---
+title: "amend_order"
+description: "Reduce the remaining quantity on an existing order over WebSocket."
+---
+
+## Client message
+
+```json
+{
+  "op": "amend_order",
+  "request_id": "req-3",
+  "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+  "remaining": 1
+}
+```
+
+## Success response
+
+```json
+{"type":"ack","op":"amend_order","request_id":"req-3"}
+```
+
+## Failure response
+
+Failures are returned as `reject` messages. Common reasons are:
+
+- `unauthenticated`
+- `order_not_found`
+- `order_not_owned`
+- `invalid_remaining`
+- `invalid_amend`
+
+## Notes
+
+- the server will also emit an `order_state` event if the amend succeeds

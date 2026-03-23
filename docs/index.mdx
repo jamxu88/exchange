@@ -1,41 +1,41 @@
 ---
 title: "Exchange API"
-description: "Public API documentation for Exchange REST and WebSocket integrations."
+description: "Competitor-facing REST and WebSocket documentation for connecting to the Exchange during the trading competition."
 ---
 
-This site documents the public Exchange API surface for market data, trading, account state, and operator workflows.
+This site documents the competitor-facing Exchange API surface for market data, trading, positions, fills, and leaderboard access.
+
+The public Mintlify docs intentionally focus on what a trader needs during the competition. Internal operator and admin workflows are not part of this site.
 
 ## Base URLs
 
 - REST: `https://exchange.jamesxu.dev`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
-- OpenAPI JSON: `https://exchange.jamesxu.dev/api-doc/openapi.json`
-- Swagger UI: `https://exchange.jamesxu.dev/docs`
 
-## In this documentation
+## What you can do as a competitor
 
-- Authentication and request headers
-- REST endpoints for markets, account reads, orders, admin control, and leaderboard
-- WebSocket messages for authentication, market data, trading, and user events
-- Resync behavior for sequence gaps and reconnects
-- Error codes and concrete client examples
+- fetch the current market list and lifecycle state
+- authenticate with your assigned API key
+- read your profile, positions, portfolio, fills, and open orders
+- submit, amend, and cancel orders over REST or WebSocket
+- subscribe to live L3 market data and user-specific trade events
+- react correctly to market disablement, settlement, and resync requests
 
 ## Authentication model
 
-- Trader routes use assigned API keys in `x-api-key`
-- Admin routes use a bearer token in `Authorization`
-- WebSocket sessions authenticate with `{"op":"authenticate","api_key":"..."}` on the socket
+- Your operator assigns you a single API key.
+- Authenticated REST requests send that key in `x-api-key`.
+- WebSocket sessions authenticate with `{"op":"authenticate","api_key":"..."}`.
+- There is no user registration or password flow.
 
-## Quick links
+## Start here
 
 - [Authentication](/reference/authentication)
+- [Market lifecycle](/reference/market-lifecycle)
 - [REST API](/reference/rest-api)
 - [WebSocket API](/reference/websocket-api)
 - [Recovery and resync](/reference/recovery-and-resync)
 - [Error codes](/reference/error-codes)
-- [Examples](/reference/examples)
-
-The sidebar also includes a generated `REST Reference` section sourced from the live OpenAPI schema at `https://exchange.jamesxu.dev/api-doc/openapi.json`.
 
 ## Preview the docs locally
 

@@ -1,0 +1,48 @@
+---
+title: "DELETE /api/v1/orders/{order_id}"
+description: "Cancel an existing open order."
+---
+
+Cancel removes a resting order from the book.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Path parameter
+
+- `order_id` the order you want to cancel
+
+## Request
+
+```bash
+curl \
+  -X DELETE \
+  -H "x-api-key: YOUR_API_KEY" \
+  https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID
+```
+
+## Example response
+
+```json
+{
+  "order": {
+    "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+    "market": "BTC-USD",
+    "side": "BUY",
+    "price": 100,
+    "quantity": 2,
+    "remaining": 1,
+    "created_at": "2026-03-18T15:28:01.342510Z"
+  }
+}
+```
+
+## Notes
+
+- only open orders can be canceled
+- you can only cancel your own order
+- if the order was already fully matched or settled, the cancel will fail

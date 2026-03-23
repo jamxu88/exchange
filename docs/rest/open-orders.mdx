@@ -1,0 +1,34 @@
+---
+title: "GET /api/v1/open-orders"
+description: "Read your currently resting orders, optionally filtered by market."
+---
+
+Use this endpoint to rebuild visible working orders after login, reconnect, or resync.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Query parameters
+
+- `market` optional market filter, for example `BTC-USD`
+
+## Request
+
+```bash
+curl 'https://exchange.jamesxu.dev/api/v1/open-orders?market=BTC-USD' \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+## Example response
+
+```json
+[]
+```
+
+## Notes
+
+- only currently open resting orders are returned
+- this endpoint is the recommended source of truth after a reconnect

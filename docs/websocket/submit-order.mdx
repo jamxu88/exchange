@@ -1,0 +1,44 @@
+---
+title: "submit_order"
+description: "Submit a new limit order over WebSocket."
+---
+
+WebSocket order entry is useful when you want order actions and execution events on the same connection.
+
+## Client message
+
+```json
+{
+  "op": "submit_order",
+  "request_id": "req-1",
+  "market": "BTC-USD",
+  "side": "BUY",
+  "price": 100,
+  "quantity": 2
+}
+```
+
+## Success response
+
+```json
+{"type":"ack","op":"submit_order","request_id":"req-1"}
+```
+
+On success, you should also expect later `order_state` and `fill` events.
+
+## Failure response
+
+```json
+{
+  "type": "reject",
+  "op": "submit_order",
+  "request_id": "req-1",
+  "code": "position_limit_exceeded",
+  "message": "projected net position for BTC-USD would be 1005; limit is +/-1000"
+}
+```
+
+## Notes
+
+- the same validation rules apply as REST order submission
+- `request_id` is client-defined and echoed back in `ack` or `reject`

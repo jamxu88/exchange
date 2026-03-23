@@ -1,0 +1,42 @@
+---
+title: "GET /api/v1/portfolio"
+description: "Read your current position limit and all current positions in one response."
+---
+
+Use this endpoint to bootstrap the account panel in a client UI.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Request
+
+```bash
+curl https://exchange.jamesxu.dev/api/v1/portfolio \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+## Example response
+
+```json
+{
+  "trader_id": "c7f8c572-8a50-4dbd-a1e1-9f452774b636",
+  "position_limit": 1000,
+  "positions": [
+    {
+      "market": "BTC-USD",
+      "net_quantity": 40,
+      "average_entry_price": 1,
+      "realized_pnl": 0,
+      "updated_at": "2026-03-19T21:21:34.741319Z"
+    }
+  ]
+}
+```
+
+## Notes
+
+- `position_limit` is the fixed per-market net limit currently enforced by the exchange
+- use this endpoint when you want a single account bootstrap call instead of separate user and position reads

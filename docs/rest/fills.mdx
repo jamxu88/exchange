@@ -1,0 +1,44 @@
+---
+title: "GET /api/v1/fills"
+description: "Read your trade fills, optionally filtered by market."
+---
+
+Use this endpoint to rebuild recent execution history or to resync a client that missed user events.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Query parameters
+
+- `market` optional market filter, for example `BTC-USD`
+
+## Request
+
+```bash
+curl 'https://exchange.jamesxu.dev/api/v1/fills?market=BTC-USD' \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+## Example response
+
+```json
+[
+  {
+    "fill_id": "20e4a2c0-69e8-450d-be27-25651a7e12e2",
+    "market": "BTC-USD",
+    "maker_order_id": "0027102e-51b0-4d1e-92b4-8e325b0f03b7",
+    "taker_order_id": "2af87221-adfc-4c86-aa06-9ca983eb8775",
+    "price": 1,
+    "quantity": 20,
+    "occurred_at": "2026-03-19T21:21:22.192411Z"
+  }
+]
+```
+
+## Notes
+
+- a fill record does not say whether you were maker or taker; use the order ids or your local state if you need that distinction
+- use this endpoint during recovery if you receive a user-stream `resync_required`

@@ -147,7 +147,7 @@ What is still true:
   - full replay-based recovery is still not implemented
 - Docs:
   - OpenAPI exists for the current REST surface
-  - public Mintlify API docs now cover auth, REST, WS, recovery, errors, and examples
+  - public Mintlify API docs now focus on the competitor workflow, market lifecycle, and per-endpoint REST/WS call pages
   - internal architecture, client, deployment, and runbook notes now live under `internal-docs/`
   - backup and restore guidance still needs deeper operational work
 - Admin control plane:

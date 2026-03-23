@@ -1,13 +1,13 @@
 ---
 title: "Authentication"
-description: "Authentication for trader and admin REST routes and the WebSocket session."
+description: "How competitors authenticate REST requests and WebSocket sessions with their assigned API key."
 ---
 
-## Trader authentication
+## Assigned API keys
 
-Traders do not self-register. Each trader receives an assigned API key from an operator.
+Competitors do not self-register. Each team or trader receives an API key from the competition operator.
 
-That API key is the only trader credential.
+That API key is your only credential for the public trading API.
 
 ## REST trader auth
 
@@ -19,22 +19,16 @@ x-api-key: YOUR_API_KEY
 
 Used for:
 
+- `GET /api/v1/leaderboard`
 - `GET /api/v1/user`
+- `GET /api/v1/markets` does not require auth
 - `GET /api/v1/positions`
 - `GET /api/v1/portfolio`
-- `GET /api/v1/open-orders`
 - `GET /api/v1/fills`
+- `GET /api/v1/open-orders`
 - `POST /api/v1/orders`
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
-
-## Admin auth
-
-Admin routes require:
-
-```http
-Authorization: Bearer ADMIN_API_TOKEN
-```
 
 ## WebSocket auth
 
@@ -65,3 +59,4 @@ Successful response:
 - There are no user passwords.
 - There is no JWT or OAuth flow.
 - WebSocket market data can be subscribed to before authentication, but trading and user-scoped events require a successful `authenticate` message.
+- Internal admin and operator routes exist, but they are intentionally omitted from this public competitor guide.

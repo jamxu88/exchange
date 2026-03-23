@@ -1,0 +1,40 @@
+---
+title: "GET /api/v1/positions"
+description: "Read your signed net positions and realized PnL by market."
+---
+
+This is the raw positions endpoint. It is the best source for your current signed exposure per market.
+
+## Auth
+
+```http
+x-api-key: YOUR_API_KEY
+```
+
+## Request
+
+```bash
+curl https://exchange.jamesxu.dev/api/v1/positions \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+## Example response
+
+```json
+[
+  {
+    "market": "BTC-USD",
+    "net_quantity": 40,
+    "average_entry_price": 1,
+    "realized_pnl": 0,
+    "updated_at": "2026-03-19T21:21:34.741319Z"
+  }
+]
+```
+
+## Notes
+
+- `net_quantity > 0` means you are long
+- `net_quantity < 0` means you are short
+- `average_entry_price` is null when the market is flat
+- `realized_pnl` accumulates as you reduce, flip, or settle a position

@@ -1,0 +1,53 @@
+---
+title: "GET /health"
+description: "Check whether the exchange is reachable and whether persistence is healthy."
+---
+
+Use this endpoint for connectivity checks before you begin a session.
+
+## Auth
+
+No authentication required.
+
+## Request
+
+```bash
+curl https://exchange.jamesxu.dev/health
+```
+
+## Example response
+
+```json
+{
+  "status": "ok",
+  "service": "exchange",
+  "now": "2026-03-23T05:02:16.122465022+00:00",
+  "persistence": {
+    "backend": "postgres",
+    "mode": "ok",
+    "queue_capacity": 4096,
+    "backpressure_threshold": 3277,
+    "queue_depth": 0,
+    "in_flight_ops": 0,
+    "backlog_depth": 0,
+    "high_water_mark": 1,
+    "total_enqueued": 10,
+    "total_flushes": 5,
+    "total_flushed_ops": 10,
+    "total_blocked_enqueues": 0,
+    "total_enqueue_block_time_ms": 0,
+    "total_flush_failures": 0,
+    "total_retries": 0,
+    "last_batch_size": 2,
+    "last_flush_latency_ms": 8,
+    "max_flush_latency_ms": 8,
+    "last_error": null
+  }
+}
+```
+
+## What to look at
+
+- `status = "ok"` means the service is reachable and not currently degraded
+- `status = "degraded"` means the exchange is up, but persistence is retrying, backpressured, or stopped
+- `persistence.mode` gives the detailed persistence state

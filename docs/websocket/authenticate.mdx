@@ -1,0 +1,26 @@
+---
+title: "authenticate"
+description: "Authenticate a WebSocket session with your assigned API key."
+---
+
+Authentication is required before you can submit, amend, or cancel orders over WebSocket, and before you receive user-specific `fill` or `order_state` events.
+
+## Client message
+
+```json
+{"op":"authenticate","api_key":"YOUR_API_KEY"}
+```
+
+## Success response
+
+```json
+{
+  "type": "authenticated",
+  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+  "username": "team-alpha"
+}
+```
+
+## Failure behavior
+
+Invalid credentials are returned as a WebSocket `error` message with `code = "invalid_api_key"`.

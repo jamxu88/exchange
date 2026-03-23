@@ -1,185 +1,35 @@
 ---
 title: "REST API"
-description: "REST endpoints for health, market metadata, admin control, account reads, leaderboard, and order entry."
+description: "Competitor-facing REST overview and links to the individual endpoint pages."
 ---
 
-Machine-readable and interactive reference are also available at:
+Use the REST API for account bootstrap, market discovery, and simple order management.
 
-```text
-https://exchange.jamesxu.dev/api-doc/openapi.json
-https://exchange.jamesxu.dev/docs
-```
+## Competitor endpoints
 
-Mintlify also renders that schema into the `REST Reference` section in the sidebar.
+Public and competitor-facing:
 
-## Endpoints
+- [GET /health](/rest/health)
+- [GET /api/v1/markets](/rest/markets)
+- [GET /api/v1/user](/rest/user)
+- [GET /api/v1/positions](/rest/positions)
+- [GET /api/v1/portfolio](/rest/portfolio)
+- [GET /api/v1/leaderboard](/rest/leaderboard)
+- [GET /api/v1/open-orders](/rest/open-orders)
+- [GET /api/v1/fills](/rest/fills)
+- [POST /api/v1/orders](/rest/submit-order)
+- [PATCH /api/v1/orders/{order_id}](/rest/amend-order)
+- [DELETE /api/v1/orders/{order_id}](/rest/cancel-order)
 
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| `GET` | `/health` | none | service and persistence health |
-| `GET` | `/api/v1/markets` | none | list configured markets |
-| `POST` | `/api/v1/admin/users` | admin bearer token | provision a competition user |
-| `GET` | `/api/v1/admin/state` | admin bearer token | current controls, markets, recent admin messages, persistence |
-| `POST` | `/api/v1/admin/trading/start` | admin bearer token | enable new trading submissions |
-| `POST` | `/api/v1/admin/trading/stop` | admin bearer token | disable new trading submissions |
-| `GET` | `/api/v1/admin/markets` | admin bearer token | list markets |
-| `POST` | `/api/v1/admin/markets` | admin bearer token | create or replace one market definition |
-| `PATCH` | `/api/v1/admin/markets/{market_id}` | admin bearer token | update market status or limits |
-| `DELETE` | `/api/v1/admin/markets/{market_id}` | admin bearer token | delete a market with no open orders |
-| `POST` | `/api/v1/admin/markets/{market_id}/settle` | admin bearer token | cancel resting orders and settle open net positions at a supplied true value per share |
-| `POST` | `/api/v1/admin/config/load` | admin bearer token | bulk-load exchange config / market definitions |
-| `GET` | `/api/v1/admin/messages` | admin bearer token | recent admin messages |
-| `POST` | `/api/v1/admin/messages` | admin bearer token | send broadcast or user-targeted admin message |
-| `POST` | `/api/v1/admin/users/reset` | admin bearer token | clear all user positions, orders, and fills |
-| `GET` | `/api/v1/admin/leaderboard` | admin bearer token | leaderboard snapshot |
-| `GET` | `/api/v1/user` | `x-api-key` | authenticated user profile |
-| `GET` | `/api/v1/positions` | `x-api-key` | user positions |
-| `GET` | `/api/v1/portfolio` | `x-api-key` | simple portfolio snapshot |
-| `GET` | `/api/v1/leaderboard` | `x-api-key` | leaderboard snapshot |
-| `GET` | `/api/v1/open-orders` | `x-api-key` | open orders, optional `market` filter |
-| `GET` | `/api/v1/fills` | `x-api-key` | fills, optional `market` filter |
-| `POST` | `/api/v1/orders` | `x-api-key` | submit order |
-| `PATCH` | `/api/v1/orders/{order_id}` | `x-api-key` | amend remaining quantity |
-| `DELETE` | `/api/v1/orders/{order_id}` | `x-api-key` | cancel order |
-
-## Provision a user
-
-```bash
-curl \
-  -X POST \
-  -H "Authorization: Bearer ADMIN_API_TOKEN" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/admin/users \
-  -d '{"username":"team-alpha"}'
-```
-
-Example response:
-
-```json
-{
-  "profile": {
-    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-    "username": "team-alpha",
-    "api_key": "exch_1d4208be6fa84b8cb0a2e5cfa9508d5f",
-    "created_at": "2026-03-18T15:27:42.159901Z"
-  }
-}
-```
-
-## Submit an order
-
-```bash
-curl \
-  -X POST \
-  -H "x-api-key: YOUR_API_KEY" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/orders \
-  -d '{"market":"BTC-USD","side":"BUY","price":100,"quantity":2}'
-```
-
-Example response:
-
-```json
-{
-  "order": {
-    "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
-    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-    "market": "BTC-USD",
-    "side": "BUY",
-    "price": 100,
-    "quantity": 2,
-    "remaining": 2,
-    "created_at": "2026-03-18T15:28:01.342510Z"
-  },
-  "fills": [],
-  "resting": true
-}
-```
-
-Configured market metadata now matters:
-
-- exchange-wide trading can be stopped by admins
-- markets can be enabled, disabled, or settled
-- `price` must align to the market tick size
-- `quantity` must be at least the market minimum order quantity
-
-## Amend an order
-
-```bash
-curl \
-  -X PATCH \
-  -H "x-api-key: YOUR_API_KEY" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID \
-  -d '{"remaining":1}'
-```
-
-## Cancel an order
-
-```bash
-curl \
-  -X DELETE \
-  -H "x-api-key: YOUR_API_KEY" \
-  https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID
-```
-
-## Create a market
-
-```bash
-curl \
-  -X POST \
-  -H "Authorization: Bearer ADMIN_API_TOKEN" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/admin/markets \
-  -d '{
-    "market_id":"BTC-USD",
-    "display_name":"Bitcoin",
-    "base_asset":"BTC",
-    "quote_asset":"USD",
-    "tick_size":1,
-    "min_order_quantity":1,
-    "reference_price":100,
-    "enabled":true
-  }'
-```
-
-## Settle a market
-
-```bash
-curl \
-  -X POST \
-  -H "Authorization: Bearer ADMIN_API_TOKEN" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/admin/markets/BTC-USD/settle \
-  -d '{"settlement_price":150}'
-```
-
-`settlement_price` is the admin-entered true value for one share in that market. Settlement realizes PnL against each trader's signed net position and then flattens the market to zero position.
-
-## Send an admin message
-
-```bash
-curl \
-  -X POST \
-  -H "Authorization: Bearer ADMIN_API_TOKEN" \
-  -H "content-type: application/json" \
-  https://exchange.jamesxu.dev/api/v1/admin/messages \
-  -d '{
-    "target_username":null,
-    "market":"BTC-USD",
-    "level":"info",
-    "title":"Desk notice",
-    "body":"Trading will stop in five minutes."
-  }'
-```
-
-## Current data model notes
+## Data model notes
 
 - `side` is `BUY` or `SELL`
 - `price`, `quantity`, and `remaining` are integer `u64` values
-- user risk is position-based, with a fixed per-market net limit of `+/-1000`
-- traders can sell from flat and go short; order admission is based on worst-case net exposure if resting open orders were to execute
-- realized PnL is tracked on positions; the runtime does not require pre-seeded inventory or cash balances to open a long or short position
-- `open-orders` and `fills` support an optional `market` query param
-- `leaderboard` ranks by current marked net PnL using settled prices, orderbook marks, or market reference prices
-- pagination is not implemented yet
+- traders can buy from flat, sell from flat, go long, and go short
+- risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
+- `open-orders` and `fills` accept an optional `market` query parameter
+- leaderboard ranking is based on current marked PnL
+
+## What is intentionally omitted here
+
+Internal operator and admin endpoints are not part of the public competitor docs. The Mintlify site is meant to answer one question cleanly: how a competitor connects, reads state, and trades.

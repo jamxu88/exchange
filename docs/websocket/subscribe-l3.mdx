@@ -1,0 +1,34 @@
+---
+title: "subscribe"
+description: "Subscribe to one L3 market-data stream on the socket."
+---
+
+Use `subscribe` to receive a fresh snapshot and then sequenced deltas for one market.
+
+## Client message
+
+```json
+{"op":"subscribe","channel":"l3","market":"BTC-USD","last_sequence":null}
+```
+
+## First server response
+
+```json
+{
+  "type": "snapshot",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 0,
+  "bids": [],
+  "asks": []
+}
+```
+
+## Ongoing updates
+
+After the snapshot, the server sends `delta` messages with increasing `sequence` values.
+
+## Notes
+
+- the current implementation supports one L3 market subscription per connection
+- `last_sequence` is part of the message shape, but the current recovery flow still expects a fresh resubscribe after a gap
