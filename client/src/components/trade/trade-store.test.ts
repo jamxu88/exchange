@@ -1,5 +1,8 @@
 import {
   createInitialTradeState,
+  parseNumberInput,
+  sanitizeWholeNumberInput,
+  selectPendingRows,
   selectPnlMetrics,
   selectSelectedMarketSummary,
   tradeReducer,
@@ -36,6 +39,43 @@ function bootstrapData(): TradeBootstrapData {
 }
 
 describe("tradeReducer", () => {
+  it("sanitizes limit price input to whole numbers", () => {
+    const initial = createInitialTradeState(markets);
+    const next = tradeReducer(initial, {
+      type: "set-limit-price",
+      value: "1.2a0",
+    });
+
+    expect(next.limitPriceInput).toBe("1");
+    expect(sanitizeWholeNumberInput("1.2a0")).toBe("1");
+    expect(parseNumberInput("1.2a0")).toBe(1);
+  });
+
+  it("resolves pending rows to configured market names", () => {
+    const initial = createInitialTradeState([
+      { id: "BTC-USD", name: "Bitcoin", baseAsset: "BTC", quoteAsset: "USD" },
+    ]);
+    initial.pendingOrders = [
+      {
+        id: "order-1",
+        createdAt: "2026-03-17T09:30:00Z",
+        marketId: "BTC-USD",
+        marketName: "BTC-USD",
+        side: "buy",
+        shares: 2,
+        limitPrice: 101,
+        status: "open",
+      },
+    ];
+
+    expect(selectPendingRows(initial)).toEqual([
+      expect.objectContaining({
+        marketId: "BTC-USD",
+        marketName: "Bitcoin",
+      }),
+    ]);
+  });
+
   it("hydrates positions and open orders from bootstrap data", () => {
     const initial = createInitialTradeState(markets);
     const next = tradeReducer(initial, {

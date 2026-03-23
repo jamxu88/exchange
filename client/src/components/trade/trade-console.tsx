@@ -524,12 +524,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                       <input
                         className="w-full bg-transparent px-[14px] text-center outline-none disabled:text-[#b8b8bc]"
                         disabled={state.orderType === "market"}
-                        inputMode="decimal"
+                        inputMode="numeric"
                         onChange={(event) => actions.setLimitPrice(event.target.value)}
+                        pattern="[0-9]*"
                         value={
                           state.orderType === "market"
                             ? derived.estimated.derivedPrice > 0
-                              ? derived.estimated.derivedPrice.toFixed(2)
+                              ? String(Math.trunc(derived.estimated.derivedPrice))
                               : "--"
                             : state.limitPriceInput
                         }

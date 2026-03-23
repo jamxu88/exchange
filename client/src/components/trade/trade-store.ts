@@ -137,7 +137,7 @@ export function formatMaybePrice(value: number | null) {
 }
 
 export function formatInputPrice(value: number) {
-  return value.toFixed(2);
+  return String(Math.max(0, Math.trunc(value)));
 }
 
 export function formatBookTotal(value: number) {
@@ -152,8 +152,13 @@ export function formatSignedCurrency(value: number) {
   return currencyFormatter.format(value);
 }
 
+export function sanitizeWholeNumberInput(value: string) {
+  const [wholePart] = value.split(".");
+  return wholePart.replace(/[^0-9]/g, "");
+}
+
 export function parseNumberInput(value: string) {
-  const numeric = Number(value.replace(/[^0-9.]/g, ""));
+  const numeric = Number(sanitizeWholeNumberInput(value));
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
@@ -415,7 +420,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
     ticketSide: "buy",
     positionFilter: "active",
     orderType: "limit",
-    limitPriceInput: "0.00",
+    limitPriceInput: "0",
     sharesInput: "20",
     messages: [],
     submittedOrders: 0,
@@ -485,7 +490,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
       return { ...state, orderType: action.orderType };
 
     case "set-limit-price":
-      return { ...state, limitPriceInput: action.value };
+      return { ...state, limitPriceInput: sanitizeWholeNumberInput(action.value) };
 
     case "set-shares":
       return { ...state, sharesInput: action.value };
@@ -823,7 +828,13 @@ export function selectActiveRows(state: TradeState) {
 }
 
 export function selectPendingRows(state: TradeState) {
-  return [...state.pendingOrders].reverse();
+  return [...state.pendingOrders]
+    .reverse()
+    .map((order) => ({
+      ...order,
+      marketName:
+        selectMarketById(state, order.marketId)?.name ?? order.marketName ?? order.marketId,
+    }));
 }
 
 export function selectSelectedMarketSummary(state: TradeState) {

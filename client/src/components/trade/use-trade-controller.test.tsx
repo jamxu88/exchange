@@ -135,6 +135,72 @@ describe("useTradeController", () => {
     expect(result.current.state.filledOrders).toBe(1);
   });
 
+  it("truncates decimal limit input before submit", async () => {
+    const submitOrder = vi.fn().mockResolvedValue({
+      orderId: "order-1",
+      marketId: "BTC-USD",
+      marketName: "BTC-USD",
+      side: "buy",
+      orderType: "limit",
+      quantity: 2,
+      requestedPrice: 1,
+      effectivePrice: 1,
+      resting: false,
+      remaining: 0,
+      fills: [],
+      createdAt: "2026-03-17T09:30:00Z",
+      syntheticMarket: false,
+    });
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData: vi.fn().mockResolvedValue({
+          markets: runtime.markets,
+          user: null,
+          positions: [],
+          openOrders: [],
+          fills: [],
+          warnings: [],
+        }),
+        submitOrder,
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+    });
+
+    act(() => {
+      result.current.actions.setLimitPrice("1.2");
+      result.current.actions.setShares("2");
+    });
+
+    expect(result.current.state.limitPriceInput).toBe("1");
+
+    await act(async () => {
+      await result.current.actions.submitOrder();
+    });
+
+    expect(submitOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedPrice: 1,
+        effectivePrice: 1,
+      }),
+    );
+  });
+
   it("surfaces a bootstrap failure without retrying on every render", async () => {
     const bootstrapAccountData = vi.fn().mockRejectedValue(new Error("bootstrap failed"));
     const restClientFactory = () =>
