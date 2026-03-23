@@ -140,7 +140,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const pnlMetrics = selectPnlMetrics(state);
   const visibleMessages = [...state.messages].reverse();
   const summary = derived.summary;
-  const askLevels = padLevels(summary.asks, 7);
+  const askLevels = padLevels(summary.asks, 7).reverse();
   const bidLevels = padLevels(summary.bids, 7);
   const connection = connectionPresentation(state.connectionStatus);
   const initials = initialsForUser(state.user);
