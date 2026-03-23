@@ -52,6 +52,18 @@ function messageToneClass(tone: MessageTone) {
   return "text-[#c7c7cb]";
 }
 
+function messageCardToneClass(tone: MessageTone) {
+  if (tone === "positive") {
+    return "border-[#24452a] bg-[#101611]";
+  }
+
+  if (tone === "negative") {
+    return "border-[#4c2626] bg-[#171011]";
+  }
+
+  return "border-[#222327] bg-[#111114]";
+}
+
 function HeaderSeparator() {
   return <div className="h-[23px] w-px bg-[#5a5a5f]" />;
 }
@@ -596,16 +608,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   {visibleMessages.length > 0 ? (
                     visibleMessages.map((message) => (
                       <div
-                        className="rounded-[10px] border border-[#222327] bg-[#111114] px-[12px] py-[10px]"
+                        className={`rounded-[10px] border px-[12px] py-[10px] ${messageCardToneClass(message.tone)}`}
                         key={message.id}
                       >
-                        <div className="flex items-center justify-between text-[11px] font-medium leading-none text-[#7d7d84]">
+                        <div className="text-[11px] font-medium leading-none text-[#7d7d84]">
                           <span>{message.time}</span>
-                          <span className={messageToneClass(message.tone)}>
-                            {message.tone}
-                          </span>
                         </div>
-                        <p className="mt-[8px] text-[14px] font-medium leading-[1.15] text-white">
+                        <p className={`mt-[8px] text-[14px] font-medium leading-[1.15] ${messageToneClass(message.tone)}`}>
                           {message.text}
                         </p>
                       </div>

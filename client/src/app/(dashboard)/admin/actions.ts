@@ -2,6 +2,11 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import {
+  COMPETITION_QUOTE_ASSET,
+  deriveCompetitionMarketId,
+  normalizeBaseAsset,
+} from "@/app/(dashboard)/admin/market-utils";
 import { readSessionFromCookieValue, SESSION_COOKIE } from "@/lib/auth";
 import { ExchangeServerError, sendAdminMutation } from "@/lib/exchange-server";
 
@@ -67,14 +72,15 @@ export async function resetAllUsersAction() {
 }
 
 export async function createMarketAction(formData: FormData) {
+  const baseAsset = normalizeBaseAsset(String(formData.get("baseAsset") ?? ""));
   await runMutation(
     "/api/v1/admin/markets",
     "POST",
     {
-      market_id: String(formData.get("marketId") ?? "").trim(),
+      market_id: deriveCompetitionMarketId(baseAsset),
       display_name: asOptionalString(formData, "displayName"),
-      base_asset: String(formData.get("baseAsset") ?? "").trim(),
-      quote_asset: String(formData.get("quoteAsset") ?? "").trim(),
+      base_asset: baseAsset,
+      quote_asset: COMPETITION_QUOTE_ASSET,
       tick_size: Number(formData.get("tickSize") ?? 0),
       min_order_quantity: Number(formData.get("minOrderQuantity") ?? 0),
       reference_price: parseNumberField(formData, "referencePrice"),

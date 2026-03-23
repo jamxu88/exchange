@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
-  createMarketAction,
   deleteMarketAction,
   loadConfigAction,
   resetAllUsersAction,
@@ -11,6 +10,11 @@ import {
   stopTradingAction,
   toggleMarketAction,
 } from "@/app/(dashboard)/admin/actions";
+import { CreateMarketForm } from "@/app/(dashboard)/admin/create-market-form";
+import {
+  COMPETITION_QUOTE_ASSET,
+  deriveCompetitionMarketId,
+} from "@/app/(dashboard)/admin/market-utils";
 import {
   ExchangeServerError,
   getAdminLeaderboard,
@@ -247,70 +251,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <section className="surface-panel px-6 py-6">
           <h2 className="surface-title">Create market</h2>
-          <form action={createMarketAction} className="mt-5 grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                name="marketId"
-                placeholder="BTC-USD"
-                required
-              />
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                name="displayName"
-                placeholder="Bitcoin"
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                name="baseAsset"
-                placeholder="BTC"
-                required
-              />
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                name="quoteAsset"
-                placeholder="USD"
-                required
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                defaultValue="1"
-                min="1"
-                name="tickSize"
-                required
-                type="number"
-              />
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                defaultValue="1"
-                min="1"
-                name="minOrderQuantity"
-                required
-                type="number"
-              />
-              <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
-                min="0"
-                name="referencePrice"
-                placeholder="Reference price"
-                type="number"
-              />
-            </div>
-            <label className="flex items-center gap-3 text-lg text-[var(--muted-strong)]">
-              <input defaultChecked name="enabled" type="checkbox" />
-              Enable immediately
-            </label>
-            <button
-              className="rounded-2xl bg-[var(--green)] px-4 py-3 text-base font-semibold text-white"
-              type="submit"
-            >
-              Save market
-            </button>
-          </form>
+          <CreateMarketForm />
         </section>
 
         <section className="surface-panel px-6 py-6">
@@ -321,16 +262,24 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               defaultValue={JSON.stringify(
                 {
                   trading_enabled: adminState.controls.trading_enabled,
-                  markets: adminState.markets.map((market) => ({
-                    market_id: market.market_id,
-                    display_name: market.display_name,
-                    base_asset: market.base_asset,
-                    quote_asset: market.quote_asset,
-                    tick_size: market.tick_size,
-                    min_order_quantity: market.min_order_quantity,
-                    reference_price: market.reference_price,
-                    enabled: market.status === "enabled",
-                  })),
+                  markets: adminState.markets.map((market) => {
+                    const defaultMarketId = deriveCompetitionMarketId(market.base_asset);
+
+                    return {
+                      ...(market.market_id !== defaultMarketId
+                        ? { market_id: market.market_id }
+                        : {}),
+                      display_name: market.display_name,
+                      base_asset: market.base_asset,
+                      ...(market.quote_asset !== COMPETITION_QUOTE_ASSET
+                        ? { quote_asset: market.quote_asset }
+                        : {}),
+                      tick_size: market.tick_size,
+                      min_order_quantity: market.min_order_quantity,
+                      reference_price: market.reference_price,
+                      enabled: market.status === "enabled",
+                    };
+                  }),
                 },
                 null,
                 2,

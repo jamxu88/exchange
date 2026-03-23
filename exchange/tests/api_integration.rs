@@ -5,9 +5,9 @@ use axum::{
 use exchange::{
     admin::{
         AdminMessageEntry, AdminMessageLevel, AdminStateResponse, DeleteMarketResponse,
-        LeaderboardRow, LoadExchangeConfigRequest, LoadExchangeConfigResponse, MarketDefinition,
-        MarketStatus, ResetUsersResponse, SendAdminMessageRequest, SettleMarketRequest,
-        SettleMarketResponse, TradingControlResponse, UpdateMarketRequest, UpsertMarketRequest,
+        LeaderboardRow, LoadExchangeConfigResponse, MarketDefinition, MarketStatus,
+        ResetUsersResponse, SendAdminMessageRequest, SettleMarketRequest,
+        SettleMarketResponse, TradingControlResponse, UpdateMarketRequest,
     },
     accounts::UserProfile,
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
@@ -911,22 +911,22 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
             Method::POST,
             "/api/v1/admin/markets",
             "test-admin-token",
-            &UpsertMarketRequest {
-                market_id: "SOL-USD".to_string(),
-                display_name: Some("Solana".to_string()),
-                base_asset: "SOL".to_string(),
-                quote_asset: "USD".to_string(),
-                tick_size: 5,
-                min_order_quantity: 2,
-                reference_price: Some(25),
-                enabled: true,
-            },
+            &serde_json::json!({
+                "display_name": "Solana",
+                "base_asset": "sol",
+                "tick_size": 5,
+                "min_order_quantity": 2,
+                "reference_price": 25,
+                "enabled": true
+            }),
         ))
         .await
         .expect("response");
     assert_eq!(create_response.status(), StatusCode::OK);
     let created: MarketDefinition = json_body(create_response).await;
     assert_eq!(created.market_id, "SOL-USD");
+    assert_eq!(created.base_asset, "SOL");
+    assert_eq!(created.quote_asset, "USD");
     assert_eq!(created.tick_size, 5);
 
     let patch_response = app
@@ -985,19 +985,19 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
             Method::POST,
             "/api/v1/admin/config/load",
             "test-admin-token",
-            &LoadExchangeConfigRequest {
-                trading_enabled: Some(false),
-                markets: vec![UpsertMarketRequest {
-                    market_id: "DOGE-USD".to_string(),
-                    display_name: Some("Dogecoin".to_string()),
-                    base_asset: "DOGE".to_string(),
-                    quote_asset: "USD".to_string(),
-                    tick_size: 1,
-                    min_order_quantity: 10,
-                    reference_price: Some(1),
-                    enabled: true,
-                }],
-            },
+            &serde_json::json!({
+                "trading_enabled": false,
+                "markets": [
+                    {
+                        "display_name": "Dogecoin",
+                        "base_asset": "doge",
+                        "tick_size": 1,
+                        "min_order_quantity": 10,
+                        "reference_price": 1,
+                        "enabled": true
+                    }
+                ]
+            }),
         ))
         .await
         .expect("response");

@@ -13,6 +13,8 @@ use tracing::info;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+const DEFAULT_COMPETITION_QUOTE_ASSET: &str = "USD";
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AdminAuditEntry {
     pub audit_id: Uuid,
@@ -84,9 +86,11 @@ pub struct AdminMessageEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpsertMarketRequest {
+    #[serde(default)]
     pub market_id: String,
     pub display_name: Option<String>,
     pub base_asset: String,
+    #[serde(default)]
     pub quote_asset: String,
     pub tick_size: u64,
     pub min_order_quantity: u64,
@@ -188,8 +192,6 @@ pub enum AdminError {
     MarketIdMismatch { expected: String },
     #[error("base asset is required")]
     MissingBaseAsset,
-    #[error("quote asset is required")]
-    MissingQuoteAsset,
     #[error("tick size must be greater than zero")]
     InvalidTickSize,
     #[error("minimum order quantity must be greater than zero")]
@@ -225,7 +227,6 @@ impl AdminError {
             Self::MissingMarketId
             | Self::MarketIdMismatch { .. }
             | Self::MissingBaseAsset
-            | Self::MissingQuoteAsset
             | Self::InvalidTickSize
             | Self::InvalidMinimumOrderQuantity
             | Self::MissingMessageBody
@@ -561,10 +562,20 @@ impl AdminService {
         state.storage.upsert_market(market.clone());
 
         let announcement = request.announcement.unwrap_or_else(|| {
-            format!(
-                "Market {} settled at {} {} per {}.",
-                market.display_name, request.settlement_price, market.quote_asset, market.base_asset
-            )
+            if market.quote_asset == DEFAULT_COMPETITION_QUOTE_ASSET {
+                format!(
+                    "Market {} settled at ${} per {}.",
+                    market.display_name, request.settlement_price, market.base_asset
+                )
+            } else {
+                format!(
+                    "Market {} settled at {} {} per {}.",
+                    market.display_name,
+                    request.settlement_price,
+                    market.quote_asset,
+                    market.base_asset
+                )
+            }
         });
         let _ = Self::send_message(
             state,
@@ -736,19 +747,25 @@ fn build_market_definition(
     existing: Option<&MarketDefinition>,
     request: UpsertMarketRequest,
 ) -> Result<MarketDefinition, AdminError> {
-    let market_id = request.market_id.trim().to_string();
-    if market_id.is_empty() {
-        return Err(AdminError::MissingMarketId);
-    }
-    let base_asset = request.base_asset.trim().to_string();
+    let requested_market_id = request.market_id.trim().to_ascii_uppercase();
+    let base_asset = request.base_asset.trim().to_ascii_uppercase();
     if base_asset.is_empty() {
         return Err(AdminError::MissingBaseAsset);
     }
-    let quote_asset = request.quote_asset.trim().to_string();
-    if quote_asset.is_empty() {
-        return Err(AdminError::MissingQuoteAsset);
-    }
+    let quote_asset = {
+        let normalized = request.quote_asset.trim().to_ascii_uppercase();
+        if normalized.is_empty() {
+            DEFAULT_COMPETITION_QUOTE_ASSET.to_string()
+        } else {
+            normalized
+        }
+    };
     let expected_market_id = format!("{base_asset}-{quote_asset}");
+    let market_id = if requested_market_id.is_empty() {
+        expected_market_id.clone()
+    } else {
+        requested_market_id
+    };
     if market_id != expected_market_id {
         return Err(AdminError::MarketIdMismatch {
             expected: expected_market_id,
@@ -908,6 +925,30 @@ mod tests {
         .expect_err("market should be rejected");
 
         assert!(matches!(error, AdminError::MarketIdMismatch { .. }));
+    }
+
+    #[test]
+    fn upsert_market_defaults_quote_asset_and_generates_market_id() {
+        let state = test_state();
+        let market = AdminService::upsert_market(
+            &state,
+            &admin(),
+            UpsertMarketRequest {
+                market_id: String::new(),
+                display_name: Some("Solana".to_string()),
+                base_asset: "sol".to_string(),
+                quote_asset: String::new(),
+                tick_size: 1,
+                min_order_quantity: 1,
+                reference_price: Some(100),
+                enabled: true,
+            },
+        )
+        .expect("market should be created");
+
+        assert_eq!(market.market_id, "SOL-USD");
+        assert_eq!(market.base_asset, "SOL");
+        assert_eq!(market.quote_asset, DEFAULT_COMPETITION_QUOTE_ASSET);
     }
 
     #[tokio::test]
