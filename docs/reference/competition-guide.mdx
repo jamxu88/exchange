@@ -1,0 +1,117 @@
+---
+title: "Competition guide"
+description: "The practical checklist competitors should follow before trading, during the event, and at settlement."
+---
+
+This page is the shortest path to the decisions a competitor actually needs to make on event day.
+
+<Columns cols={3}>
+  <Card title="Before Trading" href="#before-trading">
+    Authenticate, fetch markets, bootstrap your portfolio, and bring up any required sockets.
+  </Card>
+  <Card title="While Trading" href="#while-trading">
+    Respect the position cap, price rules, quantity rules, and recovery model.
+  </Card>
+  <Card title="After Settlement" href="#after-settlement">
+    Refresh state, confirm realized PnL, and distinguish live versus official standings.
+  </Card>
+</Columns>
+
+## Before trading
+
+1. Get your assigned API key from the operator.
+2. Call [Get User](/rest/user) to verify `username`, `trader_id`, and `role`.
+3. Call [Get Markets](/rest/markets) and cache `market_id`, `status`, `tick_size`, `min_order_quantity`, and `reference_price`.
+4. Call [Get Portfolio](/rest/portfolio) to bootstrap positions and your position limit.
+5. Open a WebSocket connection if you need live L3 updates or user-specific events.
+
+## While trading
+
+### Rules that affect order entry
+
+- `price`, `quantity`, and `remaining` are integer values.
+- `side` is always `BUY` or `SELL`.
+- Standard competitors have a fixed worst-case per-market net position limit of `+/-1000`.
+- Prices must align to the market `tick_size`.
+- Quantities must be at least the market `min_order_quantity`.
+- Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+
+### Recommended client split
+
+Use REST for bootstrap and recovery:
+
+- [Get User](/rest/user)
+- [Get Portfolio](/rest/portfolio)
+- [Get Open Orders](/rest/open-orders)
+- [Get Fills](/rest/fills)
+- [Get Markets](/rest/markets)
+
+Use WebSocket for:
+
+- L3 market data
+- user `fill` events
+- user `order_state` events
+- low-latency order actions
+
+Current limitation:
+
+- one `l3` market subscription per connection
+
+### What a successful order means
+
+When an order is accepted:
+
+- it may fill immediately, rest on the book, or do both
+- the REST response can include immediate `fills`
+- `resting: true` means remaining quantity was posted to the book
+- `order_state` and `fill` messages are the live account-state feed while your socket is healthy
+
+## Recovery during the event
+
+If you receive `resync_required`:
+
+1. discard local book state for the affected market
+2. resubscribe and replace local state from the next snapshot
+3. refresh account state over REST if your user stream may have lagged
+
+Use [Recovery And Resync](/reference/recovery-and-resync) as the exact recovery playbook.
+
+## After settlement
+
+When a market settles:
+
+- new trading stops for that market
+- remaining open orders are canceled
+- remaining open positions are flattened at the operator-entered `settlement_price`
+- unrealized PnL for that market becomes realized
+
+Immediately refresh:
+
+- [Get Markets](/rest/markets)
+- [Get Portfolio](/rest/portfolio)
+- [Get Positions](/rest/positions)
+- [Get Open Orders](/rest/open-orders)
+- [Get Fills](/rest/fills)
+- [Get Leaderboard](/rest/leaderboard)
+
+Important distinction:
+
+- [Get Leaderboard](/rest/leaderboard) is the live marked leaderboard during the event
+- operators may publish official final standings separately after all relevant markets are settled and results are frozen
+
+## Related pages
+
+<Columns cols={2}>
+  <Card title="Authentication" href="/reference/authentication">
+    REST and WebSocket auth, plus the live REST rate limit.
+  </Card>
+  <Card title="Market Lifecycle" href="/reference/market-lifecycle">
+    Market states, competition-wide trading stops, and settlement behavior.
+  </Card>
+  <Card title="REST API" href="/reference/rest-api">
+    The account bootstrap and trading endpoints competitors actually use.
+  </Card>
+  <Card title="WebSocket API" href="/reference/websocket-api">
+    Connection flow, market-data subscription, and trading operations.
+  </Card>
+</Columns>

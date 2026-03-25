@@ -1,32 +1,25 @@
 ---
-title: "DELETE /api/v1/orders/{order_id}"
+title: "Cancel Order"
+api: "DELETE /api/v1/orders/{order_id}"
 description: "Cancel an existing open order."
 ---
 
 Cancel removes a resting order from the book.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Path parameter
-
-- `order_id` the order you want to cancel
-
-## Request
-
-```bash
+```bash Request
 curl \
   -X DELETE \
   -H "x-api-key: YOUR_API_KEY" \
   https://exchange.jamesxu.dev/api/v1/orders/ORDER_ID
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "order": {
     "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
@@ -41,8 +34,32 @@ curl \
 }
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Path parameters
+
+<ParamField path="order_id" type="string" required>
+  Order identifier to cancel.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="order" type="object" required>
+  Final open-order state returned after the cancel succeeds.
+</ResponseField>
+
+<ResponseField name="order.id" type="string" required>
+  Canceled order identifier.
+</ResponseField>
+
 ## Notes
 
-- only open orders can be canceled
-- you can only cancel your own order
-- if the order was already fully matched or settled, the cancel will fail
+- Only open orders can be canceled.
+- You can only cancel your own order.
+- If the order was already fully matched or settled, the cancel will fail.

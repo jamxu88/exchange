@@ -1,30 +1,23 @@
 ---
-title: "GET /api/v1/fills"
+title: "Get Fills"
+api: "GET /api/v1/fills"
 description: "Read your trade fills, optionally filtered by market."
 ---
 
 Use this endpoint to rebuild recent execution history or to resync a client that missed user events.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Query parameters
-
-- `market` optional market filter, for example `BTC-USD`
-
-## Request
-
-```bash
+```bash Request
 curl 'https://exchange.jamesxu.dev/api/v1/fills?market=BTC-USD' \
   -H "x-api-key: YOUR_API_KEY"
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 [
   {
     "fill_id": "20e4a2c0-69e8-450d-be27-25651a7e12e2",
@@ -38,7 +31,56 @@ curl 'https://exchange.jamesxu.dev/api/v1/fills?market=BTC-USD' \
 ]
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Query parameters
+
+<ParamField query="market" type="string">
+  Optional market filter, for example `BTC-USD`.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="[]" type="object[]" required>
+  Execution history for the authenticated trader.
+</ResponseField>
+
+<ResponseField name="[].fill_id" type="string" required>
+  Stable fill identifier.
+</ResponseField>
+
+<ResponseField name="[].market" type="string" required>
+  Market identifier for the execution.
+</ResponseField>
+
+<ResponseField name="[].maker_order_id" type="string" required>
+  Matched resting order identifier.
+</ResponseField>
+
+<ResponseField name="[].taker_order_id" type="string" required>
+  Incoming matching order identifier.
+</ResponseField>
+
+<ResponseField name="[].price" type="u64" required>
+  Execution price.
+</ResponseField>
+
+<ResponseField name="[].quantity" type="u64" required>
+  Filled quantity.
+</ResponseField>
+
+<ResponseField name="[].occurred_at" type="string<date-time>" required>
+  Fill timestamp.
+</ResponseField>
+
 ## Notes
 
-- a fill record does not say whether you were maker or taker; use the order ids or your local state if you need that distinction
-- use this endpoint during recovery if you receive a user-stream `resync_required`
+- A fill record does not say whether you were maker or taker; use the order ids or your local state if you need that distinction.
+- Use this endpoint during recovery if you receive a user-stream `resync_required`.
+- Fills are execution records, not current position state. Pair this with [Get Positions](/rest/positions) or [Get Portfolio](/rest/portfolio) if you need current exposure.

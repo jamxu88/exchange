@@ -3,29 +3,54 @@ title: "REST API"
 description: "Competitor-facing REST overview and links to the individual endpoint pages."
 ---
 
-Use the REST API for account bootstrap, market discovery, and simple order management.
+Use REST for bootstrap, recovery, and request-response order management. This is the safest surface to trust after reconnects, sequence uncertainty, or settlement transitions.
 
-## Competitor endpoints
+<Columns cols={3}>
+  <Card title="Public Endpoints" href="#public-endpoints">
+    Connectivity and market metadata with no authentication required.
+  </Card>
+  <Card title="Account Endpoints" href="#account-endpoints">
+    Identity, portfolio, positions, fills, open orders, and live leaderboard state.
+  </Card>
+  <Card title="Trading Endpoints" href="#trading-endpoints">
+    Submit, amend, and cancel limit orders over HTTP.
+  </Card>
+</Columns>
 
-Public and competitor-facing:
+## Typical competitor sequence
 
-- [GET /health](/rest/health)
-- [GET /api/v1/markets](/rest/markets)
-- [GET /api/v1/user](/rest/user)
-- [GET /api/v1/positions](/rest/positions)
-- [GET /api/v1/portfolio](/rest/portfolio)
-- [GET /api/v1/leaderboard](/rest/leaderboard)
-- [GET /api/v1/open-orders](/rest/open-orders)
-- [GET /api/v1/fills](/rest/fills)
-- [POST /api/v1/orders](/rest/submit-order)
-- [PATCH /api/v1/orders/](/rest/amend-order){order_id}
-- [DELETE /api/v1/orders/](/rest/cancel-order){order_id}
+1. Call [Get User](/rest/user) to confirm identity.
+2. Call [Get Markets](/rest/markets) to learn active markets and trading constraints.
+3. Call [Get Portfolio](/rest/portfolio) to bootstrap positions and limits.
+4. Call [Get Open Orders](/rest/open-orders) and [Get Fills](/rest/fills) after reconnects or if your local state is uncertain.
+5. Use [Create Order](/rest/submit-order), [Amend Order](/rest/amend-order), and [Cancel Order](/rest/cancel-order) for order management.
 
-## Data model notes
+## Public endpoints
+
+- [Health](/rest/health)
+- [Get Markets](/rest/markets)
+
+## Account endpoints
+
+- [Get User](/rest/user)
+- [Get Portfolio](/rest/portfolio)
+- [Get Positions](/rest/positions)
+- [Get Open Orders](/rest/open-orders)
+- [Get Fills](/rest/fills)
+- [Get Leaderboard](/rest/leaderboard)
+
+## Trading endpoints
+
+- [Create Order](/rest/submit-order)
+- [Amend Order](/rest/amend-order)
+- [Cancel Order](/rest/cancel-order)
+
+## Request model
 
 - `side` is `BUY` or `SELL`
-- `price`, `quantity`, and `remaining` are integer `u64` values
-- traders can buy from flat, sell from flat, go long, and go short
+- `price`, `quantity`, and `remaining` are integer values
+- competitors can buy from flat, sell from flat, go long, and go short
 - risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
+- authenticated REST account and trading routes are limited to `100 ops/sec` per API key
 - `open-orders` and `fills` accept an optional `market` query parameter
-- leaderboard ranking is based on current marked PnL
+- REST is the recommended recovery source of truth after reconnects or user-stream uncertainty

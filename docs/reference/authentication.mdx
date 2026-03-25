@@ -9,6 +9,11 @@ Competitors do not self-register. Each team or trader receives an API key from t
 
 That API key is your only credential for the public trading API.
 
+Your first authenticated calls should usually be:
+
+1. [GET /api/v1/user](/rest/user) to verify identity
+2. [GET /api/v1/portfolio](/rest/portfolio) to bootstrap current positions and limits
+
 ## REST trader auth
 
 Authenticated trader routes require:
@@ -29,6 +34,20 @@ Used for:
 - `POST /api/v1/orders`
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
+
+## REST rate limit
+
+Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+
+If you exceed that per-user limit, the server responds with:
+
+```json
+{
+  "error": "per-user rate limit exceeded: max 100 ops/sec"
+}
+```
+
+This limit applies to authenticated REST competitor routes such as `/api/v1/user`, `/api/v1/portfolio`, and `/api/v1/orders`.
 
 ## WebSocket auth
 
@@ -58,5 +77,7 @@ Successful response:
 
 - There are no user passwords.
 - There is no JWT or OAuth flow.
+- Competitors should normally see `role = "trader"` from [GET /api/v1/user](/rest/user). If you see the wrong username or role, stop and contact the operator.
 - WebSocket market data can be subscribed to before authentication, but trading and user-scoped events require a successful `authenticate` message.
+- The documented `100 ops/sec` limit applies to authenticated REST account and trading routes, not to public routes like `GET /api/v1/markets`.
 - Internal admin and operator routes exist, but they are intentionally omitted from this public competitor guide.

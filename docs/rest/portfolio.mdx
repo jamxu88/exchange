@@ -1,26 +1,23 @@
 ---
-title: "GET /api/v1/portfolio"
+title: "Get Portfolio"
+api: "GET /api/v1/portfolio"
 description: "Read your current position limit and all current positions in one response."
 ---
 
 Use this endpoint to bootstrap the account panel in a client UI.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Request
-
-```bash
+```bash Request
 curl https://exchange.jamesxu.dev/api/v1/portfolio \
   -H "x-api-key: YOUR_API_KEY"
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "trader_id": "c7f8c572-8a50-4dbd-a1e1-9f452774b636",
   "position_limit": 1000,
@@ -36,7 +33,46 @@ curl https://exchange.jamesxu.dev/api/v1/portfolio \
 }
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="trader_id" type="string" required>
+  Stable identity of the authenticated trader.
+</ResponseField>
+
+<ResponseField name="position_limit" type="i64 | null" required>
+  Fixed per-market worst-case net limit for standard competitors. Privileged admin traders return `null`.
+</ResponseField>
+
+<ResponseField name="positions" type="object[]" required>
+  Current position set for the trader.
+</ResponseField>
+
+<ResponseField name="positions[].market" type="string" required>
+  Market identifier for the position.
+</ResponseField>
+
+<ResponseField name="positions[].net_quantity" type="i64" required>
+  Signed position size.
+</ResponseField>
+
+<ResponseField name="positions[].average_entry_price" type="u64 | null" required>
+  Weighted average entry price for the open quantity.
+</ResponseField>
+
+<ResponseField name="positions[].realized_pnl" type="i64" required>
+  Realized PnL already locked in from closed or settled quantity.
+</ResponseField>
+
 ## Notes
 
-- `position_limit` is the fixed per-market net limit currently enforced by the exchange
-- use this endpoint when you want a single account bootstrap call instead of separate user and position reads
+- Use this endpoint when you want a single account bootstrap call instead of separate user and position reads.
+- Unrealized PnL is not returned here; live marking happens separately on the leaderboard.
+- This is the recommended account bootstrap call after login, reconnect, or settlement.

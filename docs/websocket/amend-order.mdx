@@ -1,11 +1,11 @@
 ---
-title: "amend_order"
+title: "Amend Order"
 description: "Reduce the remaining quantity on an existing order over WebSocket."
 ---
 
-## Client message
+<RequestExample>
 
-```json
+```json Client Message
 {
   "op": "amend_order",
   "request_id": "req-3",
@@ -14,13 +14,24 @@ description: "Reduce the remaining quantity on an existing order over WebSocket.
 }
 ```
 
-## Success response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json Ack Response
 {"type":"ack","op":"amend_order","request_id":"req-3"}
 ```
 
-## Failure response
+</ResponseExample>
+
+## Client fields
+
+- `op` must be `amend_order`.
+- `request_id` is client-defined and echoed back in `ack` or `reject`.
+- `order_id` is the target open order.
+- `remaining` is the new remaining quantity and can only reduce the order.
+
+## Failure behavior
 
 Failures are returned as `reject` messages. Common reasons are:
 
@@ -32,4 +43,4 @@ Failures are returned as `reject` messages. Common reasons are:
 
 ## Notes
 
-- the server will also emit an `order_state` event if the amend succeeds
+- The server emits an `order_state` message if the amend succeeds.

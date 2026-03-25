@@ -1,5 +1,5 @@
 ---
-title: "Server messages"
+title: "Server Messages"
 description: "The message types competitors should handle after connecting over WebSocket."
 ---
 
@@ -93,6 +93,12 @@ These are the main message types a competitor client should expect from the serv
 }
 ```
 
+`status` is one of:
+
+- `open`
+- `filled`
+- `canceled`
+
 ## `admin_message`
 
 ```json
@@ -111,6 +117,8 @@ These are the main message types a competitor client should expect from the serv
 }
 ```
 
+Competitors should treat this as operator guidance that may affect trading behavior, such as desk notices, trading halts, or settlement announcements.
+
 ## `resync_required`
 
 ```json
@@ -125,3 +133,11 @@ These are the main message types a competitor client should expect from the serv
 ```
 
 Use [Recovery and resync](/reference/recovery-and-resync) for the recommended client response.
+
+## Required handling
+
+- `heartbeat` means the connection is still alive.
+- `snapshot` and `delta` are the market-data source of truth while the subscription is healthy.
+- `fill` and `order_state` are the user-scoped state feed after authentication.
+- `admin_message` can change the practical trading environment even before you refresh REST state.
+- `resync_required` means your local state is no longer trustworthy and must be rebuilt.

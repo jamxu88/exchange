@@ -1,27 +1,27 @@
 ---
-title: "GET /health"
-description: "Check whether the exchange is reachable and whether persistence is healthy."
+title: "Health"
+api: "GET /health"
+authMethod: "none"
+description: "Check whether the exchange is reachable and whether dispatch and persistence are healthy."
 ---
 
-Use this endpoint for connectivity checks before you begin a session.
+Use this endpoint for connectivity checks and for quick operator-visible health on the live exchange.
 
-## Auth
+<RequestExample>
 
-No authentication required.
-
-## Request
-
-```bash
+```bash Request
 curl https://exchange.jamesxu.dev/health
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "status": "ok",
   "service": "exchange",
-  "now": "2026-03-23T05:02:16.122465022+00:00",
+  "now": "2026-03-25T13:10:04.185031Z",
   "persistence": {
     "backend": "postgres",
     "mode": "ok",
@@ -30,24 +30,126 @@ curl https://exchange.jamesxu.dev/health
     "queue_depth": 0,
     "in_flight_ops": 0,
     "backlog_depth": 0,
-    "high_water_mark": 1,
-    "total_enqueued": 10,
-    "total_flushes": 5,
-    "total_flushed_ops": 10,
+    "high_water_mark": 12,
+    "total_enqueued": 15342,
+    "total_flushes": 417,
+    "total_flushed_ops": 15342,
     "total_blocked_enqueues": 0,
     "total_enqueue_block_time_ms": 0,
     "total_flush_failures": 0,
     "total_retries": 0,
-    "last_batch_size": 2,
-    "last_flush_latency_ms": 8,
-    "max_flush_latency_ms": 8,
+    "last_batch_size": 36,
+    "last_flush_latency_ms": 7,
+    "max_flush_latency_ms": 15,
     "last_error": null
+  },
+  "runtime_dispatch": {
+    "mode": "ok",
+    "queue_capacity": 4096,
+    "backpressure_threshold": 3277,
+    "queue_depth": 0,
+    "high_water_mark": 44,
+    "total_enqueued": 9281,
+    "total_dequeued": 9281,
+    "total_blocked_enqueues": 0,
+    "total_enqueue_block_time_ms": 0
+  },
+  "account_dispatch": {
+    "mode": "ok",
+    "queue_capacity": 4096,
+    "backpressure_threshold": 3277,
+    "queue_depth": 0,
+    "high_water_mark": 38,
+    "total_enqueued": 8410,
+    "total_dequeued": 8410,
+    "total_blocked_enqueues": 0,
+    "total_enqueue_block_time_ms": 0
+  },
+  "persistence_dispatch": {
+    "mode": "ok",
+    "queue_capacity": 4096,
+    "backpressure_threshold": 3277,
+    "queue_depth": 0,
+    "high_water_mark": 52,
+    "total_enqueued": 11203,
+    "total_dequeued": 11203,
+    "total_blocked_enqueues": 0,
+    "total_enqueue_block_time_ms": 0
+  },
+  "account_barrier": {
+    "submit": {
+      "total_waits": 4100,
+      "total_wait_time_ms": 921,
+      "max_wait_time_ms": 6,
+      "last_wait_time_ms": 0,
+      "waits_over_1ms": 18,
+      "waits_over_5ms": 1,
+      "waits_over_25ms": 0,
+      "waits_over_100ms": 0
+    },
+    "cancel": {
+      "total_waits": 95,
+      "total_wait_time_ms": 7,
+      "max_wait_time_ms": 1,
+      "last_wait_time_ms": 0,
+      "waits_over_1ms": 0,
+      "waits_over_5ms": 0,
+      "waits_over_25ms": 0,
+      "waits_over_100ms": 0
+    },
+    "amend": {
+      "total_waits": 17,
+      "total_wait_time_ms": 2,
+      "max_wait_time_ms": 1,
+      "last_wait_time_ms": 0,
+      "waits_over_1ms": 0,
+      "waits_over_5ms": 0,
+      "waits_over_25ms": 0,
+      "waits_over_100ms": 0
+    }
   }
 }
 ```
 
-## What to look at
+</ResponseExample>
 
-- `status = "ok"` means the service is reachable and not currently degraded
-- `status = "degraded"` means the exchange is up, but persistence is retrying, backpressured, or stopped
-- `persistence.mode` gives the detailed persistence state
+## Response fields
+
+<ResponseField name="status" type="string" required>
+  Top-level exchange health. `ok` means the service is reachable and no core queue or persistence path is currently degraded.
+</ResponseField>
+
+<ResponseField name="service" type="string" required>
+  Static service identifier. Currently `exchange`.
+</ResponseField>
+
+<ResponseField name="now" type="string<date-time>" required>
+  Current server timestamp.
+</ResponseField>
+
+<ResponseField name="persistence" type="object" required>
+  Postgres or in-memory persistence health, including backlog and flush telemetry.
+</ResponseField>
+
+<ResponseField name="runtime_dispatch" type="object" required>
+  Queue telemetry for market-data and runtime fanout work.
+</ResponseField>
+
+<ResponseField name="account_dispatch" type="object" required>
+  Queue telemetry for account read-model updates.
+</ResponseField>
+
+<ResponseField name="persistence_dispatch" type="object" required>
+  Queue telemetry for ordered write-side persistence work.
+</ResponseField>
+
+<ResponseField name="account_barrier" type="object" required>
+  Barrier wait telemetry for submit, cancel, and amend paths.
+</ResponseField>
+
+## What to watch
+
+- `status = "degraded"` means at least one critical queue or the persistence writer is backpressured, retrying, or stopped.
+- `persistence.backlog_depth` shows how far durable writes are trailing the in-memory exchange state.
+- `runtime_dispatch`, `account_dispatch`, and `persistence_dispatch` expose queue depth and high-water marks for the off-thread architecture.
+- `account_barrier.submit.max_wait_time_ms` tells you how long requests have recently waited for read-your-writes account state to catch up.

@@ -3,11 +3,23 @@ title: "WebSocket API"
 description: "Competitor-facing WebSocket overview for market data, order entry, and user event delivery."
 ---
 
-## Endpoint
+Use WebSocket for live L3 market data, user-scoped trade events, and low-latency order actions on a single connection.
 
 ```text
 wss://exchange.jamesxu.dev/ws
 ```
+
+<Columns cols={3}>
+  <Card title="Connection" href="/websocket/authenticate">
+    Authenticate once per socket if you want order entry or user-scoped events.
+  </Card>
+  <Card title="Market Data" href="/websocket/subscribe-l3">
+    Subscribe to one L3 stream per connection and process snapshots plus sequenced deltas.
+  </Card>
+  <Card title="Server Messages" href="/websocket/server-messages">
+    Handle heartbeats, fills, order updates, admin messages, and resync requests.
+  </Card>
+</Columns>
 
 ## Connection behavior
 
@@ -16,17 +28,23 @@ wss://exchange.jamesxu.dev/ws
 - the current implementation supports one `l3` market subscription per connection
 - after authentication, the same socket can carry market data, order actions, and user-specific events
 
-## Competitor message flow
+## Recommended usage
 
-1. Connect to `wss://exchange.jamesxu.dev/ws`
-2. [Authenticate](/websocket/authenticate) with your API key if you want to trade or receive user events
-3. [Subscribe to an L3 market](/websocket/subscribe-l3)
-4. Use [submit order](/websocket/submit-order), [amend order](/websocket/amend-order), and [cancel order](/websocket/cancel-order) as needed
-5. Handle [server messages](/websocket/server-messages), especially `snapshot`, `delta`, `fill`, `order_state`, and `resync_required`
+- Keep REST available for bootstrap and recovery even if WebSocket is your primary trading path.
+- Use one socket per market if you need multiple L3 books at the same time.
+- Treat `fill`, `order_state`, `admin_message`, and `resync_required` as required message types, not optional extras.
+
+## Typical message flow
+
+1. Connect to `wss://exchange.jamesxu.dev/ws`.
+2. [Authenticate](/websocket/authenticate) if you want trading or user events.
+3. [Subscribe](/websocket/subscribe-l3) to the market you want.
+4. Use [Submit Order](/websocket/submit-order), [Amend Order](/websocket/amend-order), and [Cancel Order](/websocket/cancel-order) as needed.
+5. Handle [Server Messages](/websocket/server-messages), especially `snapshot`, `delta`, `fill`, `order_state`, and `resync_required`.
 
 ## Current limitations
 
 - one market subscription per connection
 - no replay endpoint
 - no persisted user-event sequence numbers
-- no multi-channel market-data model beyond `l3`
+- no market-data channel beyond `l3`

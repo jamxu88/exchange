@@ -1,30 +1,14 @@
 ---
-title: "POST /api/v1/orders"
+title: "Create Order"
+api: "POST /api/v1/orders"
 description: "Submit a new limit order."
 ---
 
 Submit a new limit order through REST when you want simple request-response behavior. WebSocket order entry is also available if you prefer to keep everything on one low-latency socket.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Request body
-
-```json
-{
-  "market": "BTC-USD",
-  "side": "BUY",
-  "price": 100,
-  "quantity": 2
-}
-```
-
-## Request
-
-```bash
+```bash Request
 curl \
   -X POST \
   -H "x-api-key: YOUR_API_KEY" \
@@ -33,9 +17,11 @@ curl \
   -d '{"market":"BTC-USD","side":"BUY","price":100,"quantity":2}'
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "order": {
     "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
@@ -52,12 +38,61 @@ curl \
 }
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Body parameters
+
+<ParamField body="market" type="string" required>
+  Target market identifier, for example `BTC-USD`.
+</ParamField>
+
+<ParamField body="side" type="BUY | SELL" required>
+  Order side.
+</ParamField>
+
+<ParamField body="price" type="u64" required>
+  Limit price. Must be greater than zero and aligned to the market tick size.
+</ParamField>
+
+<ParamField body="quantity" type="u64" required>
+  Order quantity. Must be greater than zero and at least the market minimum quantity.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="order" type="object" required>
+  Accepted order record after any immediate matching has been applied.
+</ResponseField>
+
+<ResponseField name="order.id" type="string" required>
+  Stable order identifier used for amend and cancel requests.
+</ResponseField>
+
+<ResponseField name="order.remaining" type="u64" required>
+  Quantity still resting after any immediate fills.
+</ResponseField>
+
+<ResponseField name="fills" type="object[]" required>
+  Immediate executions produced while the order was being matched.
+</ResponseField>
+
+<ResponseField name="resting" type="boolean" required>
+  `true` when some remaining quantity was posted to the book. `false` when the order was fully matched immediately.
+</ResponseField>
+
 ## Validation rules
 
-- `price` must be greater than zero and aligned to the market `tick_size`
-- `quantity` must be greater than zero and at least the market `min_order_quantity`
-- the order must keep your worst-case per-market net position within `+/-1000`
-- you can sell from flat and go short
+- `price` must be greater than zero and aligned to the market `tick_size`.
+- `quantity` must be greater than zero and at least the market `min_order_quantity`.
+- The order must keep your worst-case per-market net position within `+/-1000` unless the API key belongs to an admin trader.
+- You can sell from flat and go short.
+- Crossing the book is allowed. The order may fill immediately, partially rest, or fully rest depending on available liquidity.
 
 ## Common rejects
 

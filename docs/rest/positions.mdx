@@ -1,26 +1,23 @@
 ---
-title: "GET /api/v1/positions"
+title: "Get Positions"
+api: "GET /api/v1/positions"
 description: "Read your signed net positions and realized PnL by market."
 ---
 
 This is the raw positions endpoint. It is the best source for your current signed exposure per market.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Request
-
-```bash
+```bash Request
 curl https://exchange.jamesxu.dev/api/v1/positions \
   -H "x-api-key: YOUR_API_KEY"
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 [
   {
     "market": "BTC-USD",
@@ -32,9 +29,36 @@ curl https://exchange.jamesxu.dev/api/v1/positions \
 ]
 ```
 
-## Notes
+</ResponseExample>
 
-- `net_quantity > 0` means you are long
-- `net_quantity < 0` means you are short
-- `average_entry_price` is null when the market is flat
-- `realized_pnl` accumulates as you reduce, flip, or settle a position
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="[]" type="object[]" required>
+  Current position set for the authenticated trader.
+</ResponseField>
+
+<ResponseField name="[].market" type="string" required>
+  Market identifier for the position.
+</ResponseField>
+
+<ResponseField name="[].net_quantity" type="i64" required>
+  Signed position size. Positive values are long and negative values are short.
+</ResponseField>
+
+<ResponseField name="[].average_entry_price" type="u64 | null" required>
+  Weighted average entry price for the current open quantity. `null` when the market is flat.
+</ResponseField>
+
+<ResponseField name="[].realized_pnl" type="i64" required>
+  Realized PnL from closed or settled quantity.
+</ResponseField>
+
+<ResponseField name="[].updated_at" type="string<date-time>" required>
+  Last position update timestamp.
+</ResponseField>

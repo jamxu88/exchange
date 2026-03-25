@@ -1,23 +1,23 @@
 ---
-title: "GET /api/v1/markets"
-description: "List markets, their lifecycle state, and the trading rules that matter before submitting orders."
+title: "Get Markets"
+api: "GET /api/v1/markets"
+authMethod: "none"
+description: "List markets, their lifecycle state, and the trading constraints that matter before submitting orders."
 ---
 
-Fetch this endpoint at startup and whenever you need to refresh market metadata.
+Fetch this endpoint at startup and whenever you need to refresh market metadata or settlement state.
 
-## Auth
+<RequestExample>
 
-No authentication required.
-
-## Request
-
-```bash
+```bash Request
 curl https://exchange.jamesxu.dev/api/v1/markets
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 [
   {
     "market_id": "BTC-USD",
@@ -35,11 +35,46 @@ curl https://exchange.jamesxu.dev/api/v1/markets
 ]
 ```
 
-## Why it matters
+</ResponseExample>
 
-- `status` tells you whether the market is live, disabled, or settled
-- `tick_size` controls valid prices
-- `min_order_quantity` controls valid order size
-- `settlement_price` becomes non-null after settlement
+## Response fields
 
-For the higher-level state machine, see [Market lifecycle](/reference/market-lifecycle).
+<ResponseField name="[]" type="object[]" required>
+  List of currently configured markets.
+</ResponseField>
+
+<ResponseField name="[].market_id" type="string" required>
+  Stable market identifier used in REST and WebSocket requests.
+</ResponseField>
+
+<ResponseField name="[].display_name" type="string" required>
+  Human-readable market label.
+</ResponseField>
+
+<ResponseField name="[].tick_size" type="u64" required>
+  Minimum price increment. Submitted prices must align exactly to this value.
+</ResponseField>
+
+<ResponseField name="[].min_order_quantity" type="u64" required>
+  Minimum valid order quantity for the market.
+</ResponseField>
+
+<ResponseField name="[].reference_price" type="u64" required>
+  Reference mark used for display and live PnL calculations before settlement.
+</ResponseField>
+
+<ResponseField name="[].settlement_price" type="u64 | null" required>
+  Final settlement price once the market is settled. `null` while the market is still unresolved.
+</ResponseField>
+
+<ResponseField name="[].status" type="enabled | disabled | settled" required>
+  Current market lifecycle state.
+</ResponseField>
+
+## Notes
+
+- `status` tells you whether the market is live, disabled, or settled.
+- `tick_size` controls valid prices.
+- `min_order_quantity` controls valid order size.
+- `settlement_price` becomes non-null after settlement.
+- For the full state machine, see [Market Lifecycle](/reference/market-lifecycle).

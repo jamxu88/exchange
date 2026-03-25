@@ -3,37 +3,63 @@ title: "Exchange API"
 description: "Competitor-facing REST and WebSocket documentation for connecting to the Exchange during the trading competition."
 ---
 
+The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, consume L3 market data, and recover cleanly when the operator disables or settles a market.
+
+<Columns cols={2}>
+  <Card title="Competition Guide" href="/reference/competition-guide">
+    Event-day flow, trading rules, recovery expectations, and settlement behavior.
+  </Card>
+  <Card title="Authentication" href="/reference/authentication">
+    REST and WebSocket auth, rate limits, and the first calls every competitor should make.
+  </Card>
+  <Card title="REST API" href="/reference/rest-api">
+    Bootstrap state, pull account data, and manage orders over HTTP.
+  </Card>
+  <Card title="WebSocket API" href="/reference/websocket-api">
+    Subscribe to L3 market data, submit order actions, and handle user-scoped events.
+  </Card>
+</Columns>
+
 ## Base URLs
 
 - REST: `https://exchange.jamesxu.dev`
 - WebSocket: `wss://exchange.jamesxu.dev/ws`
 
-## What you can do as a competitor
+## What competitors need to implement
 
-- Fetch the current market list and lifecycle state
-- Authenticate with your assigned API key
-- Read your profile, positions, portfolio, fills, and open orders
-- Submit, amend, and cancel orders over REST or WebSocket
-- Subscribe to live L3 market data and user-specific trade events
-- React correctly to market disablement, settlement, and resync requests
+1. Verify identity with [Get User](/rest/user).
+2. Fetch [Get Markets](/rest/markets) and cache market status, tick size, and minimum quantity.
+3. Bootstrap account state with [Get Portfolio](/rest/portfolio).
+4. Subscribe to WebSocket market data if you need live book updates.
+5. Handle `fill`, `order_state`, `admin_message`, and `resync_required`.
+6. Refresh state after reconnects, disablement, or settlement.
 
-## Authentication model
+## Core operating rules
 
-- Your operator assigns you a single API key.
-- Authenticated REST requests send that key in `x-api-key`.
-- WebSocket sessions authenticate with `{"op":"authenticate","api_key":"..."}`.
-- There is no user registration or password flow.
+- Prices and quantities are integer values.
+- `side` is always `BUY` or `SELL`.
+- Standard competitor accounts are capped at `+/-1000` worst-case net position per market.
+- Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+- After settlement, positions are flattened at the market settlement price and final PnL becomes realized for that market.
 
-## Start here
+## Quick links
 
-- [Authentication](/reference/authentication)
-- [Market lifecycle](/reference/market-lifecycle)
-- [REST API](/reference/rest-api)
-- [WebSocket API](/reference/websocket-api)
-- [Recovery and resync](/reference/recovery-and-resync)
-- [Error codes](/reference/error-codes)
+<Columns cols={2}>
+  <Card title="Market Lifecycle" href="/reference/market-lifecycle">
+    Market states, trading halts, and settlement transitions.
+  </Card>
+  <Card title="Recovery And Resync" href="/reference/recovery-and-resync">
+    The required client response to sequence gaps and lag.
+  </Card>
+  <Card title="Error Codes" href="/reference/error-codes">
+    REST status mapping and WebSocket reject and error codes.
+  </Card>
+  <Card title="Server Messages" href="/websocket/server-messages">
+    All WebSocket message types a competitor should handle.
+  </Card>
+</Columns>
 
-## Preview the docs locally
+## Preview locally
 
 ```bash
 cd docs

@@ -1,11 +1,11 @@
 ---
-title: "cancel_order"
+title: "Cancel Order"
 description: "Cancel an existing open order over WebSocket."
 ---
 
-## Client message
+<RequestExample>
 
-```json
+```json Client Message
 {
   "op": "cancel_order",
   "request_id": "req-2",
@@ -13,13 +13,23 @@ description: "Cancel an existing open order over WebSocket."
 }
 ```
 
-## Success response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json Ack Response
 {"type":"ack","op":"cancel_order","request_id":"req-2"}
 ```
 
-## Failure response
+</ResponseExample>
+
+## Client fields
+
+- `op` must be `cancel_order`.
+- `request_id` is client-defined and echoed back in `ack` or `reject`.
+- `order_id` is the target open order.
+
+## Failure behavior
 
 Failures are returned as `reject` messages. Common reasons are:
 
@@ -29,4 +39,4 @@ Failures are returned as `reject` messages. Common reasons are:
 
 ## Notes
 
-- the server will also emit an `order_state` event if the cancel succeeds
+- The server emits an `order_state` message if the cancel succeeds.

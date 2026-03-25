@@ -1,17 +1,25 @@
 ---
-title: "unsubscribe"
+title: "Unsubscribe"
 description: "Stop receiving an L3 market-data stream on the current socket."
 ---
 
 Use `unsubscribe` when you want to stop receiving market data for the current subscription.
 
-## Client message
+<RequestExample>
 
-```json
+```json Client Message
 {"op":"unsubscribe","channel":"l3","market":"BTC-USD"}
 ```
 
+</RequestExample>
+
+## Client fields
+
+- `op` must be `unsubscribe`.
+- `channel` must be `l3`.
+- `market` is the subscribed market you want to stop receiving.
+
 ## Notes
 
-- unsubscribe affects only the specified market-data subscription
-- authentication state on the socket is unchanged
+- Unsubscribe affects only the specified market-data subscription.
+- Authentication state on the socket is unchanged.

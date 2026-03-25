@@ -1,31 +1,14 @@
 ---
-title: "PATCH /api/v1/orders/{order_id}"
+title: "Amend Order"
+api: "PATCH /api/v1/orders/{order_id}"
 description: "Reduce the remaining quantity on an existing open order."
 ---
 
 Amend only changes the `remaining` quantity, and it cannot increase the order.
 
-## Auth
+<RequestExample>
 
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Path parameter
-
-- `order_id` the order you want to change
-
-## Request body
-
-```json
-{
-  "remaining": 1
-}
-```
-
-## Request
-
-```bash
+```bash Request
 curl \
   -X PATCH \
   -H "x-api-key: YOUR_API_KEY" \
@@ -34,9 +17,11 @@ curl \
   -d '{"remaining":1}'
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "order": {
     "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
@@ -51,8 +36,38 @@ curl \
 }
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Path parameters
+
+<ParamField path="order_id" type="string" required>
+  Order identifier to amend.
+</ParamField>
+
+## Body parameters
+
+<ParamField body="remaining" type="u64" required>
+  New remaining quantity. This can only reduce the order and must stay above zero.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="order" type="object" required>
+  Updated open order after the amendment is applied.
+</ResponseField>
+
+<ResponseField name="order.remaining" type="u64" required>
+  New remaining quantity resting on the book.
+</ResponseField>
+
 ## Notes
 
-- you cannot increase `remaining`
-- amending to zero is not supported; use cancel instead
-- you can only amend your own order
+- You cannot increase `remaining`.
+- Amending to zero is not supported; use cancel instead.
+- You can only amend your own order.

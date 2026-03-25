@@ -8,6 +8,13 @@
     "primary": "#1F7A5A"
   },
   "api": {
+    "mdx": {
+      "server": "https://exchange.jamesxu.dev",
+      "auth": {
+        "method": "key",
+        "name": "x-api-key"
+      }
+    },
     "playground": {
       "display": "simple"
     },
@@ -19,46 +26,95 @@
       "defaults": "required"
     }
   },
+  "styling": {
+    "eyebrows": "breadcrumbs"
+  },
   "navigation": {
-    "groups": [
+    "tabs": [
       {
-        "group": "Overview",
-        "pages": [
-          "index",
-          "reference/authentication",
-          "reference/market-lifecycle",
-          "reference/error-codes",
-          "reference/recovery-and-resync"
+        "tab": "Welcome",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "reference/competition-guide",
+              "reference/authentication"
+            ]
+          },
+          {
+            "group": "Trading Rules",
+            "pages": [
+              "reference/market-lifecycle",
+              "reference/recovery-and-resync",
+              "reference/error-codes"
+            ]
+          }
         ]
       },
       {
-        "group": "REST API",
-        "pages": [
-          "reference/rest-api",
-          "rest/health",
-          "rest/markets",
-          "rest/user",
-          "rest/positions",
-          "rest/portfolio",
-          "rest/leaderboard",
-          "rest/open-orders",
-          "rest/fills",
-          "rest/submit-order",
-          "rest/amend-order",
-          "rest/cancel-order"
+        "tab": "REST API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "reference/rest-api"
+            ]
+          },
+          {
+            "group": "Public",
+            "pages": [
+              "rest/health",
+              "rest/markets"
+            ]
+          },
+          {
+            "group": "Account",
+            "pages": [
+              "rest/user",
+              "rest/portfolio",
+              "rest/positions",
+              "rest/open-orders",
+              "rest/fills",
+              "rest/leaderboard"
+            ]
+          },
+          {
+            "group": "Trading",
+            "pages": [
+              "rest/submit-order",
+              "rest/amend-order",
+              "rest/cancel-order"
+            ]
+          }
         ]
       },
       {
-        "group": "WebSocket API",
-        "pages": [
-          "reference/websocket-api",
-          "websocket/authenticate",
-          "websocket/subscribe-l3",
-          "websocket/unsubscribe-l3",
-          "websocket/submit-order",
-          "websocket/amend-order",
-          "websocket/cancel-order",
-          "websocket/server-messages"
+        "tab": "WebSocket API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "reference/websocket-api",
+              "websocket/server-messages"
+            ]
+          },
+          {
+            "group": "Connection",
+            "pages": [
+              "websocket/authenticate",
+              "websocket/subscribe-l3",
+              "websocket/unsubscribe-l3"
+            ]
+          },
+          {
+            "group": "Trading",
+            "pages": [
+              "websocket/submit-order",
+              "websocket/amend-order",
+              "websocket/cancel-order"
+            ]
+          }
         ]
       }
     ]

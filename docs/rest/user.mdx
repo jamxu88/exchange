@@ -1,37 +1,63 @@
 ---
-title: "GET /api/v1/user"
+title: "Get User"
+api: "GET /api/v1/user"
 description: "Fetch the authenticated trader profile associated with your API key."
 ---
 
 Use this endpoint after login to confirm which trader identity the backend sees.
 
-## Auth
+<RequestExample>
 
-Send your assigned API key:
-
-```http
-x-api-key: YOUR_API_KEY
-```
-
-## Request
-
-```bash
+```bash Request
 curl https://exchange.jamesxu.dev/api/v1/user \
   -H "x-api-key: YOUR_API_KEY"
 ```
 
-## Example response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json 200 Response
 {
   "trader_id": "c7f8c572-8a50-4dbd-a1e1-9f452774b636",
-  "username": "trader",
-  "api_key": "trader",
+  "username": "team-alpha",
+  "api_key": "exch_c2e2820d1b834d61a596848d36a7ee61",
+  "role": "trader",
   "created_at": "2026-03-18T19:14:31.447224Z"
 }
 ```
 
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="trader_id" type="string" required>
+  Stable identity used throughout fills, positions, and portfolio responses.
+</ResponseField>
+
+<ResponseField name="username" type="string" required>
+  Human-readable competitor label used in leaderboard and operator messaging.
+</ResponseField>
+
+<ResponseField name="api_key" type="string" required>
+  The API key currently associated with the authenticated trader.
+</ResponseField>
+
+<ResponseField name="role" type="trader | admin" required>
+  `trader` for normal competitors and `admin` for privileged operator accounts.
+</ResponseField>
+
+<ResponseField name="created_at" type="string<date-time>" required>
+  Trader creation timestamp.
+</ResponseField>
+
 ## Notes
 
-- `trader_id` is the stable identity used throughout fills and portfolio responses
-- `username` is the human-readable label used in leaderboard and operator messaging
+- If `username` or `role` is not what you expect, stop and contact the operator before trading.
+- This should usually be the first authenticated call a competitor client makes.

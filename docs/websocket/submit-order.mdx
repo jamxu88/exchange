@@ -1,13 +1,13 @@
 ---
-title: "submit_order"
+title: "Submit Order"
 description: "Submit a new limit order over WebSocket."
 ---
 
 WebSocket order entry is useful when you want order actions and execution events on the same connection.
 
-## Client message
+<RequestExample>
 
-```json
+```json Client Message
 {
   "op": "submit_order",
   "request_id": "req-1",
@@ -18,17 +18,15 @@ WebSocket order entry is useful when you want order actions and execution events
 }
 ```
 
-## Success response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json Ack Response
 {"type":"ack","op":"submit_order","request_id":"req-1"}
 ```
 
-On success, you should also expect later `order_state` and `fill` events.
-
-## Failure response
-
-```json
+```json Reject Response
 {
   "type": "reject",
   "op": "submit_order",
@@ -38,7 +36,19 @@ On success, you should also expect later `order_state` and `fill` events.
 }
 ```
 
+</ResponseExample>
+
+## Client fields
+
+- `op` must be `submit_order`.
+- `request_id` is client-defined and echoed back in `ack` or `reject`.
+- `market`, `side`, `price`, and `quantity` follow the same rules as [Create Order](/rest/submit-order).
+
+## Success behavior
+
+- An `ack` confirms the server accepted the request.
+- After acceptance, expect later `order_state` and `fill` messages as matching and account state evolve.
+
 ## Notes
 
-- the same validation rules apply as REST order submission
-- `request_id` is client-defined and echoed back in `ack` or `reject`
+- The same validation rules apply as REST order submission.

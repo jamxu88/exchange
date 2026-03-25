@@ -29,6 +29,7 @@ Each market returned by `/api/v1/markets` includes a `status` field.
 - trading in that market is over
 - operators enter a final per-share settlement value
 - open positions are flattened against that settlement price
+- resting open orders in that market are canceled as part of settlement
 - PnL becomes realized for that market
 - competitors should re-fetch portfolio, positions, fills, and leaderboard after settlement
 
@@ -57,3 +58,9 @@ From `/api/v1/markets`, pay attention to:
 2. Do not allow order entry on markets with `status = "disabled"` or `status = "settled"`.
 3. Re-fetch market state after a reconnect or `resync_required`.
 4. Refresh account state after settlement because positions and realized PnL may change immediately.
+
+## Official standings
+
+During the event, [GET /api/v1/leaderboard](/rest/leaderboard) is a live marked leaderboard.
+
+After operators settle the relevant markets, they may freeze and publish official final standings separately. Competitors should treat settlement as the boundary where final PnL becomes stable for the settled market.

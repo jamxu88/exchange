@@ -1,25 +1,40 @@
 ---
-title: "authenticate"
+title: "Authenticate"
 description: "Authenticate a WebSocket session with your assigned API key."
 ---
 
 Authentication is required before you can submit, amend, or cancel orders over WebSocket, and before you receive user-specific `fill` or `order_state` events.
 
-## Client message
+<RequestExample>
 
-```json
+```json Client Message
 {"op":"authenticate","api_key":"YOUR_API_KEY"}
 ```
 
-## Success response
+</RequestExample>
 
-```json
+<ResponseExample>
+
+```json Success Response
 {
   "type": "authenticated",
   "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
   "username": "team-alpha"
 }
 ```
+
+</ResponseExample>
+
+## Client fields
+
+- `op` must be `authenticate`.
+- `api_key` is your assigned competitor API key.
+
+## Success fields
+
+- `type` is `authenticated`.
+- `trader_id` is the stable identity for the socket session.
+- `username` is the human-readable label associated with the API key.
 
 ## Failure behavior
 
