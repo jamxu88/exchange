@@ -23,7 +23,7 @@ This page is the shortest path to the decisions a competitor actually needs to m
 2. Call [Get User](/rest/user) to verify `username`, `trader_id`, and `role`.
 3. Call [Get Markets](/rest/markets) and cache `market_id`, `status`, `tick_size`, `min_order_quantity`, and `reference_price`.
 4. Call [Get Portfolio](/rest/portfolio) to bootstrap positions and your position limit.
-5. Open a WebSocket connection if you need live L3 updates or user-specific events.
+5. Open a WebSocket connection if you need live book updates or user-specific events.
 
 ## While trading
 
@@ -48,7 +48,7 @@ Use REST for bootstrap and recovery:
 
 Use WebSocket for:
 
-- L3 market data
+- aggregated price-level market data
 - user `fill` events
 - user `order_state` events
 - low-latency order actions
@@ -65,6 +65,7 @@ When an order is accepted:
 - the REST response can include immediate `fills`
 - `resting: true` means remaining quantity was posted to the book
 - `order_state` and `fill` messages are the live account-state feed while your socket is healthy
+- the market-data `snapshot` and `delta` feed is aggregated by price level, so use `order_state` for your own exact resting-order detail
 
 ## Recovery during the event
 

@@ -1,9 +1,9 @@
 ---
 title: "Subscribe"
-description: "Subscribe to one L3 market-data stream on the socket."
+description: "Subscribe to one sequenced market-data stream on the socket."
 ---
 
-Use `subscribe` to receive a fresh snapshot and then sequenced deltas for one market.
+Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-level deltas for one market.
 
 <RequestExample>
 
@@ -21,8 +21,14 @@ Use `subscribe` to receive a fresh snapshot and then sequenced deltas for one ma
   "channel": "l3",
   "market": "BTC-USD",
   "sequence": 0,
-  "bids": [],
-  "asks": []
+  "bids": [
+    { "price": 100, "quantity": 12 },
+    { "price": 99, "quantity": 8 }
+  ],
+  "asks": [
+    { "price": 101, "quantity": 6 },
+    { "price": 102, "quantity": 10 }
+  ]
 }
 ```
 
@@ -38,10 +44,15 @@ Use `subscribe` to receive a fresh snapshot and then sequenced deltas for one ma
 ## What happens next
 
 - The server first sends a `snapshot`.
+- `bids` and `asks` in that snapshot are aggregated price levels, not raw order rows.
 - After the snapshot, the server sends `delta` messages with increasing `sequence` values.
+- A `level_updated` delta sets the total visible quantity for one side and one price.
+- `quantity: 0` means that price level should be removed from your local book.
+- `trade` deltas carry executed price and quantity only.
 - If the backend detects a gap or a lagged receiver, it sends `resync_required`.
 
 ## Notes
 
-- The current implementation supports one L3 market subscription per connection.
+- The current implementation supports one `l3` market subscription per connection.
 - If you need multiple markets, open multiple sockets.
+- Use `order_state` messages for your own exact resting-order state. The market-data stream is intentionally aggregated.

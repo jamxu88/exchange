@@ -3,7 +3,7 @@ title: "Exchange API"
 description: "Competitor-facing REST and WebSocket documentation for connecting to the Exchange during the trading competition."
 ---
 
-The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, consume L3 market data, and recover cleanly when the operator disables or settles a market.
+The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, consume aggregated price-level market data, and recover cleanly when the operator disables or settles a market.
 
 <Columns cols={2}>
   <Card title="Competition Guide" href="/reference/competition-guide">
@@ -16,7 +16,7 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
     Bootstrap state, pull account data, and manage orders over HTTP.
   </Card>
   <Card title="WebSocket API" href="/reference/websocket-api">
-    Subscribe to L3 market data, submit order actions, and handle user-scoped events.
+    Subscribe to price-level market data, submit order actions, and handle user-scoped events.
   </Card>
 </Columns>
 

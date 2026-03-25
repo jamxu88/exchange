@@ -29,10 +29,18 @@ These are the main message types a competitor client should expect from the serv
   "channel": "l3",
   "market": "BTC-USD",
   "sequence": 0,
-  "bids": [],
-  "asks": []
+  "bids": [
+    { "price": 100, "quantity": 12 },
+    { "price": 99, "quantity": 8 }
+  ],
+  "asks": [
+    { "price": 101, "quantity": 6 },
+    { "price": 102, "quantity": 10 }
+  ]
 }
 ```
+
+`bids` and `asks` are aggregated price levels, not per-order rows.
 
 ## `delta`
 
@@ -44,18 +52,21 @@ These are the main message types a competitor client should expect from the serv
   "sequence": 1,
   "events": [
     {
-      "kind": "order_added",
-      "order": {
-        "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
-        "side": "BUY",
-        "price": 100,
-        "remaining": 2,
-        "created_at": "2026-03-18T15:28:01.342510Z"
-      }
+      "kind": "level_updated",
+      "side": "BUY",
+      "price": 100,
+      "quantity": 14
+    },
+    {
+      "kind": "trade",
+      "price": 101,
+      "quantity": 1
     }
   ]
 }
 ```
+
+`level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book.
 
 ## `fill`
 
