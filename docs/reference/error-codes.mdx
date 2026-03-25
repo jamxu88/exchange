@@ -19,7 +19,7 @@ REST errors are returned as:
 | --- | --- |
 | `400` | invalid market symbol, invalid price, tick-size violation, invalid quantity, invalid amend |
 | `401` | missing auth, invalid API key |
-| `429` | per-user authenticated REST rate limit exceeded |
+| `429` | per-user authenticated competitor rate limit exceeded |
 | `403` | order exists but belongs to another trader |
 | `404` | order not found, market not configured, target user not found |
 | `409` | projected position limit breach, trading disabled, market disabled, market settled, username already exists |
@@ -58,14 +58,17 @@ Known codes:
 - `market_disabled`
 - `market_settled`
 - `invalid_price`
+- `price_too_large`
 - `tick_size_violation`
 - `invalid_quantity`
+- `quantity_too_large`
 - `quantity_below_minimum`
 - `invalid_remaining`
 - `invalid_amend`
 - `order_not_found`
 - `order_not_owned`
 - `position_limit_exceeded`
+- `rate_limit_exceeded`
 - `overflow`
 
 Example:

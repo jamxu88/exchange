@@ -34,7 +34,7 @@ This page is the shortest path to the decisions a competitor actually needs to m
 - Standard competitors have a fixed worst-case per-market net position limit of `+/-1000`.
 - Prices must align to the market `tick_size`.
 - Quantities must be at least the market `min_order_quantity`.
-- Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+- Authenticated competitor operations are limited to `100 ops/sec` per API key. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages.
 
 ### Recommended client split
 

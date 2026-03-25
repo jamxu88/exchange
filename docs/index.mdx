@@ -39,7 +39,7 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
 - Prices and quantities are integer values.
 - `side` is always `BUY` or `SELL`.
 - Standard competitor accounts are capped at `+/-1000` worst-case net position per market.
-- Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+- Authenticated competitor operations are limited to `100 ops/sec` per API key, shared across REST account/trading calls and authenticated WebSocket trading messages.
 - After settlement, positions are flattened at the market settlement price and final PnL becomes realized for that market.
 
 ## Quick links

@@ -35,9 +35,9 @@ Used for:
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
 
-## REST rate limit
+## Rate limit
 
-Authenticated REST account and trading routes are limited to `100 ops/sec` per API key.
+Authenticated competitor operations are limited to `100 ops/sec` per API key.
 
 If you exceed that per-user limit, the server responds with:
 
@@ -47,7 +47,10 @@ If you exceed that per-user limit, the server responds with:
 }
 ```
 
-This limit applies to authenticated REST competitor routes such as `/api/v1/user`, `/api/v1/portfolio`, and `/api/v1/orders`.
+This limit applies to:
+
+- authenticated REST account and trading routes such as `/api/v1/user`, `/api/v1/portfolio`, and `/api/v1/orders`
+- authenticated WebSocket trading messages: `submit_order`, `cancel_order`, and `amend_order`
 
 ## WebSocket auth
 
@@ -79,5 +82,5 @@ Successful response:
 - There is no JWT or OAuth flow.
 - Competitors should normally see `role = "trader"` from [GET /api/v1/user](/rest/user). If you see the wrong username or role, stop and contact the operator.
 - WebSocket market data can be subscribed to before authentication, but trading and user-scoped events require a successful `authenticate` message.
-- The documented `100 ops/sec` limit applies to authenticated REST account and trading routes, not to public routes like `GET /api/v1/markets`.
+- The documented `100 ops/sec` limit applies to authenticated competitor operations, not to public routes like `GET /api/v1/markets` or unauthenticated market-data subscription.
 - Internal admin and operator routes exist, but they are intentionally omitted from this public competitor guide.
