@@ -53,6 +53,6 @@ Use REST for bootstrap, recovery, and request-response order management. This is
 - for market orders, send `price: 0`; the server ignores the field and executes against live opposite-side depth
 - competitors can buy from flat, sell from flat, go long, and go short
 - risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
-- authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, and that budget is shared with authenticated WebSocket trading messages
+- authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, and that budget is shared with authenticated WebSocket trading messages; see [Rate limits](/reference/rate-limits)
 - `open-orders` and `fills` accept an optional `market` query parameter
 - REST is the recommended recovery source of truth after reconnects or user-stream uncertainty

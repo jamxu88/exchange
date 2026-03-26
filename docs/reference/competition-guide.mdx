@@ -34,7 +34,7 @@ This page is the short path to the decisions you actually need to make on event 
 - Standard competitors have a fixed worst-case per-market net position limit of `+/-1000`.
 - Prices must align to the market `tick_size`.
 - Quantities must be at least the market `min_order_quantity`.
-- Authenticated competitor operations are limited by a per-user bucket of `500 ops per 10s`. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages.
+- Authenticated competitor operations are limited by a per-user bucket of `500 ops per 10s`. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages. Use [Rate limits](/reference/rate-limits) for the exact counted operations.
 
 ### Recommended client split
 
@@ -100,6 +100,9 @@ Live `GET /api/v1/leaderboard` shows the event-day standings; ops may publish of
 <Columns cols={2}>
   <Card title="Authentication" href="/reference/authentication">
     REST and WebSocket auth, plus the live REST rate limit.
+  </Card>
+  <Card title="Rate limits" href="/reference/rate-limits">
+    Shared REST and WebSocket throttling behavior for each competitor account.
   </Card>
   <Card title="Market Lifecycle" href="/reference/market-lifecycle">
     Market states, competition-wide trading stops, and settlement behavior.

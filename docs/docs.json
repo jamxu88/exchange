@@ -46,6 +46,7 @@
             "group": "Trading Rules",
             "pages": [
               "reference/market-lifecycle",
+              "reference/rate-limits",
               "reference/recovery-and-resync",
               "reference/error-codes"
             ]

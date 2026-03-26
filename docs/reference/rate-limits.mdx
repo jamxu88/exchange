@@ -1,0 +1,98 @@
+---
+title: "Rate limits"
+description: "How the exchange rate limit works across REST and WebSocket trading, what counts against it, and how to handle limit errors."
+---
+
+Use this page as the source of truth for competitor throttling behavior.
+
+## Current live limit
+
+The exchange currently enforces a shared per-user bucket of `500` operations per `10s`.
+
+That means:
+
+- one competitor account gets one shared bucket
+- the bucket is shared across authenticated REST account calls, authenticated REST trading calls, and authenticated WebSocket trading messages
+- the bucket refills continuously, which works out to `50 ops/s`
+- if you have been idle long enough, you can burst up to `500` operations at once before you need refill time
+
+## What counts against the bucket
+
+These operations consume one token each.
+
+### Authenticated REST
+
+- `GET /api/v1/user`
+- `GET /api/v1/portfolio`
+- `GET /api/v1/positions`
+- `GET /api/v1/open-orders`
+- `GET /api/v1/fills`
+- `GET /api/v1/leaderboard`
+- `POST /api/v1/orders`
+- `PATCH /api/v1/orders/{order_id}`
+- `DELETE /api/v1/orders/{order_id}`
+
+### Authenticated WebSocket trading
+
+- `submit_order`
+- `cancel_order`
+- `amend_order`
+
+## What does not count
+
+These do not consume the authenticated competitor bucket:
+
+- public REST endpoints such as [Health](/rest/health) and [Get Markets](/rest/markets)
+- WebSocket connect
+- WebSocket `authenticate`
+- WebSocket market-data subscribe and unsubscribe messages
+- inbound market-data and user-event messages sent by the server
+
+## Shared-budget examples
+
+The bucket is shared across transports, so switching from REST to WebSocket does not avoid the limit.
+
+- If you spend `300` tokens on authenticated REST reads and writes, you only have about `200` immediate tokens left for WebSocket trading until refill catches up.
+- If you burst `500` order actions quickly, you should expect limit errors until enough time passes for refill.
+- If you need sustained trading, design around the refill rate of about `50 ops/s` per competitor account.
+
+## Error behavior
+
+### REST
+
+REST returns `429 Too Many Requests` with this error shape:
+
+```json
+{
+  "error": "per-user rate limit exceeded: max 500 ops per 10s"
+}
+```
+
+### WebSocket
+
+WebSocket trading messages return a `reject` with `code = "rate_limit_exceeded"`:
+
+```json
+{
+  "type": "reject",
+  "op": "submit_order",
+  "request_id": "req-123",
+  "code": "rate_limit_exceeded",
+  "message": "per-user rate limit exceeded: max 500 ops per 10s"
+}
+```
+
+## Recommended client behavior
+
+- Treat REST `429` and WebSocket `rate_limit_exceeded` as retryable throttling, not permanent failures.
+- Avoid polling authenticated account endpoints on every book update.
+- Use WebSocket for live data and order events, and use REST for bootstrap and recovery.
+- Track your own request rate per competitor account so you can back off before the server rejects you.
+- Leave headroom for cancels and amends during fast markets instead of spending the full bucket on reads.
+
+## Related pages
+
+- [Authentication](/reference/authentication)
+- [REST API](/reference/rest-api)
+- [WebSocket API](/reference/websocket-api)
+- [Error Codes](/reference/error-codes)

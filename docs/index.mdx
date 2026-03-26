@@ -14,6 +14,10 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
     REST and WebSocket auth, rate limits, and the first calls every competitor should make.
   </Card>
 
+  <Card title="Rate limits" href="/reference/rate-limits">
+    Understand the shared REST and WebSocket bucket before you build your trading loop.
+  </Card>
+
   <Card title="REST API" href="/reference/rest-api">
     Bootstrap state, pull account data, and manage orders over HTTP.
   </Card>
@@ -43,7 +47,7 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
 - `side` is always `BUY` or `SELL`.
 - Standard competitor accounts are capped at `+/-1000` worst-case net position per market.
 - `l2` market data is public and aggregated by price level; `l3` is authenticated and exposes the public per-order feed.
-- Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, covering REST account/trading calls and authenticated WebSocket trading messages.
+- Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, covering REST account/trading calls and authenticated WebSocket trading messages. Use [Rate limits](/reference/rate-limits) for the exact counted operations and error behavior.
 - After settlement, positions are flattened at the market settlement price and final PnL becomes realized for that market.
 
 ## Quick links

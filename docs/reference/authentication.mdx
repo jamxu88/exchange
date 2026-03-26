@@ -32,20 +32,9 @@ Used for:
 
 ## Rate limit
 
-Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`.
+Authenticated competitor operations share one per-user bucket of `500 ops per 10s` across authenticated REST account/trading routes and authenticated WebSocket trading messages.
 
-If you exceed that per-user limit, the server responds with:
-
-```json
-{
-  "error": "per-user rate limit exceeded: max 500 ops per 10s"
-}
-```
-
-This limit applies to:
-
-- authenticated REST account and trading routes such as `/api/v1/user`, `/api/v1/portfolio`, and `/api/v1/orders`
-- authenticated WebSocket trading messages: `submit_order`, `cancel_order`, and `amend_order`
+Use [Rate limits](/reference/rate-limits) for the exact counted operations, what does not count, and the REST versus WebSocket error behavior.
 
 ## WebSocket auth
 

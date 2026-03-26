@@ -38,7 +38,7 @@ wss://exchange.jamesxu.dev/ws
 - `l2` snapshots and deltas are aggregated by price level, not raw resting orders
 - `l3` snapshots and deltas are true public per-order events and require prior socket authentication
 - after authentication, the same socket can carry market data, order actions, and user-specific events
-- authenticated trading messages on the socket share the same per-user bucket of `500 ops per 10s` as authenticated REST trading/account calls
+- authenticated trading messages on the socket share the same per-user bucket of `500 ops per 10s` as authenticated REST trading/account calls; see [Rate limits](/reference/rate-limits)
 
 ## Recommended usage
 

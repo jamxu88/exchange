@@ -272,13 +272,13 @@ export async function getAdminState(adminToken: string) {
   };
 }
 
-export async function getAdminLeaderboard(adminToken: string, limit = 10) {
-  return exchangeRequest<ExchangeLeaderboardRow[]>(
-    `/api/v1/admin/leaderboard?limit=${limit}`,
-    {
-      adminToken,
-    },
-  );
+export async function getAdminLeaderboard(adminToken: string, limit?: number) {
+  const path = typeof limit === "number"
+    ? `/api/v1/admin/leaderboard?limit=${limit}`
+    : "/api/v1/admin/leaderboard";
+  return exchangeRequest<ExchangeLeaderboardRow[]>(path, {
+    adminToken,
+  });
 }
 
 export async function getPublicMarkets() {

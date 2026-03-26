@@ -27,6 +27,8 @@ Handle these statuses explicitly in your error UI:
 | `409` | Trade would breach limits, market status blocks trading, or duplicate username |
 | `500` | Unexpected overflow or backend failure |
 
+Use [Rate limits](/reference/rate-limits) for the exact shared-bucket behavior behind `429`.
+
 ## WebSocket `error` messages
 
 These tell you about protocol-level problems you need to fix before trading.

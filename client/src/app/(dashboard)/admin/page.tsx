@@ -684,7 +684,20 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </section>
 
         <section className="ops-panel px-5 py-5">
-          <h2 className="ops-section-title">Leaderboard</h2>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="ops-section-title">Leaderboard</h2>
+              <p className="mt-2 text-base text-[var(--muted-strong)]">
+                Top 10 shown here. Export downloads the full leaderboard as CSV.
+              </p>
+            </div>
+            <a
+              className={neutralButtonClass}
+              href="/admin/leaderboard/export"
+            >
+              Export CSV
+            </a>
+          </div>
           <div className="mt-4 grid gap-3">
             {leaderboard.map((row) => (
               <div
