@@ -166,6 +166,7 @@ pub trait StorageBackend: Send + Sync {
     fn get_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order>;
     fn upsert_open_order(&self, trader_id: Uuid, order: Order);
     fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order>;
+    fn close_open_orders_for_market(&self, market: &str) -> usize;
     fn append_fill(&self, trader_id: Uuid, fill: Fill);
     fn persist_fill(&self, fill: Fill);
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill>;
@@ -364,6 +365,10 @@ impl StorageRepository {
 
     pub fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order> {
         self.backend.delete_open_order(trader_id, order_id)
+    }
+
+    pub fn close_open_orders_for_market(&self, market: &str) -> usize {
+        self.backend.close_open_orders_for_market(market)
     }
 
     pub fn append_fill(&self, trader_id: Uuid, fill: Fill) {
@@ -738,6 +743,19 @@ impl StorageBackend for InMemoryRepository {
         self.with_account_mut(trader_id, |account| account.open_orders.remove(&order_id))
     }
 
+    fn close_open_orders_for_market(&self, market: &str) -> usize {
+        let mut closed = 0;
+        for entry in &self.accounts {
+            let mut account = entry.value().lock().expect("account partition lock");
+            let before = account.open_orders.len();
+            account
+                .open_orders
+                .retain(|_, order| order.market != market);
+            closed += before.saturating_sub(account.open_orders.len());
+        }
+        closed
+    }
+
     fn append_fill(&self, trader_id: Uuid, fill: Fill) {
         self.with_account_mut(trader_id, |account| {
             account.fills.insert(fill.fill_id, fill);
@@ -1043,6 +1061,16 @@ impl StorageBackend for PostgresRepository {
         self.cache.delete_open_order(trader_id, order_id)
     }
 
+    fn close_open_orders_for_market(&self, market: &str) -> usize {
+        let closed = self.cache.close_open_orders_for_market(market);
+        if closed > 0 {
+            self.writer.enqueue(PersistOp::CloseOpenOrdersForMarket {
+                market: market.to_string(),
+            });
+        }
+        closed
+    }
+
     fn append_fill(&self, trader_id: Uuid, fill: Fill) {
         self.cache.append_fill(trader_id, fill);
     }
@@ -1296,6 +1324,9 @@ enum PersistOp {
         trader_id: Uuid,
         order_id: Uuid,
         remaining: u64,
+    },
+    CloseOpenOrdersForMarket {
+        market: String,
     },
     AppendFill(Fill),
     ResetAllTradingState,
@@ -1698,6 +1729,15 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
                 &[trader_id, order_id, &u64_to_i64(*remaining), &updated_at],
             )
             .map_err(|error| format!("postgres order close failed: {error}"))?;
+        }
+        PersistOp::CloseOpenOrdersForMarket { market } => {
+            let updated_at = Utc::now();
+            tx.execute(
+                "UPDATE orders SET status = 'CLOSED', updated_at = $2 \
+                 WHERE market = $1 AND status = 'OPEN'",
+                &[market, &updated_at],
+            )
+            .map_err(|error| format!("postgres bulk order close failed: {error}"))?;
         }
         PersistOp::AppendFill(fill) => {
             tx.execute(
@@ -2394,6 +2434,71 @@ mod tests {
                 .list_open_orders(trader_id, Some("BTC-USD"))
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn close_open_orders_for_market_only_removes_target_market_orders() {
+        let repository = StorageRepository::new_in_memory();
+        let first_trader = Uuid::new_v4();
+        let second_trader = Uuid::new_v4();
+        repository.upsert_open_order(
+            first_trader,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id: first_trader,
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                price: 100,
+                quantity: 1,
+                remaining: 1,
+                created_at: Utc::now(),
+            },
+        );
+        repository.upsert_open_order(
+            first_trader,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id: first_trader,
+                market: "ETH-USD".to_string(),
+                side: Side::Sell,
+                price: 200,
+                quantity: 2,
+                remaining: 2,
+                created_at: Utc::now(),
+            },
+        );
+        repository.upsert_open_order(
+            second_trader,
+            Order {
+                id: Uuid::new_v4(),
+                trader_id: second_trader,
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                price: 101,
+                quantity: 3,
+                remaining: 3,
+                created_at: Utc::now(),
+            },
+        );
+
+        assert_eq!(repository.close_open_orders_for_market("BTC-USD"), 2);
+        assert_eq!(repository.list_all_open_orders().len(), 1);
+        assert_eq!(
+            repository
+                .list_open_orders(first_trader, Some("ETH-USD"))
+                .len(),
+            1
+        );
+        assert!(
+            repository
+                .list_open_orders(first_trader, Some("BTC-USD"))
+                .is_empty()
+        );
+        assert!(
+            repository
+                .list_open_orders(second_trader, Some("BTC-USD"))
+                .is_empty()
         );
     }
 

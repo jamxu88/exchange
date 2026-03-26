@@ -9,7 +9,6 @@ use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
 use crate::settlement::{SettlementEngine, SettlementError};
 use crate::state::AppState;
 use crate::storage::PersistenceStatus;
-use crate::trading::{TradingError, TradingService};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -770,19 +769,19 @@ impl AdminService {
         market.updated_at = Utc::now();
         state.storage.upsert_market(market.clone());
 
-        let open_orders = state
+        let canceled_orders = state
             .storage
-            .list_all_open_orders()
-            .into_iter()
-            .filter(|order| order.market == market.market_id)
-            .collect::<Vec<_>>();
-        for order in &open_orders {
-            match TradingService::cancel_order(state, order.trader_id, order.id).await {
-                Ok(_) => {}
-                Err(TradingError::OrderNotFound) => {}
-                Err(error) => return Err(AdminError::SettlementFailed(error.to_string())),
-            }
-        }
+            .close_open_orders_for_market(&market.market_id);
+        state.remove_market_runtime(&market.market_id);
+        publish_market_resync(
+            state,
+            &market.market_id,
+            "market settled; resubscribe for a fresh snapshot",
+        );
+        publish_user_resync(
+            state,
+            "market settlement cleared resting orders; refresh account state and reconnect if needed",
+        );
 
         let summary =
             SettlementEngine::settle_market(state, &market.market_id, request.settlement_price)?;
@@ -828,7 +827,7 @@ impl AdminService {
             format!(
                 "settlement_price={} canceled_orders={} affected_traders={} settled_quantity={}",
                 request.settlement_price,
-                open_orders.len(),
+                canceled_orders,
                 summary.affected_traders,
                 summary.settled_quantity
             ),
@@ -836,7 +835,7 @@ impl AdminService {
 
         Ok(SettleMarketResponse {
             market,
-            canceled_orders: open_orders.len(),
+            canceled_orders,
             affected_traders: summary.affected_traders,
             settled_quantity: summary.settled_quantity,
             settlement_price: request.settlement_price,
@@ -1409,6 +1408,28 @@ fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
 
 fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage) {
     state.dispatch_user_event(trader_id, message);
+}
+
+fn publish_market_resync(state: &AppState, market: &str, reason: &str) {
+    for channel in ["l2", "l3"] {
+        state.dispatch_system_message(ServerMessage::ResyncRequired {
+            channel: channel.to_string(),
+            market: Some(market.to_string()),
+            expected_sequence: None,
+            current_sequence: None,
+            reason: reason.to_string(),
+        });
+    }
+}
+
+fn publish_user_resync(state: &AppState, reason: &str) {
+    state.dispatch_system_message(ServerMessage::ResyncRequired {
+        channel: "user".to_string(),
+        market: None,
+        expected_sequence: None,
+        current_sequence: None,
+        reason: reason.to_string(),
+    });
 }
 
 fn record_admin_audit(

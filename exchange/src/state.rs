@@ -608,15 +608,21 @@ impl AppState {
         &self,
         market: &str,
     ) -> (MarketBookSnapshot, u64) {
-        if let Some(bridge) = self.market_data_bridge() {
-            if let Some(snapshot) = bridge.request_snapshot(market).await {
-                return (
-                    MarketBookSnapshot {
-                        bids: snapshot.bids,
-                        asks: snapshot.asks,
-                    },
-                    snapshot.sequence,
-                );
+        let market_is_settled = self
+            .storage
+            .get_market(market)
+            .is_some_and(|definition| definition.status == crate::admin::MarketStatus::Settled);
+        if !market_is_settled {
+            if let Some(bridge) = self.market_data_bridge() {
+                if let Some(snapshot) = bridge.request_snapshot(market).await {
+                    return (
+                        MarketBookSnapshot {
+                            bids: snapshot.bids,
+                            asks: snapshot.asks,
+                        },
+                        snapshot.sequence,
+                    );
+                }
             }
         }
         (

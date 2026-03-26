@@ -2023,7 +2023,16 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     let state = test_state();
     let app = build_app(state.clone());
     let maker = provision_user(&state, "settle-maker");
+    let second = provision_user(&state, "settle-second");
     SettlementEngine::seed_position(&state, maker.profile.trader_id, "BTC-USD", 3, Some(100), 0);
+    SettlementEngine::seed_position(
+        &state,
+        second.profile.trader_id,
+        "BTC-USD",
+        -2,
+        Some(120),
+        0,
+    );
 
     let submit_response = app
         .clone()
@@ -2043,6 +2052,24 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
         .expect("response");
     assert_eq!(submit_response.status(), StatusCode::CREATED);
 
+    let second_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &second.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 80,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(second_submit.status(), StatusCode::CREATED);
+
     let settle_response = app
         .clone()
         .oneshot(admin_json_request(
@@ -2059,13 +2086,23 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     assert_eq!(settle_response.status(), StatusCode::OK);
     let settled: SettleMarketResponse = json_body(settle_response).await;
     assert_eq!(settled.market.status, MarketStatus::Settled);
-    assert_eq!(settled.canceled_orders, 1);
+    assert_eq!(settled.canceled_orders, 2);
+    assert!(state.storage.list_all_open_orders().is_empty());
+    let settled_book = state.market_book_snapshot("BTC-USD").await;
+    assert!(settled_book.bids.is_empty());
+    assert!(settled_book.asks.is_empty());
 
     let maker_positions = state.storage.list_positions(maker.profile.trader_id);
     assert_eq!(maker_positions.len(), 1);
     assert_eq!(maker_positions[0].market, "BTC-USD");
     assert_eq!(maker_positions[0].net_quantity, 0);
     assert_eq!(maker_positions[0].realized_pnl, 150);
+
+    let second_positions = state.storage.list_positions(second.profile.trader_id);
+    assert_eq!(second_positions.len(), 1);
+    assert_eq!(second_positions[0].market, "BTC-USD");
+    assert_eq!(second_positions[0].net_quantity, 0);
+    assert_eq!(second_positions[0].realized_pnl, -60);
 
     let leaderboard_response = app
         .oneshot(api_key_request(
