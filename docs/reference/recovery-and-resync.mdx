@@ -5,18 +5,18 @@ description: "How a competitor client should react to sequence gaps, lag, and ex
 
 ## Market-data sequencing
 
-Every market delta includes a per-market `sequence`.
+Every market delta carries a per-market `sequence`.
 
-Current behavior:
+Here’s how the flow works:
 
-- a fresh `subscribe` returns one snapshot
-- live deltas follow with increasing sequence numbers
-- if the backend detects a gap, it sends `resync_required`
-- if the broadcast receiver lags, it sends `resync_required`
+- A fresh `subscribe` sends a snapshot.
+- Deltas arrive with increasing sequences.
+- The server emits `resync_required` whenever it detects a gap.
+- The same message fires when your broadcast receiver lags behind.
 
 ## Client action for market-data resync
 
-When you receive:
+When this message hits you:
 
 ```json
 {
@@ -38,7 +38,7 @@ Do this:
 
 ## User-event lag
 
-If the user event stream lags, the backend sends:
+When the user event stream lags, you get:
 
 ```json
 {
@@ -61,26 +61,26 @@ Do this:
 
 ## Restart behavior
 
-On backend restart:
+After a backend restart:
 
-- open orders are recovered from storage into the in-memory orderbooks
-- persisted positions remain available through storage-backed account reads
-- market-data sequence counters restart from `0`
-- no historical replay is available
+- Open orders are restored into the in-memory books from storage.
+- Persisted positions remain queryable.
+- Market-data sequences restart at `0`.
+- No historical replay is available.
 
-That means clients should treat a reconnect after restart as a fresh session and re-bootstrap account state over REST before trusting local caches.
+Treat a reconnect after restart as a fresh session and re-bootstrap account state over REST before trusting cached data.
 
 ## Current recovery boundary
 
-Implemented:
+What you can rely on:
 
-- open-order recovery into the in-memory book
-- persisted position reads after restart
-- market-data gap detection
-- user-event lag detection
+- Open-order recovery into the in-memory book.
+- Persisted position reads after restart.
+- Market-data gap detection.
+- User-event lag detection.
 
-Not implemented:
+Still missing:
 
-- full settlement replay
-- durable sequence continuation
-- historical gap-fill API
+- Full settlement replay.
+- Durable sequence continuation.
+- Historical gap-fill API.

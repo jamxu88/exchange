@@ -4,7 +4,7 @@ api: "POST /api/v1/orders"
 description: "Submit a new limit or market order."
 ---
 
-Submit a new order through REST when you want simple request-response behavior. WebSocket order entry is also available if you prefer to keep everything on one low-latency socket.
+Submit limit or market orders through REST when you need deterministic request/response behavior. Use the WebSocket order entry paths if you prefer to keep order actions and acknowledgements on a single low-latency socket.
 
 <RequestExample>
 

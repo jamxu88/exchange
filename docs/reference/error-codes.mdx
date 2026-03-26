@@ -5,7 +5,7 @@ description: "REST error behavior and WebSocket reject and error codes that comp
 
 ## REST error shape
 
-REST errors are returned as:
+REST errors deliver a single `error` field so your client can surface what went wrong:
 
 ```json
 {
@@ -15,21 +15,23 @@ REST errors are returned as:
 
 ## REST status mapping
 
-| Status | Example cause |
+Handle these statuses explicitly in your error UI:
+
+| Status | What it means for you |
 | --- | --- |
-| `400` | invalid market symbol, invalid price, tick-size violation, invalid quantity, invalid amend, no opposite-side liquidity for a market order |
-| `401` | missing auth, invalid API key |
-| `429` | per-user authenticated competitor rate limit exceeded |
-| `403` | order exists but belongs to another trader |
-| `404` | order not found, market not configured, target user not found |
-| `409` | projected position limit breach, trading disabled, market disabled, market settled, username already exists |
-| `500` | overflow or internal failure |
+| `400` | Bad payload: wrong market, price, tick-size, quantity, amend, or market order liquidity |
+| `401` | Missing or invalid API key |
+| `429` | Authenticated rate limit (100 ops/sec) exceeded |
+| `403` | Resource exists but belongs to another competitor |
+| `404` | Order, market, or user not found |
+| `409` | Trade would breach limits, market status blocks trading, or duplicate username |
+| `500` | Unexpected overflow or backend failure |
 
 ## WebSocket `error` messages
 
-Used for protocol or transport-level issues.
+These tell you about protocol-level problems you need to fix before trading.
 
-Known codes:
+Known codes you may see:
 
 - `invalid_message`
 - `unsupported_channel`
@@ -47,7 +49,7 @@ Example:
 
 ## WebSocket `reject` messages
 
-Used for trading-operation failures.
+Trading operations fail with a `reject`. Handle every code so you stay in sync with the exchange.
 
 Known codes:
 
@@ -86,7 +88,7 @@ Example:
 
 ## Health degradation
 
-`GET /health` returns:
+Check `GET /health` to monitor persistence:
 
 - `status: "ok"` when persistence is `disabled` or `ok`
 - `status: "degraded"` when persistence is `retrying`, `backpressured`, or `stopped`

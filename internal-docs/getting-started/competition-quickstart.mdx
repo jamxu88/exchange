@@ -3,28 +3,17 @@ title: "Competition Quickstart"
 description: "How a competition user receives credentials and connects to the live exchange."
 ---
 
-## 1. Get your assigned API key
+## 1. Your competition credentials
 
-Competition users are provisioned by an operator. There is no self-registration flow.
+Ops will hand you a username and a single API key. That key is your identity and the only credential the exchange respects, so guard it like a secret weapon.
 
-Each participant receives:
+## 2. Get into the Next.js client
 
-- a username
-- a unique API key
+Want a UI? Head to `/login`, paste the API key, and the client will prove it to the backend. You get an HTTP-only cookie, and the app drops you straight into `/trade` (or `/admin` if you are running ops).
 
-That API key is both the user identity and the API access credential.
+## 3. Talk to the REST API
 
-## 2. Browser login flow
-
-If you are using the Next.js client:
-
-1. Open `/login`.
-2. Paste the assigned API key.
-3. The client validates the key against the exchange, stores an HTTP-only session cookie, and routes you to `/trade` or `/admin`.
-
-## 3. REST check
-
-Use the API key directly against the live exchange:
+The API key works everywhere, so try it against `/api/v1/user` and make sure things light up:
 
 ```bash
 curl \
@@ -32,45 +21,35 @@ curl \
   https://exchange.jamesxu.dev/api/v1/user
 ```
 
-Example response:
+You should get back your trader profile and confirmation that the system knows you.
 
-```json
-{
-  "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-  "username": "team-alpha",
-  "api_key": "exch_redacted",
-  "created_at": "2026-03-18T15:27:42.159901Z"
-}
-```
+## 4. Stream live data
 
-## 4. WebSocket check
-
-Open a socket to:
+WebSockets are the fast lane:
 
 ```text
 wss://exchange.jamesxu.dev/ws
 ```
 
-Authenticate:
+Send:
 
 ```json
 {"op":"authenticate","api_key":"YOUR_API_KEY"}
 ```
 
-Then subscribe to market data:
+Then subscribe to the books you care about:
 
 ```json
 {"op":"subscribe","channel":"l3","market":"BTC-USD"}
 ```
 
-## 5. If you receive `resync_required`
+## 5. Troubleshooting resyncs
 
-- For `channel: "l3"`, resubscribe to get a fresh snapshot.
-- For `channel: "user"`, refresh account state over REST and reconnect if needed.
+- If `channel: "l3"` returns `resync_required`, drop and re-subscribe to rebuild the book.
+- If `channel: "user"` demands a resync, query your REST positions again and reconnect.
 
-## 6. Current operational caveats
+## 6. Quick operational notes
 
-- The live endpoint is `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`.
-- Public port `80` is not currently redirecting, so use the HTTPS URL directly.
-- Market-data sequence numbers reset when the backend process restarts.
-- Restart recovery currently restores open orders into the in-memory book, but full settlement reconciliation is not implemented yet.
+- Live endpoints are `https://exchange.jamesxu.dev` and `wss://exchange.jamesxu.dev/ws`; skip HTTP-only ports.
+- Sequence numbers restart whenever we redeploy, so treat message gaps as expected after a reboot.
+- We reload open orders from persistence on startup, but full settlement reconciliation is still in motion, so keep a close eye on your PnL after a restart.

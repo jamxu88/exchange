@@ -5,14 +5,9 @@ description: "How competitors authenticate REST requests and WebSocket sessions 
 
 ## Assigned API keys
 
-Competitors do not self-register. Each team or trader receives an API key from the competition operator.
+Ops hands each competitor or trading team a single API key before the event. That key is the credential you use for every REST request and WebSocket session, so keep it safe.
 
-That API key is your only credential for the public trading API.
-
-Your first authenticated calls should usually be:
-
-1. [GET /api/v1/user](/rest/user) to verify identity
-2. [GET /api/v1/portfolio](/rest/portfolio) to bootstrap current positions and limits
+Start your session with [GET /api/v1/user](/rest/user) to confirm your identity, then call [GET /api/v1/portfolio](/rest/portfolio) to understand your positions and hard limits before you trade.
 
 ## REST trader auth
 
@@ -78,9 +73,8 @@ Successful response:
 
 ## Notes
 
-- There are no user passwords.
-- There is no JWT or OAuth flow.
-- Competitors should normally see `role = "trader"` from [GET /api/v1/user](/rest/user). If you see the wrong username or role, stop and contact the operator.
-- WebSocket market data can be subscribed to before authentication, but trading and user-scoped events require a successful `authenticate` message.
-- The documented `100 ops/sec` limit applies to authenticated competitor operations, not to public routes like `GET /api/v1/markets` or unauthenticated market-data subscription.
-- Internal admin and operator routes exist, but they are intentionally omitted from this public competitor guide.
+- No passwords, JWTs, or OAuth flows are involved—just the API key you were given.
+- Expect `role = "trader"` in your `/api/v1/user` response; if it looks wrong, pause and ping ops.
+- You can watch public market data before authenticating, but only a successful `authenticate` gives you order entry and user events.
+- That `100 ops/sec` limit only hits authenticated competitor actions, so public endpoints like `/api/v1/markets` stay unlimited.
+- This guide skips admin-only APIs; focus on the competitor surface area listed above.

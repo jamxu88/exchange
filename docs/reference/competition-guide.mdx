@@ -3,7 +3,7 @@ title: "Competition guide"
 description: "The practical checklist competitors should follow before trading, during the event, and at settlement."
 ---
 
-This page is the shortest path to the decisions a competitor actually needs to make on event day.
+This page is the short path to the decisions you actually need to make on event day.
 
 <Columns cols={3}>
   <Card title="Before Trading" href="#before-trading">
@@ -19,11 +19,11 @@ This page is the shortest path to the decisions a competitor actually needs to m
 
 ## Before trading
 
-1. Get your assigned API key from the operator.
-2. Call [Get User](/rest/user) to verify `username`, `trader_id`, and `role`.
-3. Call [Get Markets](/rest/markets) and cache `market_id`, `status`, `tick_size`, `min_order_quantity`, and `reference_price`.
-4. Call [Get Portfolio](/rest/portfolio) to bootstrap positions and your position limit.
-5. Open a WebSocket connection if you need live book updates or user-specific events.
+1. Grab your assigned API key from the operator.
+2. Call [Get User](/rest/user) to confirm `username`, `trader_id`, and `role`.
+3. Cache every market’s `market_id`, `status`, `tick_size`, `min_order_quantity`, and `reference_price` from [Get Markets](/rest/markets).
+4. Bootstrap positions and limits with [Get Portfolio](/rest/portfolio).
+5. Open a WebSocket if you need live book updates or user-specific events.
 
 ## While trading
 
@@ -81,24 +81,14 @@ Use [Recovery And Resync](/reference/recovery-and-resync) as the exact recovery 
 
 When a market settles:
 
-- new trading stops for that market
-- remaining open orders are canceled
-- remaining open positions are flattened at the operator-entered `settlement_price`
+- expect trading to stop for that symbol
+- open orders disappear
+- positions flatten at the operator-entered `settlement_price`
 - unrealized PnL for that market becomes realized
 
-Immediately refresh:
+Refresh everything right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), and [Get Leaderboard](/rest/leaderboard).
 
-- [Get Markets](/rest/markets)
-- [Get Portfolio](/rest/portfolio)
-- [Get Positions](/rest/positions)
-- [Get Open Orders](/rest/open-orders)
-- [Get Fills](/rest/fills)
-- [Get Leaderboard](/rest/leaderboard)
-
-Important distinction:
-
-- [Get Leaderboard](/rest/leaderboard) is the live marked leaderboard during the event
-- operators may publish official final standings separately after all relevant markets are settled and results are frozen
+Live `GET /api/v1/leaderboard` shows the event-day standings; ops may publish official final standings later once all relevant markets are settled and locked.
 
 ## Related pages
 
