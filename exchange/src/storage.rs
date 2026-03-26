@@ -1,7 +1,7 @@
-use crate::accounts::{UserProfile, UserRecord};
+use crate::accounts::{UserProfile, UserRecord, UserRole};
 use crate::admin::{
-    AdminAuditEntry, AdminMessageEntry, AdminMessageLevel, ExchangeControls, MarketDefinition,
-    MarketStatus,
+    AdminAuditEntry, AdminMessageEntry, AdminMessageLevel, CompetitionLeaderboardSnapshot,
+    ExchangeControls, MarketDefinition, MarketStatus,
 };
 use crate::config::Config;
 use crate::orderbook::{Fill, Order, Side};
@@ -14,7 +14,7 @@ use postgres::{Client, NoTls, Row, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,6 +38,9 @@ pub const PENDING_POSITIONS_TABLE: &str = "pending_positions";
 pub const ORDERS_TABLE: &str = "orders";
 pub const FILLS_TABLE: &str = "fills";
 pub const PNL_SNAPSHOTS_TABLE: &str = "pnl_snapshots";
+pub const COMPETITION_LEADERBOARD_SNAPSHOTS_TABLE: &str = "competition_leaderboard_snapshots";
+pub const COMPETITION_LEADERBOARD_SNAPSHOT_ROWS_TABLE: &str =
+    "competition_leaderboard_snapshot_rows";
 pub const POSTGRES_INITIAL_SCHEMA: &str = include_str!("../sql/migrations/001_initial.sql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -132,6 +135,13 @@ pub trait StorageBackend: Send + Sync {
     fn list_admin_audit_logs(&self) -> Vec<AdminAuditEntry>;
     fn append_admin_message(&self, entry: AdminMessageEntry);
     fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry>;
+    fn append_competition_snapshot(&self, snapshot: CompetitionLeaderboardSnapshot);
+    fn get_competition_snapshot(&self, snapshot_id: Uuid)
+    -> Option<CompetitionLeaderboardSnapshot>;
+    fn latest_competition_snapshot(
+        &self,
+        competition_id: &str,
+    ) -> Option<CompetitionLeaderboardSnapshot>;
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance>;
     fn list_all_balances(&self) -> Vec<(Uuid, Vec<Balance>)>;
     fn put_balance(&self, trader_id: Uuid, balance: Balance);
@@ -145,7 +155,9 @@ pub trait StorageBackend: Send + Sync {
     fn list_settlement_journal(&self) -> Vec<SettlementJournalEntry>;
     fn list_positions(&self, trader_id: Uuid) -> Vec<Position>;
     fn list_all_positions(&self) -> Vec<(Uuid, Vec<Position>)>;
+    fn get_position(&self, trader_id: Uuid, market: &str) -> Option<Position>;
     fn upsert_position(&self, trader_id: Uuid, position: Position);
+    fn delete_position(&self, trader_id: Uuid, market: &str) -> Option<Position>;
     fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>);
     fn upsert_order_ledger(&self, order: Order);
     fn close_order_ledger(&self, trader_id: Uuid, order_id: Uuid, remaining: u64);
@@ -155,6 +167,7 @@ pub trait StorageBackend: Send + Sync {
     fn upsert_open_order(&self, trader_id: Uuid, order: Order);
     fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order>;
     fn append_fill(&self, trader_id: Uuid, fill: Fill);
+    fn persist_fill(&self, fill: Fill);
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill>;
     fn reset_all_trading_state(&self);
 }
@@ -252,6 +265,24 @@ impl StorageRepository {
         self.backend.list_admin_messages(limit)
     }
 
+    pub fn append_competition_snapshot(&self, snapshot: CompetitionLeaderboardSnapshot) {
+        self.backend.append_competition_snapshot(snapshot)
+    }
+
+    pub fn get_competition_snapshot(
+        &self,
+        snapshot_id: Uuid,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.backend.get_competition_snapshot(snapshot_id)
+    }
+
+    pub fn latest_competition_snapshot(
+        &self,
+        competition_id: &str,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.backend.latest_competition_snapshot(competition_id)
+    }
+
     pub fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
         self.backend.list_balances(trader_id)
     }
@@ -290,8 +321,16 @@ impl StorageRepository {
         self.backend.list_all_positions()
     }
 
+    pub fn get_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        self.backend.get_position(trader_id, market)
+    }
+
     pub fn upsert_position(&self, trader_id: Uuid, position: Position) {
         self.backend.upsert_position(trader_id, position)
+    }
+
+    pub fn delete_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        self.backend.delete_position(trader_id, market)
     }
 
     pub fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
@@ -331,6 +370,10 @@ impl StorageRepository {
         self.backend.append_fill(trader_id, fill)
     }
 
+    pub fn persist_fill(&self, fill: Fill) {
+        self.backend.persist_fill(fill)
+    }
+
     pub fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill> {
         self.backend.list_fills(trader_id, market)
     }
@@ -349,6 +392,7 @@ struct InMemoryRepository {
     markets: DashMap<String, MarketDefinition>,
     admin_audit_logs: Arc<Mutex<Vec<AdminAuditEntry>>>,
     admin_messages: Arc<Mutex<Vec<AdminMessageEntry>>>,
+    competition_snapshots: Arc<Mutex<Vec<CompetitionLeaderboardSnapshot>>>,
     settlement_journal: Arc<Mutex<Vec<SettlementJournalEntry>>>,
     accounts: DashMap<Uuid, Arc<Mutex<AccountPartition>>>,
 }
@@ -498,6 +542,44 @@ impl StorageBackend for InMemoryRepository {
         entries
     }
 
+    fn append_competition_snapshot(&self, snapshot: CompetitionLeaderboardSnapshot) {
+        let mut guard = self
+            .competition_snapshots
+            .lock()
+            .expect("competition snapshots lock");
+        guard.retain(|existing| existing.snapshot_id != snapshot.snapshot_id);
+        guard.push(snapshot);
+    }
+
+    fn get_competition_snapshot(
+        &self,
+        snapshot_id: Uuid,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.competition_snapshots
+            .lock()
+            .expect("competition snapshots lock")
+            .iter()
+            .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+            .cloned()
+    }
+
+    fn latest_competition_snapshot(
+        &self,
+        competition_id: &str,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.competition_snapshots
+            .lock()
+            .expect("competition snapshots lock")
+            .iter()
+            .filter(|snapshot| snapshot.competition_id == competition_id)
+            .max_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.snapshot_id.cmp(&right.snapshot_id))
+            })
+            .cloned()
+    }
+
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
         self.with_account(trader_id, |account| {
             account.balances.values().cloned().collect()
@@ -592,10 +674,18 @@ impl StorageBackend for InMemoryRepository {
         positions
     }
 
+    fn get_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        self.with_account(trader_id, |account| account.positions.get(market).cloned())
+    }
+
     fn upsert_position(&self, trader_id: Uuid, position: Position) {
         self.with_account_mut(trader_id, |account| {
             account.positions.insert(position.market.clone(), position);
         });
+    }
+
+    fn delete_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        self.with_account_mut(trader_id, |account| account.positions.remove(market))
     }
 
     fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
@@ -653,6 +743,8 @@ impl StorageBackend for InMemoryRepository {
             account.fills.insert(fill.fill_id, fill);
         });
     }
+
+    fn persist_fill(&self, _fill: Fill) {}
 
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill> {
         let mut fills = self.with_account(trader_id, |account| {
@@ -772,7 +864,8 @@ impl StorageBackend for PostgresRepository {
 
     fn set_exchange_controls(&self, controls: ExchangeControls) {
         self.cache.set_exchange_controls(controls.clone());
-        self.writer.enqueue(PersistOp::SetExchangeControls(controls));
+        self.writer
+            .enqueue(PersistOp::SetExchangeControls(controls));
     }
 
     fn list_markets(&self) -> Vec<MarketDefinition> {
@@ -813,6 +906,26 @@ impl StorageBackend for PostgresRepository {
 
     fn list_admin_messages(&self, limit: Option<usize>) -> Vec<AdminMessageEntry> {
         self.cache.list_admin_messages(limit)
+    }
+
+    fn append_competition_snapshot(&self, snapshot: CompetitionLeaderboardSnapshot) {
+        self.cache.append_competition_snapshot(snapshot.clone());
+        self.writer
+            .enqueue(PersistOp::AppendCompetitionSnapshot(snapshot));
+    }
+
+    fn get_competition_snapshot(
+        &self,
+        snapshot_id: Uuid,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.cache.get_competition_snapshot(snapshot_id)
+    }
+
+    fn latest_competition_snapshot(
+        &self,
+        competition_id: &str,
+    ) -> Option<CompetitionLeaderboardSnapshot> {
+        self.cache.latest_competition_snapshot(competition_id)
     }
 
     fn list_balances(&self, trader_id: Uuid) -> Vec<Balance> {
@@ -864,10 +977,27 @@ impl StorageBackend for PostgresRepository {
         self.cache.list_all_positions()
     }
 
+    fn get_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        self.cache.get_position(trader_id, market)
+    }
+
     fn upsert_position(&self, trader_id: Uuid, position: Position) {
         self.cache.upsert_position(trader_id, position.clone());
-        self.writer
-            .enqueue(PersistOp::UpsertPosition { trader_id, position });
+        self.writer.enqueue(PersistOp::UpsertPosition {
+            trader_id,
+            position,
+        });
+    }
+
+    fn delete_position(&self, trader_id: Uuid, market: &str) -> Option<Position> {
+        let removed = self.cache.delete_position(trader_id, market);
+        if removed.is_some() {
+            self.writer.enqueue(PersistOp::DeletePosition {
+                trader_id,
+                market: market.to_string(),
+            });
+        }
+        removed
     }
 
     fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>) {
@@ -904,7 +1034,9 @@ impl StorageBackend for PostgresRepository {
 
     fn upsert_open_order(&self, trader_id: Uuid, order: Order) {
         self.cache.upsert_open_order(trader_id, order.clone());
-        self.writer.enqueue(PersistOp::UpsertOrderLedger(order));
+        if order.remaining != order.quantity {
+            self.writer.enqueue(PersistOp::UpsertOrderLedger(order));
+        }
     }
 
     fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order> {
@@ -912,7 +1044,10 @@ impl StorageBackend for PostgresRepository {
     }
 
     fn append_fill(&self, trader_id: Uuid, fill: Fill) {
-        self.cache.append_fill(trader_id, fill.clone());
+        self.cache.append_fill(trader_id, fill);
+    }
+
+    fn persist_fill(&self, fill: Fill) {
         self.writer.enqueue(PersistOp::AppendFill(fill));
     }
 
@@ -928,7 +1063,7 @@ impl StorageBackend for PostgresRepository {
 
 #[derive(Clone)]
 struct PostgresWritePipeline {
-    tx: SyncSender<PersistOp>,
+    tx: Sender<PersistOp>,
     telemetry: Arc<PostgresWriteTelemetry>,
 }
 
@@ -947,7 +1082,7 @@ impl PostgresWritePipeline {
         );
 
         let telemetry = Arc::new(PostgresWriteTelemetry::new(queue_capacity));
-        let (tx, rx) = mpsc::sync_channel(queue_capacity);
+        let (tx, rx) = mpsc::channel();
         let writer_telemetry = telemetry.clone();
         thread::Builder::new()
             .name("exchange-postgres-writer".to_string())
@@ -967,23 +1102,13 @@ impl PostgresWritePipeline {
     }
 
     fn enqueue(&self, op: PersistOp) {
-        match self.tx.try_send(op) {
-            Ok(()) => self.telemetry.record_enqueued(Duration::ZERO),
-            Err(TrySendError::Full(op)) => {
-                let start = Instant::now();
-                self.tx.send(op).unwrap_or_else(|_| {
-                    self.telemetry
-                        .mark_stopped(Some("postgres writer thread terminated".to_string()));
-                    panic!("postgres writer thread terminated");
-                });
-                self.telemetry.record_enqueued(start.elapsed());
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.telemetry
-                    .mark_stopped(Some("postgres writer thread terminated".to_string()));
-                panic!("postgres writer thread terminated");
-            }
-        }
+        self.telemetry.record_enqueue_started();
+        self.tx.send(op).unwrap_or_else(|_| {
+            self.telemetry
+                .mark_stopped(Some("postgres writer thread terminated".to_string()));
+            panic!("postgres writer thread terminated");
+        });
+        self.telemetry.record_enqueue_blocked(Duration::ZERO);
     }
 
     fn status(&self) -> PersistenceStatus {
@@ -1036,15 +1161,18 @@ impl PostgresWriteTelemetry {
         }
     }
 
-    fn record_enqueued(&self, blocked_for: Duration) {
+    fn record_enqueue_started(&self) {
         self.total_enqueued.fetch_add(1, Ordering::Relaxed);
         let queue_depth = self.queued_ops.fetch_add(1, Ordering::Relaxed) + 1;
         update_max_usize(&self.high_water_mark, queue_depth);
+    }
 
-        if !blocked_for.is_zero() {
+    fn record_enqueue_blocked(&self, blocked_for: Duration) {
+        let blocked_ms = duration_to_millis(blocked_for);
+        if blocked_ms > 0 {
             self.total_blocked_enqueues.fetch_add(1, Ordering::Relaxed);
             self.total_enqueue_block_time_ms
-                .fetch_add(duration_to_millis(blocked_for), Ordering::Relaxed);
+                .fetch_add(blocked_ms, Ordering::Relaxed);
         }
     }
 
@@ -1137,6 +1265,7 @@ enum PersistOp {
     DeleteMarket(String),
     AppendAdminAuditLog(AdminAuditEntry),
     AppendAdminMessage(AdminMessageEntry),
+    AppendCompetitionSnapshot(CompetitionLeaderboardSnapshot),
     PutBalance {
         trader_id: Uuid,
         balance: Balance,
@@ -1153,6 +1282,10 @@ enum PersistOp {
     UpsertPosition {
         trader_id: Uuid,
         position: Position,
+    },
+    DeletePosition {
+        trader_id: Uuid,
+        market: String,
     },
     ReplacePositions {
         trader_id: Uuid,
@@ -1290,10 +1423,11 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
     match op {
         PersistOp::CreateUser(record) => {
             tx.execute(
-                "INSERT INTO users (trader_id, username, created_at) VALUES ($1, $2, $3)",
+                "INSERT INTO users (trader_id, username, role, created_at) VALUES ($1, $2, $3, $4)",
                 &[
                     &record.profile.trader_id,
                     &record.profile.username,
+                    &user_role_to_db(record.profile.role),
                     &record.profile.created_at,
                 ],
             )
@@ -1391,6 +1525,49 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
             )
             .map_err(|error| format!("postgres admin message insert failed: {error}"))?;
         }
+        PersistOp::AppendCompetitionSnapshot(snapshot) => {
+            tx.execute(
+                "INSERT INTO competition_leaderboard_snapshots \
+                 (snapshot_id, competition_id, label, created_at) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (snapshot_id) DO UPDATE SET \
+                   competition_id = EXCLUDED.competition_id, \
+                   label = EXCLUDED.label, \
+                   created_at = EXCLUDED.created_at",
+                &[
+                    &snapshot.snapshot_id,
+                    &snapshot.competition_id,
+                    &snapshot.label,
+                    &snapshot.created_at,
+                ],
+            )
+            .map_err(|error| format!("postgres competition snapshot insert failed: {error}"))?;
+
+            tx.execute(
+                "DELETE FROM competition_leaderboard_snapshot_rows WHERE snapshot_id = $1",
+                &[&snapshot.snapshot_id],
+            )
+            .map_err(|error| format!("postgres competition snapshot row delete failed: {error}"))?;
+
+            for row in &snapshot.leaderboard {
+                tx.execute(
+                    "INSERT INTO competition_leaderboard_snapshot_rows \
+                     (snapshot_id, rank, trader_id, username, net_pnl, realized_pnl, unrealized_pnl, gross_exposure) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    &[
+                        &snapshot.snapshot_id,
+                        &i64::try_from(row.rank).map_err(|_| "competition rank overflow".to_string())?,
+                        &row.trader_id,
+                        &row.username,
+                        &row.net_pnl,
+                        &row.realized_pnl,
+                        &row.unrealized_pnl,
+                        &u64_to_i64(row.gross_exposure),
+                    ],
+                )
+                .map_err(|error| format!("postgres competition snapshot row insert failed: {error}"))?;
+            }
+        }
         PersistOp::PutBalance { trader_id, balance } => {
             let updated_at = Utc::now();
             tx.execute(
@@ -1443,7 +1620,10 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
                 .map_err(|error| format!("postgres settlement journal insert failed: {error}"))?;
             }
         }
-        PersistOp::UpsertPosition { trader_id, position } => {
+        PersistOp::UpsertPosition {
+            trader_id,
+            position,
+        } => {
             let updated_at = position.updated_at;
             tx.execute(
                 "INSERT INTO positions (trader_id, market, net_quantity, average_entry_price, realized_pnl, updated_at) \
@@ -1463,6 +1643,13 @@ fn apply_persist_op(tx: &mut Transaction<'_>, op: &PersistOp) -> Result<(), Stri
                 ],
             )
             .map_err(|error| format!("postgres position upsert failed: {error}"))?;
+        }
+        PersistOp::DeletePosition { trader_id, market } => {
+            tx.execute(
+                "DELETE FROM positions WHERE trader_id = $1 AND market = $2",
+                &[trader_id, market],
+            )
+            .map_err(|error| format!("postgres position delete failed: {error}"))?;
         }
         PersistOp::ReplacePositions {
             trader_id,
@@ -1547,6 +1734,7 @@ fn hydrate_cache(client: &mut Client, cache: &InMemoryRepository) {
     hydrate_markets(client, cache);
     hydrate_admin_audit_logs(client, cache);
     hydrate_admin_messages(client, cache);
+    hydrate_competition_snapshots(client, cache);
     hydrate_balances(client, cache);
     hydrate_settlement_journal(client, cache);
     hydrate_positions(client, cache);
@@ -1557,7 +1745,7 @@ fn hydrate_cache(client: &mut Client, cache: &InMemoryRepository) {
 fn hydrate_users(client: &mut Client, cache: &InMemoryRepository) {
     let rows = client
         .query(
-            "SELECT DISTINCT ON (u.trader_id) u.trader_id, u.username, u.created_at, ak.api_key \
+            "SELECT DISTINCT ON (u.trader_id) u.trader_id, u.username, u.role, u.created_at, ak.api_key \
              FROM users u \
              JOIN api_keys ak ON ak.trader_id = u.trader_id AND ak.revoked_at IS NULL \
              ORDER BY u.trader_id, ak.created_at ASC",
@@ -1628,6 +1816,57 @@ fn hydrate_admin_messages(client: &mut Client, cache: &InMemoryRepository) {
 
     for row in rows {
         cache.append_admin_message(admin_message_from_row(row));
+    }
+}
+
+fn hydrate_competition_snapshots(client: &mut Client, cache: &InMemoryRepository) {
+    let snapshot_rows = client
+        .query(
+            "SELECT snapshot_id, competition_id, label, created_at \
+             FROM competition_leaderboard_snapshots \
+             ORDER BY created_at ASC, snapshot_id ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres competition snapshot hydrate failed: {error}"));
+
+    let row_rows = client
+        .query(
+            "SELECT snapshot_id, rank, trader_id, username, net_pnl, realized_pnl, unrealized_pnl, gross_exposure \
+             FROM competition_leaderboard_snapshot_rows \
+             ORDER BY snapshot_id ASC, rank ASC",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("postgres competition snapshot rows hydrate failed: {error}"));
+
+    let mut rows_by_snapshot = BTreeMap::<Uuid, Vec<crate::admin::LeaderboardRow>>::new();
+    for row in row_rows {
+        let snapshot_id: Uuid = row.get("snapshot_id");
+        rows_by_snapshot
+            .entry(snapshot_id)
+            .or_default()
+            .push(crate::admin::LeaderboardRow {
+                rank: usize::try_from(row.get::<_, i64>("rank"))
+                    .unwrap_or_else(|_| panic!("invalid competition snapshot rank")),
+                trader_id: row.get("trader_id"),
+                username: row.get("username"),
+                net_pnl: row.get("net_pnl"),
+                realized_pnl: row.get("realized_pnl"),
+                unrealized_pnl: row.get("unrealized_pnl"),
+                gross_exposure: i64_to_u64(row.get("gross_exposure")),
+            });
+    }
+
+    for row in snapshot_rows {
+        let snapshot_id: Uuid = row.get("snapshot_id");
+        let leaderboard = rows_by_snapshot.remove(&snapshot_id).unwrap_or_default();
+        cache.append_competition_snapshot(CompetitionLeaderboardSnapshot {
+            snapshot_id,
+            competition_id: row.get("competition_id"),
+            label: row.get("label"),
+            created_at: row.get("created_at"),
+            entrants: leaderboard.len(),
+            leaderboard,
+        });
     }
 }
 
@@ -1724,6 +1963,7 @@ fn user_from_row(row: Row) -> UserRecord {
             trader_id: row.get("trader_id"),
             username: row.get("username"),
             api_key: row.get("api_key"),
+            role: user_role_from_db(&row.get::<_, String>("role")),
             created_at: row.get("created_at"),
         },
     }
@@ -1745,7 +1985,9 @@ fn market_from_row(row: Row) -> MarketDefinition {
         tick_size: i64_to_u64(row.get("tick_size")),
         min_order_quantity: i64_to_u64(row.get("min_order_quantity")),
         reference_price: row.get::<_, Option<i64>>("reference_price").map(i64_to_u64),
-        settlement_price: row.get::<_, Option<i64>>("settlement_price").map(i64_to_u64),
+        settlement_price: row
+            .get::<_, Option<i64>>("settlement_price")
+            .map(i64_to_u64),
         status: market_status_from_db(&row.get::<_, String>("status")),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -1906,6 +2148,21 @@ fn admin_message_level_from_db(level: &str) -> AdminMessageLevel {
     }
 }
 
+fn user_role_to_db(role: UserRole) -> &'static str {
+    match role {
+        UserRole::Trader => "TRADER",
+        UserRole::Admin => "ADMIN",
+    }
+}
+
+fn user_role_from_db(role: &str) -> UserRole {
+    match role {
+        "TRADER" => UserRole::Trader,
+        "ADMIN" => UserRole::Admin,
+        other => panic!("unsupported user role in storage: {other}"),
+    }
+}
+
 fn persist_balance_snapshot(
     tx: &mut Transaction<'_>,
     trader_id: Uuid,
@@ -2013,6 +2270,7 @@ mod tests {
                 trader_id: Uuid::new_v4(),
                 username: username.to_string(),
                 api_key: api_key.to_string(),
+                role: UserRole::Trader,
                 created_at: Utc::now(),
             },
         }
@@ -2031,6 +2289,9 @@ mod tests {
             database_url: "postgres://unused".to_string(),
             storage_backend: StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
             per_user_requests_per_second: 100,
             admin_api_token: "admin-token".to_string(),
             postgres_write_batch_size: 128,
@@ -2163,6 +2424,14 @@ mod tests {
         assert!(POSTGRES_INITIAL_SCHEMA.contains("CREATE TABLE IF NOT EXISTS orders"));
         assert!(POSTGRES_INITIAL_SCHEMA.contains("CREATE TABLE IF NOT EXISTS fills"));
         assert!(POSTGRES_INITIAL_SCHEMA.contains("CREATE TABLE IF NOT EXISTS pnl_snapshots"));
+        assert!(
+            POSTGRES_INITIAL_SCHEMA
+                .contains("CREATE TABLE IF NOT EXISTS competition_leaderboard_snapshots")
+        );
+        assert!(
+            POSTGRES_INITIAL_SCHEMA
+                .contains("CREATE TABLE IF NOT EXISTS competition_leaderboard_snapshot_rows")
+        );
     }
 
     #[test]
@@ -2175,7 +2444,7 @@ mod tests {
         let telemetry = PostgresWriteTelemetry::new(10);
 
         for _ in 0..8 {
-            telemetry.record_enqueued(Duration::ZERO);
+            telemetry.record_enqueue_started();
         }
         let backpressured = telemetry.snapshot(StorageBackendKind::Postgres);
         assert_eq!(backpressured.mode, PersistenceMode::Backpressured);

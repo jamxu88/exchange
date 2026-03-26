@@ -15,6 +15,13 @@ describe("TradeRestClient", () => {
       "No exchange API key configured. Account bootstrap skipped.",
     ]);
     expect(snapshot.markets).toEqual([]);
+    expect(snapshot.loaded).toEqual({
+      markets: false,
+      user: false,
+      positions: false,
+      openOrders: false,
+      fills: false,
+    });
   });
 
   it("bootstraps markets alongside account state", async () => {
@@ -40,6 +47,43 @@ describe("TradeRestClient", () => {
       { id: "BTC-USD", name: "Bitcoin", baseAsset: "BTC", quoteAsset: "USD" },
     ]);
     expect(snapshot.user?.username).toBe("alice");
+    expect(snapshot.loaded).toEqual({
+      markets: true,
+      user: true,
+      positions: true,
+      openOrders: true,
+      fills: true,
+    });
+  });
+
+  it("marks open orders as not loaded when that specific bootstrap request fails", async () => {
+    const responses = [
+      { ok: true, payload: [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }] },
+      { ok: true, payload: { trader_id: "trader-1", username: "alice" } },
+      { ok: true, payload: [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }] },
+      { ok: false, status: 429, payload: { error: "per-user rate limit exceeded: max 100 ops/sec" } },
+      { ok: true, payload: [] },
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      const next = responses.shift();
+      return {
+        ok: next?.ok ?? true,
+        status: next?.status ?? 200,
+        text: async () => JSON.stringify(next?.payload ?? {}),
+      };
+    });
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const snapshot = await client.bootstrapAccountData();
+
+    expect(snapshot.openOrders).toEqual([]);
+    expect(snapshot.loaded.openOrders).toBe(false);
+    expect(snapshot.warnings).toContain(
+      "Open order bootstrap failed. per-user rate limit exceeded: max 100 ops/sec",
+    );
   });
 
   it("submits an order with the expected auth header and payload", async () => {
@@ -79,14 +123,118 @@ describe("TradeRestClient", () => {
       "http://localhost:8080/api/v1/orders",
       expect.objectContaining({
         method: "POST",
+        body: JSON.stringify({
+          market: "BTC-USD",
+          side: "BUY",
+          order_type: "market",
+          price: 0,
+          quantity: 2,
+        }),
         headers: expect.objectContaining({
           "x-api-key": "secret",
           "content-type": "application/json",
         }),
       }),
     );
-    expect(result.syntheticMarket).toBe(true);
     expect(result.effectivePrice).toBe(101);
+  });
+
+  it("returns the weighted execution price for aggressive limit orders", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          order: {
+            id: "order-2",
+            market: "BTC-USD",
+            side: "BUY",
+            price: 105,
+            quantity: 4,
+            remaining: 1,
+            created_at: "2026-03-17T09:31:00Z",
+          },
+          fills: [
+            {
+              fill_id: "fill-1",
+              market: "BTC-USD",
+              maker_order_id: "maker-1",
+              taker_order_id: "order-2",
+              price: 100,
+              quantity: 1,
+              occurred_at: "2026-03-17T09:31:00Z",
+            },
+            {
+              fill_id: "fill-2",
+              market: "BTC-USD",
+              maker_order_id: "maker-2",
+              taker_order_id: "order-2",
+              price: 101,
+              quantity: 2,
+              occurred_at: "2026-03-17T09:31:01Z",
+            },
+          ],
+          resting: true,
+        }),
+    });
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const result = await client.submitOrder({
+      marketId: "BTC-USD",
+      marketName: "BTC-USD",
+      side: "buy",
+      orderType: "limit",
+      quantity: 4,
+      requestedPrice: 105,
+      effectivePrice: 105,
+    });
+
+    expect(result.effectivePrice).toBeCloseTo(100.6666666667);
+    expect(result.requestedPrice).toBe(105);
+    expect(result.remaining).toBe(1);
+  });
+
+  it("cancels an order with the expected auth header and path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          order: {
+            id: "order-1",
+            market: "BTC-USD",
+            side: "BUY",
+            price: 101,
+            quantity: 2,
+            remaining: 1,
+            created_at: "2026-03-17T09:30:00Z",
+          },
+        }),
+    });
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const result = await client.cancelOrder("order-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/orders/order-1",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "x-api-key": "secret",
+        }),
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: "order-1",
+        shares: 1,
+        limitPrice: 101,
+      }),
+    );
   });
 
   it("invokes fetch with the global context so browser bootstrap does not fail", async () => {

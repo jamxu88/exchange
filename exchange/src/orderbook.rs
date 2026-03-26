@@ -35,6 +35,12 @@ pub struct Fill {
     pub occurred_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct BookLevel {
+    pub price: u64,
+    pub quantity: u64,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct PriceLevel {
     pub head: Option<usize>,
@@ -116,6 +122,39 @@ impl OrderBook {
         orders
     }
 
+    pub fn levels_for_side(&self, side: Side) -> Vec<BookLevel> {
+        match side {
+            Side::Buy => self
+                .bid_prices
+                .iter()
+                .filter_map(|price| {
+                    let quantity = self.level_quantity(Side::Buy, price.0);
+                    (quantity > 0).then_some(BookLevel {
+                        price: price.0,
+                        quantity,
+                    })
+                })
+                .collect(),
+            Side::Sell => self
+                .ask_prices
+                .iter()
+                .filter_map(|price| {
+                    let quantity = self.level_quantity(Side::Sell, *price);
+                    (quantity > 0).then_some(BookLevel {
+                        price: *price,
+                        quantity,
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    pub fn level_quantity(&self, side: Side, price: u64) -> u64 {
+        self.get_level(side, price)
+            .map(|level| level.total_qty)
+            .unwrap_or(0)
+    }
+
     pub fn cancel_order(&mut self, order_id: Uuid) -> Option<Order> {
         let locator = *self.order_index.get(&order_id)?;
         let removed = self.unlink_node(locator.side, locator.price, locator.handle)?;
@@ -151,7 +190,7 @@ impl OrderBook {
         &mut self,
         incoming_side: Side,
         max_qty: u64,
-    ) -> Option<(u64, Uuid, Uuid, Side, u64, u64)> {
+    ) -> Option<(u64, Uuid, Uuid, Side, u64, u64, DateTime<Utc>, u64)> {
         let (side, price) = match incoming_side {
             Side::Buy => (Side::Sell, self.best_ask_price()?),
             Side::Sell => (Side::Buy, self.best_bid_price()?),
@@ -162,7 +201,16 @@ impl OrderBook {
             level.head?
         };
 
-        let (maker_id, maker_trader_id, maker_side, maker_limit_price, traded_qty, is_filled) = {
+        let (
+            maker_id,
+            maker_trader_id,
+            maker_side,
+            maker_limit_price,
+            maker_quantity,
+            maker_created_at,
+            traded_qty,
+            is_filled,
+        ) = {
             let node = self.node_mut(head_handle)?;
             let traded_qty = node.order.remaining.min(max_qty);
             node.order.remaining = node.order.remaining.saturating_sub(traded_qty);
@@ -171,6 +219,8 @@ impl OrderBook {
                 node.order.trader_id,
                 node.order.side,
                 node.order.price,
+                node.order.quantity,
+                node.order.created_at,
                 traded_qty,
                 node.order.remaining == 0,
             )
@@ -193,6 +243,8 @@ impl OrderBook {
             maker_trader_id,
             maker_side,
             maker_limit_price,
+            maker_quantity,
+            maker_created_at,
             traded_qty,
         ))
     }

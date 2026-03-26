@@ -1,6 +1,6 @@
 use crate::auth::{AuthService, AuthenticatedUser};
 use crate::marketdata::{ClientMessage, L3_CHANNEL, ServerMessage, UserBroadcastEvent};
-use crate::orderbook::Side;
+use crate::rate_limit::enforce_authenticated_user_rate_limit;
 use crate::state::AppState;
 use crate::trading::{AmendOrderRequest, SubmitOrderRequest, TradingError, TradingService};
 use axum::{
@@ -185,6 +185,7 @@ async fn handle_client_text(
             request_id,
             market,
             side,
+            order_type,
             price,
             quantity,
         } => {
@@ -196,13 +197,22 @@ async fn handle_client_text(
                     "authenticate before trading",
                 )];
             };
+            if let Err(message) = enforce_authenticated_user_rate_limit(state, user.trader_id) {
+                return vec![reject(
+                    "submit_order",
+                    request_id,
+                    "rate_limit_exceeded",
+                    &message,
+                )];
+            }
 
-            match TradingService::submit_limit_order(
+            match TradingService::submit_order(
                 state,
                 user.trader_id,
                 SubmitOrderRequest {
                     market,
                     side,
+                    order_type,
                     price,
                     quantity,
                 },
@@ -225,6 +235,14 @@ async fn handle_client_text(
                     "authenticate before trading",
                 )];
             };
+            if let Err(message) = enforce_authenticated_user_rate_limit(state, user.trader_id) {
+                return vec![reject(
+                    "cancel_order",
+                    request_id,
+                    "rate_limit_exceeded",
+                    &message,
+                )];
+            }
 
             match TradingService::cancel_order(state, user.trader_id, order_id).await {
                 Ok(_) => vec![ack("cancel_order", request_id)],
@@ -244,6 +262,14 @@ async fn handle_client_text(
                     "authenticate before trading",
                 )];
             };
+            if let Err(message) = enforce_authenticated_user_rate_limit(state, user.trader_id) {
+                return vec![reject(
+                    "amend_order",
+                    request_id,
+                    "rate_limit_exceeded",
+                    &message,
+                )];
+            }
 
             match TradingService::amend_order(
                 state,
@@ -375,35 +401,31 @@ fn trading_error_code(error: &TradingError) -> &'static str {
         TradingError::MarketDisabled => "market_disabled",
         TradingError::MarketSettled => "market_settled",
         TradingError::InvalidPrice => "invalid_price",
+        TradingError::PriceTooLarge { .. } => "price_too_large",
         TradingError::TickSizeViolation { .. } => "tick_size_violation",
+        TradingError::NoLiquidity => "no_liquidity",
         TradingError::InvalidQuantity => "invalid_quantity",
+        TradingError::QuantityTooLarge { .. } => "quantity_too_large",
         TradingError::QuantityBelowMinimum { .. } => "quantity_below_minimum",
         TradingError::InvalidRemaining => "invalid_remaining",
         TradingError::InvalidAmend => "invalid_amend",
         TradingError::OrderNotFound => "order_not_found",
         TradingError::OrderNotOwned => "order_not_owned",
+        TradingError::EngineUnavailable => "engine_unavailable",
         TradingError::PositionLimitExceeded { .. } => "position_limit_exceeded",
         TradingError::Overflow => "overflow",
     }
 }
 
 async fn build_snapshot_message(state: &AppState, market: &str) -> ServerMessage {
-    let (bids, asks) = if let Some(book) = state.orderbooks.get(market) {
-        let book = book.lock().await;
-        (
-            book.orders_for_side(Side::Buy),
-            book.orders_for_side(Side::Sell),
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let snapshot = state.market_book_snapshot(market).await;
 
     ServerMessage::Snapshot {
         channel: L3_CHANNEL.to_string(),
         market: market.to_string(),
         sequence: state.current_market_sequence(market),
-        bids: bids.iter().map(Into::into).collect(),
-        asks: asks.iter().map(Into::into).collect(),
+        bids: snapshot.bids,
+        asks: snapshot.asks,
     }
 }
 
@@ -420,8 +442,8 @@ mod tests {
     use super::*;
     use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
-    use crate::marketdata::{BookDelta, L3Order, OrderStateStatus};
-    use crate::orderbook::{Order, Side};
+    use crate::marketdata::{BookDelta, OrderStateStatus};
+    use crate::orderbook::{BookLevel, Order, Side};
     use crate::state::AppState;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
@@ -432,6 +454,9 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
             per_user_requests_per_second: 100,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
@@ -472,16 +497,12 @@ mod tests {
     #[tokio::test]
     async fn subscribe_returns_snapshot_for_requested_market() {
         let state = test_state();
-        let orderbook = state
-            .orderbooks
-            .entry("BTC-USD".to_string())
-            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(Default::default())))
-            .clone();
-        {
-            let mut book = orderbook.lock().await;
-            book.add_order(stable_order(1, Side::Buy, 100, 3));
-            book.add_order(stable_order(2, Side::Sell, 101, 2));
-        }
+        state
+            .storage
+            .upsert_open_order(Uuid::from_u128(10_001), stable_order(1, Side::Buy, 100, 3));
+        state
+            .storage
+            .upsert_open_order(Uuid::from_u128(10_002), stable_order(2, Side::Sell, 101, 2));
         let mut connection = ClientConnection::default();
 
         let reply = handle_client_text(
@@ -506,11 +527,17 @@ mod tests {
                 assert_eq!(*sequence, 0);
                 assert_eq!(
                     *bids,
-                    vec![L3Order::from(&stable_order(1, Side::Buy, 100, 3))]
+                    vec![BookLevel {
+                        price: 100,
+                        quantity: 3
+                    }]
                 );
                 assert_eq!(
                     *asks,
-                    vec![L3Order::from(&stable_order(2, Side::Sell, 101, 2))]
+                    vec![BookLevel {
+                        price: 101,
+                        quantity: 2
+                    }]
                 );
             }
             other => panic!("unexpected reply: {other:?}"),
@@ -551,10 +578,10 @@ mod tests {
             crate::marketdata::BroadcastEvent {
                 market: "BTC-USD".to_string(),
                 sequence: 7,
-                event: BookDelta::OrderRemoved {
-                    order_id: Uuid::from_u128(1),
+                event: BookDelta::LevelUpdated {
                     side: Side::Sell,
                     price: 101,
+                    quantity: 0,
                 },
             },
         )
@@ -609,6 +636,7 @@ mod tests {
             &state,
             crate::auth::ProvisionUserRequest {
                 username: "ws-user".to_string(),
+                role: None,
             },
         )
         .expect("provision user");
@@ -695,6 +723,7 @@ mod tests {
             &state,
             crate::auth::ProvisionUserRequest {
                 username: "ws-trader".to_string(),
+                role: None,
             },
         )
         .expect("provision user");
@@ -703,6 +732,7 @@ mod tests {
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: provisioned.profile.trader_id,
                 username: provisioned.profile.username.clone(),
+                role: provisioned.profile.role,
             }),
             subscription: None,
             last_market_sequence: None,
@@ -742,6 +772,7 @@ mod tests {
             &state,
             crate::auth::ProvisionUserRequest {
                 username: "maker".to_string(),
+                role: None,
             },
         )
         .expect("maker");
@@ -749,6 +780,7 @@ mod tests {
             &state,
             crate::auth::ProvisionUserRequest {
                 username: "taker".to_string(),
+                role: None,
             },
         )
         .expect("taker");
@@ -757,6 +789,7 @@ mod tests {
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: maker.profile.trader_id,
                 username: maker.profile.username.clone(),
+                role: maker.profile.role,
             }),
             subscription: None,
             last_market_sequence: None,
@@ -776,6 +809,7 @@ mod tests {
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: taker.profile.trader_id,
                 username: taker.profile.username.clone(),
+                role: taker.profile.role,
             }),
             subscription: None,
             last_market_sequence: None,
@@ -849,6 +883,7 @@ mod tests {
             &state,
             crate::auth::ProvisionUserRequest {
                 username: "edit-user".to_string(),
+                role: None,
             },
         )
         .expect("trader");
@@ -857,6 +892,7 @@ mod tests {
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: trader.profile.trader_id,
                 username: trader.profile.username.clone(),
+                role: trader.profile.role,
             }),
             subscription: None,
             last_market_sequence: None,
@@ -935,16 +971,16 @@ mod tests {
             channel: "l3".to_string(),
             market: "BTC-USD".to_string(),
             sequence: 7,
-            events: vec![BookDelta::OrderRemoved {
-                order_id: Uuid::from_u128(1),
+            events: vec![BookDelta::LevelUpdated {
                 side: Side::Sell,
                 price: 101,
+                quantity: 0,
             }],
         };
 
         let json = serde_json::to_value(message).expect("delta json");
         assert_eq!(json["type"], "delta");
         assert_eq!(json["sequence"], 7);
-        assert_eq!(json["events"][0]["kind"], "order_removed");
+        assert_eq!(json["events"][0]["kind"], "level_updated");
     }
 }

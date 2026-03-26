@@ -108,7 +108,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
 
   const handleDelta = useEffectEvent((payload: TradeWsDelta) => {
     startTransition(() => {
-      dispatch({ type: "ws-delta", ...payload });
+      dispatch({ type: "ws-delta", ...payload, occurredAt: new Date().toISOString() });
     });
   });
 
@@ -118,7 +118,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     });
   });
 
-  const refreshAccountState = useEffectEvent(async () => {
+  async function refreshAccountState() {
     if (accountSyncRef.current.inFlight) {
       accountSyncRef.current.queued = true;
       return;
@@ -153,7 +153,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     } finally {
       accountSyncRef.current.inFlight = false;
     }
-  });
+  }
 
   const handleReject = useEffectEvent(
     (payload: { op: string; code: string; message: string }) => {
@@ -380,6 +380,27 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     }
   }
 
+  async function cancelPendingOrder(orderId: string) {
+    try {
+      await restClient.cancelOrder(orderId);
+      startTransition(() => {
+        dispatch({ type: "cancel-success", orderId, ...createStamp() });
+      });
+      await refreshAccountState();
+    } catch (error) {
+      startTransition(() => {
+        dispatch({
+          type: "cancel-error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Order cancellation failed.",
+          ...createStamp(),
+        });
+      });
+    }
+  }
+
   function selectMarket(marketId: string) {
     dispatch({ type: "select-market", marketId, ...createStamp() });
   }
@@ -423,6 +444,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       setLimitPrice,
       setShares,
       adjustShares,
+      cancelPendingOrder,
       submitOrder,
     },
   };

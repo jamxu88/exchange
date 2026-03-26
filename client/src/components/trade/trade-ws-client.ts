@@ -1,7 +1,7 @@
 import type {
   ConnectionStatus,
   MarketBookDelta,
-  MarketBookOrder,
+  MarketBookLevel,
   MarketId,
   PendingOrder,
   TradeFill,
@@ -16,22 +16,15 @@ type RawClientMessage =
   | { op: "subscribe"; channel: "l3"; market: string; last_sequence?: number | null }
   | { op: "unsubscribe"; channel: "l3"; market: string };
 
-type RawL3Order = {
-  order_id: string;
-  side: ApiSide;
+type RawBookLevel = {
   price: number;
-  remaining: number;
-  created_at: string;
+  quantity: number;
 };
 
 type RawBookDelta =
-  | { kind: "order_added"; order: RawL3Order }
-  | { kind: "order_updated"; order: RawL3Order }
-  | { kind: "order_removed"; order_id: string; side: ApiSide; price: number }
+  | { kind: "level_updated"; side: ApiSide; price: number; quantity: number }
   | {
       kind: "trade";
-      maker_order_id: string;
-      taker_order_id: string;
       price: number;
       quantity: number;
     };
@@ -44,8 +37,8 @@ type RawServerMessage =
       channel: "l3";
       market: string;
       sequence: number;
-      bids: RawL3Order[];
-      asks: RawL3Order[];
+      bids: RawBookLevel[];
+      asks: RawBookLevel[];
     }
   | {
       type: "delta";
@@ -104,8 +97,8 @@ type RawServerMessage =
 export type TradeWsSnapshot = {
   marketId: MarketId;
   sequence: number;
-  bids: MarketBookOrder[];
-  asks: MarketBookOrder[];
+  bids: MarketBookLevel[];
+  asks: MarketBookLevel[];
 };
 
 export type TradeWsDelta = {
@@ -151,13 +144,10 @@ function toTradeSide(side: ApiSide): TradeSide {
   return side === "BUY" ? "buy" : "sell";
 }
 
-function mapOrder(order: RawL3Order): MarketBookOrder {
+function mapLevel(level: RawBookLevel): MarketBookLevel {
   return {
-    orderId: order.order_id,
-    side: toTradeSide(order.side),
-    price: order.price,
-    remaining: order.remaining,
-    createdAt: order.created_at,
+    price: level.price,
+    quantity: level.quantity,
   };
 }
 
@@ -190,22 +180,16 @@ function mapFill(fill: Extract<RawServerMessage, { type: "fill" }>["fill"]): Tra
 
 function mapDelta(event: RawBookDelta): MarketBookDelta {
   switch (event.kind) {
-    case "order_added":
-      return { kind: "order_added", order: mapOrder(event.order) };
-    case "order_updated":
-      return { kind: "order_updated", order: mapOrder(event.order) };
-    case "order_removed":
+    case "level_updated":
       return {
-        kind: "order_removed",
-        orderId: event.order_id,
+        kind: "level_updated",
         side: toTradeSide(event.side),
         price: event.price,
+        quantity: event.quantity,
       };
     case "trade":
       return {
         kind: "trade",
-        makerOrderId: event.maker_order_id,
-        takerOrderId: event.taker_order_id,
         price: event.price,
         quantity: event.quantity,
       };
@@ -327,8 +311,8 @@ export class TradeWsClient {
         this.callbacks.onSnapshot({
           marketId: message.market,
           sequence: message.sequence,
-          bids: message.bids.map(mapOrder),
-          asks: message.asks.map(mapOrder),
+          bids: message.bids.map(mapLevel),
+          asks: message.asks.map(mapLevel),
         });
         return;
       case "delta":

@@ -2,10 +2,11 @@ import type {
   AggregatedBookLevel,
   ConnectionStatus,
   MarketBookDelta,
-  MarketBookOrder,
+  MarketBookLevel,
   MarketBookState,
   MarketDefinition,
   MarketId,
+  MarketTrade,
   MessageEntry,
   OrderType,
   PendingOrder,
@@ -30,6 +31,7 @@ export type TradeState = {
   pendingOrders: PendingOrder[];
   fills: TradeFill[];
   marketBooks: Record<MarketId, MarketBookState>;
+  marketTradesByMarket: Record<MarketId, MarketTrade[]>;
   ticketSide: TradeSide;
   positionFilter: PositionFilter;
   orderType: OrderType;
@@ -59,14 +61,15 @@ export type TradeAction =
       type: "ws-snapshot";
       marketId: MarketId;
       sequence: number;
-      bids: MarketBookOrder[];
-      asks: MarketBookOrder[];
+      bids: MarketBookLevel[];
+      asks: MarketBookLevel[];
     }
   | {
       type: "ws-delta";
       marketId: MarketId;
       sequence: number;
       events: MarketBookDelta[];
+      occurredAt: string;
     }
   | {
       type: "ws-reject";
@@ -106,11 +109,14 @@ export type TradeAction =
       id: number;
       time: string;
     }
+  | { type: "cancel-success"; orderId: string; id: number; time: string }
+  | { type: "cancel-error"; error: string; id: number; time: string }
   | { type: "submit-start" }
   | { type: "submit-success"; result: SubmitOrderResult; id: number; time: string }
   | { type: "submit-error"; error: string; id: number; time: string };
 
 const MAX_MESSAGES = 18;
+const MAX_MARKET_TRADES = 240;
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -178,6 +184,13 @@ function createEmptyMarketBook(marketId: MarketId): MarketBookState {
   };
 }
 
+function createEmptyMarketTrades(markets: MarketDefinition[]) {
+  return markets.reduce<Record<MarketId, MarketTrade[]>>((next, market) => {
+    next[market.id] = [];
+    return next;
+  }, {});
+}
+
 function pushMessage(messages: MessageEntry[], message: MessageEntry) {
   const nextId =
     messages.length > 0
@@ -224,10 +237,15 @@ function syncMarketDefinitions(
   )
     ? currentState.selectedMarketId
     : nextMarkets[0]?.id ?? currentState.selectedMarketId;
+  const nextMarketTrades = nextMarkets.reduce<Record<MarketId, MarketTrade[]>>((next, market) => {
+    next[market.id] = currentState.marketTradesByMarket[market.id] ?? [];
+    return next;
+  }, {});
 
   return {
     availableMarkets: nextMarkets,
     marketBooks: nextMarketBooks,
+    marketTradesByMarket: nextMarketTrades,
     positionsByMarket: positionMapFromSnapshots(
       nextMarkets,
       positions,
@@ -235,6 +253,40 @@ function syncMarketDefinitions(
     ),
     selectedMarketId: nextSelectedMarketId,
   };
+}
+
+function tradesFromFills(fills: TradeFill[], marketId: MarketId): MarketTrade[] {
+  return fills
+    .filter((fill) => fill.market === marketId)
+    .map((fill) => ({
+      marketId,
+      price: fill.price,
+      quantity: fill.quantity,
+      occurredAt: fill.occurredAt,
+    }));
+}
+
+function mergeMarketTrades(existing: MarketTrade[], incoming: MarketTrade[]) {
+  if (incoming.length === 0) {
+    return existing;
+  }
+
+  return [...existing, ...incoming]
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))
+    .slice(-MAX_MARKET_TRADES);
+}
+
+function seedMarketTrades(
+  markets: MarketDefinition[],
+  currentTrades: Record<MarketId, MarketTrade[]>,
+  fills?: TradeFill[],
+) {
+  return markets.reduce<Record<MarketId, MarketTrade[]>>((next, market) => {
+    const existing = currentTrades[market.id] ?? [];
+    next[market.id] =
+      existing.length > 0 ? existing : fills ? tradesFromFills(fills, market.id).slice(-MAX_MARKET_TRADES) : [];
+    return next;
+  }, {});
 }
 
 function updateMarketBookForDelta(
@@ -249,43 +301,38 @@ function updateMarketBookForDelta(
     };
   }
 
-  const sideKey = event.kind === "order_removed"
-    ? event.side === "buy"
-      ? "bids"
-      : "asks"
-    : event.order.side === "buy"
-      ? "bids"
-      : "asks";
-  const sideOrders = book[sideKey];
-
-  if (event.kind === "order_added") {
-    const nextOrders = upsertBookOrder(sideOrders, event.order);
-    return { ...book, [sideKey]: nextOrders };
-  }
-
-  if (event.kind === "order_updated") {
-    const nextOrders = upsertBookOrder(sideOrders, event.order);
-    return { ...book, [sideKey]: nextOrders };
-  }
-
+  const sideKey = event.side === "buy" ? "bids" : "asks";
   return {
     ...book,
-    [sideKey]: sideOrders.filter((order) => order.orderId !== event.orderId),
+    [sideKey]: upsertBookLevel(book[sideKey], event.side, {
+      price: event.price,
+      quantity: event.quantity,
+    }),
   };
 }
 
-function upsertBookOrder(orders: MarketBookOrder[], nextOrder: MarketBookOrder) {
-  const next = orders.filter((order) => order.orderId !== nextOrder.orderId);
-  next.push(nextOrder);
-  return next;
+function sortBookLevels(levels: MarketBookLevel[], side: TradeSide) {
+  return [...levels].sort((left, right) =>
+    side === "buy" ? right.price - left.price : left.price - right.price,
+  );
+}
+
+function upsertBookLevel(levels: MarketBookLevel[], side: TradeSide, nextLevel: MarketBookLevel) {
+  const remainingLevels = levels.filter((level) => level.price !== nextLevel.price);
+  if (nextLevel.quantity <= 0) {
+    return sortBookLevels(remainingLevels, side);
+  }
+
+  remainingLevels.push(nextLevel);
+  return sortBookLevels(remainingLevels, side);
 }
 
 function effectiveQuoteForSide(book: MarketBookState, side: TradeSide) {
   if (side === "buy") {
-    return Math.min(...book.asks.map((order) => order.price), Number.POSITIVE_INFINITY);
+    return Math.min(...book.asks.map((level) => level.price), Number.POSITIVE_INFINITY);
   }
 
-  return Math.max(...book.bids.map((order) => order.price), 0);
+  return Math.max(...book.bids.map((level) => level.price), 0);
 }
 
 function maybeLimitInputForMarket(state: TradeState, marketId: MarketId, side: TradeSide) {
@@ -310,7 +357,7 @@ function ensurePendingOrder(
     marketName: result.marketName,
     side: result.side,
     shares: result.remaining,
-    limitPrice: result.effectivePrice,
+    limitPrice: result.requestedPrice,
     status: result.remaining < result.quantity ? "partial" : "open",
   };
 
@@ -340,6 +387,14 @@ function weightedFillPrice(fills: TradeFill[]) {
 
   const weightedSum = fills.reduce((sum, fill) => sum + fill.price * fill.quantity, 0);
   return weightedSum / totalQuantity;
+}
+
+function fillPriceLabel(fills: TradeFill[], fallbackPrice: number) {
+  const executionPrice = weightedFillPrice(fills) ?? fallbackPrice;
+  const distinctPrices = new Set(fills.map((fill) => fill.price));
+  return distinctPrices.size > 1
+    ? `avg ${formatPrice(executionPrice)}`
+    : formatPrice(executionPrice);
 }
 
 function applyOwnFillToPosition(
@@ -417,6 +472,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
     pendingOrders: [],
     fills: [],
     marketBooks,
+    marketTradesByMarket: createEmptyMarketTrades(markets),
     ticketSide: "buy",
     positionFilter: "active",
     orderType: "limit",
@@ -433,16 +489,23 @@ function applyBootstrapDataToState(
   currentState: TradeState,
   data: TradeBootstrapData,
 ) {
-  const synced = syncMarketDefinitions(currentState, data.markets, data.positions);
+  const nextMarkets = data.loaded.markets ? data.markets : currentState.availableMarkets;
+  const nextPositions = data.loaded.positions ? data.positions : currentState.positions;
+  const synced = syncMarketDefinitions(currentState, nextMarkets, nextPositions);
   return {
     ...currentState,
     availableMarkets: synced.availableMarkets,
     selectedMarketId: synced.selectedMarketId,
-    user: data.user ?? currentState.user,
-    positions: data.positions,
-    pendingOrders: data.openOrders,
-    fills: data.fills,
+    user: data.loaded.user ? data.user : currentState.user,
+    positions: nextPositions,
+    pendingOrders: data.loaded.openOrders ? data.openOrders : currentState.pendingOrders,
+    fills: data.loaded.fills ? data.fills : currentState.fills,
     marketBooks: synced.marketBooks,
+    marketTradesByMarket: seedMarketTrades(
+      synced.availableMarkets,
+      synced.marketTradesByMarket,
+      data.loaded.fills ? data.fills : undefined,
+    ),
     positionsByMarket: synced.positionsByMarket,
   };
 }
@@ -639,6 +702,18 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         (book, event) => updateMarketBookForDelta(book, event),
         { ...currentBook, sequence: action.sequence },
       );
+      const nextTrades = action.events.flatMap((event) =>
+        event.kind === "trade"
+          ? [
+              {
+                marketId: action.marketId,
+                price: event.price,
+                quantity: event.quantity,
+                occurredAt: action.occurredAt,
+              },
+            ]
+          : [],
+      );
 
       return {
         ...state,
@@ -646,6 +721,15 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           ...state.marketBooks,
           [action.marketId]: nextBook,
         },
+        marketTradesByMarket: nextTrades.length > 0
+          ? {
+              ...state.marketTradesByMarket,
+              [action.marketId]: mergeMarketTrades(
+                state.marketTradesByMarket[action.marketId] ?? [],
+                nextTrades,
+              ),
+            }
+          : state.marketTradesByMarket,
       };
     }
 
@@ -719,6 +803,29 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         }),
       };
 
+    case "cancel-success":
+      return {
+        ...state,
+        pendingOrders: state.pendingOrders.filter((order) => order.id !== action.orderId),
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: "neutral",
+          text: `Cancel requested for order ${action.orderId}.`,
+        }),
+      };
+
+    case "cancel-error":
+      return {
+        ...state,
+        messages: pushMessage(state.messages, {
+          id: action.id,
+          time: action.time,
+          tone: "negative",
+          text: action.error,
+        }),
+      };
+
     case "submit-start":
       return {
         ...state,
@@ -774,32 +881,24 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
 
 function buildSubmitSuccessMessage(result: SubmitOrderResult) {
   const filledQuantity = result.fills.reduce((sum, fill) => sum + fill.quantity, 0);
+  const executionPrice = fillPriceLabel(result.fills, result.effectivePrice);
   const baseText =
     result.resting && result.remaining > 0
-      ? `Accepted ${result.side} ${result.marketName} for ${result.quantity} shares at ${formatPrice(result.effectivePrice)}. ${result.remaining} shares remain resting.`
-      : `Filled ${result.side} ${result.marketName} for ${filledQuantity || result.quantity} shares at ${formatPrice(result.effectivePrice)}.`;
+      ? filledQuantity > 0
+        ? `Accepted ${result.side} ${result.marketName} for ${result.quantity} shares. Filled ${filledQuantity} at ${executionPrice} and ${result.remaining} remain resting at ${formatPrice(result.requestedPrice)}.`
+        : `Accepted ${result.side} ${result.marketName} for ${result.quantity} shares at ${formatPrice(result.requestedPrice)}. ${result.remaining} shares remain resting.`
+      : `Filled ${result.side} ${result.marketName} for ${filledQuantity || result.quantity} shares at ${executionPrice}.`;
 
-  return result.syntheticMarket
-    ? `${baseText} Routed as an aggressive limit order because the backend WS market-order protocol is not implemented yet.`
-    : baseText;
+  return baseText;
 }
 
-export function aggregateBookLevels(orders: MarketBookOrder[], side: TradeSide) {
-  const buckets = new Map<number, number>();
-  for (const order of orders) {
-    buckets.set(order.price, (buckets.get(order.price) ?? 0) + order.remaining);
-  }
-
-  const levels = [...buckets.entries()].map(
-    ([price, liquidity]): AggregatedBookLevel => ({
+function bookLevelsForSummary(levels: MarketBookLevel[]) {
+  return levels.map(
+    ({ price, quantity }): AggregatedBookLevel => ({
       price,
-      liquidity,
-      total: price * liquidity,
+      liquidity: quantity,
+      total: price * quantity,
     }),
-  );
-
-  return levels.sort((left, right) =>
-    side === "buy" ? right.price - left.price : left.price - right.price,
   );
 }
 
@@ -839,8 +938,8 @@ export function selectPendingRows(state: TradeState) {
 
 export function selectSelectedMarketSummary(state: TradeState) {
   const book = selectSelectedMarketBook(state);
-  const bids = aggregateBookLevels(book.bids, "buy");
-  const asks = aggregateBookLevels(book.asks, "sell");
+  const bids = bookLevelsForSummary(book.bids);
+  const asks = bookLevelsForSummary(book.asks);
   const bestBid = bids[0]?.price ?? null;
   const bestAsk = asks[0]?.price ?? null;
   const lastPrice = book.lastTradePrice ?? bestAsk ?? bestBid ?? null;

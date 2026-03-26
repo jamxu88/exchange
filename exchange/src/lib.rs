@@ -34,7 +34,14 @@ pub fn build_app(app_state: AppState) -> Router {
         .with_state(app_state.clone());
 
     let admin_routes = Router::new()
-        .route("/api/v1/admin/users", post(rest::provision_user))
+        .route(
+            "/api/v1/admin/users",
+            get(rest::list_provisioned_users).post(rest::provision_user),
+        )
+        .route(
+            "/api/v1/admin/users/export.csv",
+            get(rest::export_provisioned_users_csv),
+        )
         .route("/api/v1/admin/state", get(rest::get_admin_state))
         .route("/api/v1/admin/trading/start", post(rest::start_trading))
         .route("/api/v1/admin/trading/stop", post(rest::stop_trading))
@@ -50,13 +57,35 @@ pub fn build_app(app_state: AppState) -> Router {
             "/api/v1/admin/markets/:market_id/settle",
             post(rest::settle_market),
         )
-        .route("/api/v1/admin/config/load", post(rest::load_exchange_config))
+        .route(
+            "/api/v1/admin/competition/finalize",
+            post(rest::finalize_competition),
+        )
+        .route(
+            "/api/v1/admin/competition/snapshots/latest",
+            get(rest::get_latest_competition_snapshot),
+        )
+        .route(
+            "/api/v1/admin/competition/snapshots/:snapshot_id",
+            get(rest::get_competition_snapshot),
+        )
+        .route(
+            "/api/v1/admin/competition/snapshots/:snapshot_id/export.csv",
+            get(rest::export_competition_snapshot_csv),
+        )
+        .route(
+            "/api/v1/admin/config/load",
+            post(rest::load_exchange_config),
+        )
         .route(
             "/api/v1/admin/messages",
             get(rest::list_admin_messages).post(rest::send_admin_message),
         )
         .route("/api/v1/admin/users/reset", post(rest::reset_all_users))
-        .route("/api/v1/admin/leaderboard", get(rest::get_admin_leaderboard))
+        .route(
+            "/api/v1/admin/leaderboard",
+            get(rest::get_admin_leaderboard),
+        )
         .with_state(app_state.clone());
 
     let protected_routes = Router::new()

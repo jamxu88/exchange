@@ -1,3 +1,8 @@
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode},
+};
+use chrono::Utc;
 use exchange::{
     admin::{
         AdminMessageLevel, AdminService, MarketDefinition, MarketStatus, SendAdminMessageRequest,
@@ -7,8 +12,8 @@ use exchange::{
     config::Config,
     marketdata::{OrderStateStatus, ServerMessage},
     state::AppState,
+    trading::OrderType,
 };
-use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::time::Duration;
@@ -18,16 +23,24 @@ use tokio::time::timeout;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
+use tower::ServiceExt;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 fn test_state() -> AppState {
+    test_state_with_rate_limit(100)
+}
+
+fn test_state_with_rate_limit(per_user_requests_per_second: u64) -> AppState {
     let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 64,
-        per_user_requests_per_second: 100,
+        runtime_dispatch_queue_capacity: 4_096,
+        account_dispatch_queue_capacity: 4_096,
+        persistence_dispatch_queue_capacity: 4_096,
+        per_user_requests_per_second,
         admin_api_token: "test-admin-token".to_string(),
         postgres_write_batch_size: 128,
         postgres_write_flush_interval_ms: 25,
@@ -60,6 +73,7 @@ fn provision_user(state: &AppState, username: &str) -> ProvisionUserResponse {
         state,
         ProvisionUserRequest {
             username: username.to_string(),
+            role: None,
         },
     )
     .expect("provision user")
@@ -139,6 +153,7 @@ async fn websocket_authenticate_and_subscribe_round_trip() {
         exchange::trading::SubmitOrderRequest {
             market: "BTC-USD".to_string(),
             side: exchange::orderbook::Side::Buy,
+            order_type: OrderType::Limit,
             price: 100,
             quantity: 2,
         },
@@ -276,6 +291,73 @@ async fn websocket_submit_amend_cancel_flow_is_end_to_end() {
 }
 
 #[tokio::test]
+async fn websocket_market_order_submits_without_resting() {
+    let state = test_state();
+    let maker = provision_user(&state, "market-maker");
+    let taker = provision_user(&state, "market-taker");
+
+    exchange::trading::TradingService::submit_limit_order(
+        &state,
+        maker.profile.trader_id,
+        exchange::trading::SubmitOrderRequest {
+            market: "BTC-USD".to_string(),
+            side: exchange::orderbook::Side::Sell,
+            order_type: OrderType::Limit,
+            price: 100,
+            quantity: 2,
+        },
+    )
+    .await
+    .expect("maker order should rest");
+
+    let (url, server) = spawn_server(state).await;
+    let mut socket = connect_socket(&url).await;
+    authenticate(&mut socket, &taker.profile.api_key).await;
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "market-1",
+            "market": "BTC-USD",
+            "side": "BUY",
+            "order_type": "market",
+            "price": 0,
+            "quantity": 2,
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Ack {
+            op: "submit_order".to_string(),
+            request_id: Some("market-1".to_string()),
+        }
+    );
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::Fill { fill } => {
+            assert_eq!(fill.price, 100);
+            assert_eq!(fill.quantity, 2);
+        }
+        other => panic!("unexpected fill event: {other:?}"),
+    }
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::OrderState { order, status } => {
+            assert_eq!(status, OrderStateStatus::Filled);
+            assert_eq!(order.remaining, 0);
+            assert_eq!(order.price, 100);
+        }
+        other => panic!("unexpected order state: {other:?}"),
+    }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn websocket_crossing_trade_delivers_fill_and_order_state_to_both_sockets() {
     let state = test_state();
     let maker = provision_user(&state, "maker");
@@ -402,6 +484,56 @@ async fn websocket_delivers_broadcast_admin_messages_to_authenticated_clients() 
         }
         other => panic!("unexpected admin message event: {other:?}"),
     }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_trading_shares_the_per_user_rate_limit_budget() {
+    let state = test_state_with_rate_limit(1);
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "rate-limited-ws-user");
+    let (url, server) = spawn_server(state).await;
+
+    let rest_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/v1/positions")
+                .header("x-api-key", trader.profile.api_key.clone())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(rest_response.status(), StatusCode::OK);
+
+    let mut socket = connect_socket(&url).await;
+    authenticate(&mut socket, &trader.profile.api_key).await;
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "submit-rate-limited",
+            "market": "BTC-USD",
+            "side": "BUY",
+            "price": 100,
+            "quantity": 1,
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("submit-rate-limited".to_string()),
+            code: "rate_limit_exceeded".to_string(),
+            message: "per-user rate limit exceeded: max 1 ops/sec".to_string(),
+        }
+    );
 
     server.abort();
     let _ = server.await;

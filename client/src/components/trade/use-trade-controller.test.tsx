@@ -22,8 +22,16 @@ describe("useTradeController", () => {
       openOrders: [],
       fills: [],
       warnings: [],
+      loaded: {
+        markets: true,
+        user: true,
+        positions: true,
+        openOrders: true,
+        fills: true,
+      },
     });
     const submitOrder = vi.fn();
+    const cancelOrder = vi.fn();
     const updateMarket = vi.fn();
     const connect = vi.fn();
     const disconnect = vi.fn();
@@ -31,6 +39,7 @@ describe("useTradeController", () => {
       ({
         bootstrapAccountData,
         submitOrder,
+        cancelOrder,
       }) as never;
     const wsClientFactory = (_config: unknown, callbacks: { onStatusChange: (status: "connected") => void }) =>
       ({
@@ -88,7 +97,6 @@ describe("useTradeController", () => {
         },
       ],
       createdAt: "2026-03-17T09:30:00Z",
-      syntheticMarket: false,
     });
     const restClientFactory = () =>
       ({
@@ -99,8 +107,16 @@ describe("useTradeController", () => {
           openOrders: [],
           fills: [],
           warnings: [],
+          loaded: {
+            markets: true,
+            user: true,
+            positions: true,
+            openOrders: true,
+            fills: true,
+          },
         }),
         submitOrder,
+        cancelOrder: vi.fn(),
       }) as never;
     const wsClientFactory = () =>
       ({
@@ -149,7 +165,6 @@ describe("useTradeController", () => {
       remaining: 0,
       fills: [],
       createdAt: "2026-03-17T09:30:00Z",
-      syntheticMarket: false,
     });
     const restClientFactory = () =>
       ({
@@ -160,8 +175,16 @@ describe("useTradeController", () => {
           openOrders: [],
           fills: [],
           warnings: [],
+          loaded: {
+            markets: true,
+            user: true,
+            positions: true,
+            openOrders: true,
+            fills: true,
+          },
         }),
         submitOrder,
+        cancelOrder: vi.fn(),
       }) as never;
     const wsClientFactory = () =>
       ({
@@ -207,6 +230,7 @@ describe("useTradeController", () => {
       ({
         bootstrapAccountData,
         submitOrder: vi.fn(),
+        cancelOrder: vi.fn(),
       }) as never;
     const wsClientFactory = () =>
       ({
@@ -229,5 +253,195 @@ describe("useTradeController", () => {
 
     expect(result.current.state.messages.at(-1)?.text).toContain("bootstrap failed");
     expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending order and refreshes account state", async () => {
+    const bootstrapAccountData = vi
+      .fn()
+      .mockResolvedValueOnce({
+        markets: runtime.markets,
+        user: { traderId: "trader-1", username: "alice" },
+        positions: [],
+        openOrders: [
+          {
+            id: "order-1",
+            createdAt: "2026-03-17T09:30:00Z",
+            marketId: "BTC-USD",
+            marketName: "BTC-USD",
+            side: "buy",
+            shares: 2,
+            limitPrice: 101,
+            status: "open",
+          },
+        ],
+        fills: [],
+        warnings: [],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: true,
+          fills: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        markets: runtime.markets,
+        user: { traderId: "trader-1", username: "alice" },
+        positions: [],
+        openOrders: [],
+        fills: [],
+        warnings: [],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: true,
+          fills: true,
+        },
+      });
+    const cancelOrder = vi.fn().mockResolvedValue({
+      id: "order-1",
+      createdAt: "2026-03-17T09:30:00Z",
+      marketId: "BTC-USD",
+      marketName: "BTC-USD",
+      side: "buy",
+      shares: 2,
+      limitPrice: 101,
+      status: "open",
+    });
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+        cancelOrder,
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+      expect(result.current.state.pendingOrders).toHaveLength(1);
+    });
+
+    await act(async () => {
+      await result.current.actions.cancelPendingOrder("order-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.pendingOrders).toHaveLength(0);
+    });
+
+    expect(cancelOrder).toHaveBeenCalledWith("order-1");
+    expect(bootstrapAccountData).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps other pending orders visible when the post-cancel open-orders refresh is degraded", async () => {
+    const bootstrapAccountData = vi
+      .fn()
+      .mockResolvedValueOnce({
+        markets: runtime.markets,
+        user: { traderId: "trader-1", username: "alice" },
+        positions: [],
+        openOrders: [
+          {
+            id: "order-1",
+            createdAt: "2026-03-17T09:30:00Z",
+            marketId: "BTC-USD",
+            marketName: "BTC-USD",
+            side: "buy",
+            shares: 2,
+            limitPrice: 101,
+            status: "open",
+          },
+          {
+            id: "order-2",
+            createdAt: "2026-03-17T09:31:00Z",
+            marketId: "ETH-USD",
+            marketName: "ETH-USD",
+            side: "sell",
+            shares: 3,
+            limitPrice: 202,
+            status: "open",
+          },
+        ],
+        fills: [],
+        warnings: [],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: true,
+          fills: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        markets: runtime.markets,
+        user: { traderId: "trader-1", username: "alice" },
+        positions: [],
+        openOrders: [],
+        fills: [],
+        warnings: ["Open order bootstrap failed. per-user rate limit exceeded: max 100 ops/sec"],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: false,
+          fills: true,
+        },
+      });
+    const cancelOrder = vi.fn().mockResolvedValue({
+      id: "order-1",
+      createdAt: "2026-03-17T09:30:00Z",
+      marketId: "BTC-USD",
+      marketName: "BTC-USD",
+      side: "buy",
+      shares: 2,
+      limitPrice: 101,
+      status: "open",
+    });
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+        cancelOrder,
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.pendingOrders).toHaveLength(2);
+    });
+
+    await act(async () => {
+      await result.current.actions.cancelPendingOrder("order-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.pendingOrders.map((order) => order.id)).toEqual(["order-2"]);
+    });
   });
 });

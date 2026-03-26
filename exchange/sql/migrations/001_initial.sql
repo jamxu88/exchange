@@ -3,8 +3,11 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS users (
     trader_id UUID PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'TRADER',
     created_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'TRADER';
 
 CREATE TABLE IF NOT EXISTS api_keys (
     api_key TEXT PRIMARY KEY,
@@ -146,5 +149,31 @@ CREATE TABLE IF NOT EXISTS pnl_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS pnl_snapshots_trader_id_market_idx ON pnl_snapshots (trader_id, market, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS competition_leaderboard_snapshots (
+    snapshot_id UUID PRIMARY KEY,
+    competition_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS competition_leaderboard_snapshots_competition_id_created_at_idx
+    ON competition_leaderboard_snapshots (competition_id, created_at DESC, snapshot_id DESC);
+
+CREATE TABLE IF NOT EXISTS competition_leaderboard_snapshot_rows (
+    snapshot_id UUID NOT NULL REFERENCES competition_leaderboard_snapshots(snapshot_id) ON DELETE CASCADE,
+    rank BIGINT NOT NULL,
+    trader_id UUID NOT NULL REFERENCES users(trader_id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    net_pnl BIGINT NOT NULL,
+    realized_pnl BIGINT NOT NULL,
+    unrealized_pnl BIGINT NOT NULL,
+    gross_exposure BIGINT NOT NULL,
+    PRIMARY KEY (snapshot_id, rank),
+    UNIQUE (snapshot_id, trader_id)
+);
+
+CREATE INDEX IF NOT EXISTS competition_leaderboard_snapshot_rows_snapshot_id_idx
+    ON competition_leaderboard_snapshot_rows (snapshot_id, rank);
 
 COMMIT;

@@ -63,6 +63,23 @@ impl PerUserRateLimiter {
     }
 }
 
+pub fn enforce_authenticated_user_rate_limit(
+    state: &AppState,
+    trader_id: Uuid,
+) -> Result<(), String> {
+    if state
+        .user_rate_limiter
+        .allow(trader_id, state.config.per_user_requests_per_second)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "per-user rate limit exceeded: max {} ops/sec",
+            state.config.per_user_requests_per_second
+        ))
+    }
+}
+
 pub async fn authenticated_user_rate_limit(
     State(state): State<AppState>,
     request: Request,
@@ -82,18 +99,10 @@ pub async fn authenticated_user_rate_limit(
         }
     };
 
-    if !state
-        .user_rate_limiter
-        .allow(auth.trader_id, state.config.per_user_requests_per_second)
-    {
+    if let Err(error) = enforce_authenticated_user_rate_limit(&state, auth.trader_id) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            Json(RateLimitError {
-                error: format!(
-                    "per-user rate limit exceeded: max {} ops/sec",
-                    state.config.per_user_requests_per_second
-                ),
-            }),
+            Json(RateLimitError { error }),
         )
             .into_response();
     }
@@ -124,5 +133,31 @@ mod tests {
         assert!(limiter.allow(first, 1));
         assert!(!limiter.allow(first, 1));
         assert!(limiter.allow(second, 1));
+    }
+
+    #[test]
+    fn helper_uses_app_state_limit_configuration() {
+        let state = crate::state::AppState::new(crate::config::Config {
+            bind_addr: "127.0.0.1:0".to_string(),
+            database_url: "postgres://test".to_string(),
+            storage_backend: crate::storage::StorageBackendKind::InMemory,
+            ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
+            per_user_requests_per_second: 1,
+            admin_api_token: "test-admin-token".to_string(),
+            postgres_write_batch_size: 128,
+            postgres_write_flush_interval_ms: 25,
+            postgres_write_queue_capacity: 4_096,
+            postgres_write_retry_backoff_ms: 250,
+        });
+        let trader_id = Uuid::new_v4();
+
+        assert!(enforce_authenticated_user_rate_limit(&state, trader_id).is_ok());
+        assert_eq!(
+            enforce_authenticated_user_rate_limit(&state, trader_id),
+            Err("per-user rate limit exceeded: max 1 ops/sec".to_string())
+        );
     }
 }

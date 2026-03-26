@@ -1,4 +1,5 @@
-use crate::accounts::UserProfile;
+use crate::accounts::{UserProfile, UserRole};
+use crate::admin::{ProvisionedUserCredential, ProvisionedUsersQuery, ProvisionedUsersResponse};
 use crate::auth::{ProvisionUserRequest, ProvisionUserResponse};
 use crate::orderbook::{Fill, Order, Side};
 use crate::rest::{ApiError, HealthResponse};
@@ -13,7 +14,9 @@ use utoipa::OpenApi;
 #[openapi(
     paths(
         crate::rest::health,
+        crate::rest::list_provisioned_users,
         crate::rest::provision_user,
+        crate::rest::export_provisioned_users_csv,
         crate::rest::get_user,
         crate::rest::get_positions,
         crate::rest::get_portfolio,
@@ -29,11 +32,15 @@ use utoipa::OpenApi;
             HealthResponse,
             ApiError,
             UserProfile,
+            UserRole,
             Side,
             Order,
             Fill,
             Position,
             PortfolioSnapshot,
+            ProvisionedUsersQuery,
+            ProvisionedUserCredential,
+            ProvisionedUsersResponse,
             ProvisionUserRequest,
             ProvisionUserResponse,
             SubmitOrderRequest,

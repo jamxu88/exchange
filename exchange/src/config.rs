@@ -7,6 +7,9 @@ pub struct Config {
     pub database_url: String,
     pub storage_backend: StorageBackendKind,
     pub ws_broadcast_buffer: usize,
+    pub runtime_dispatch_queue_capacity: usize,
+    pub account_dispatch_queue_capacity: usize,
+    pub persistence_dispatch_queue_capacity: usize,
     pub per_user_requests_per_second: u64,
     pub admin_api_token: String,
     pub postgres_write_batch_size: usize,
@@ -27,6 +30,18 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(1_024),
+            runtime_dispatch_queue_capacity: env::var("RUNTIME_DISPATCH_QUEUE_CAPACITY")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(16_384),
+            account_dispatch_queue_capacity: env::var("ACCOUNT_DISPATCH_QUEUE_CAPACITY")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(65_536),
+            persistence_dispatch_queue_capacity: env::var("PERSISTENCE_DISPATCH_QUEUE_CAPACITY")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(16_384),
             per_user_requests_per_second: env::var("PER_USER_REQUESTS_PER_SECOND")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
@@ -36,15 +51,15 @@ impl Config {
             postgres_write_batch_size: env::var("POSTGRES_WRITE_BATCH_SIZE")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(128),
+                .unwrap_or(512),
             postgres_write_flush_interval_ms: env::var("POSTGRES_WRITE_FLUSH_INTERVAL_MS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(25),
+                .unwrap_or(10),
             postgres_write_queue_capacity: env::var("POSTGRES_WRITE_QUEUE_CAPACITY")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(4_096),
+                .unwrap_or(65_536),
             postgres_write_retry_backoff_ms: env::var("POSTGRES_WRITE_RETRY_BACKOFF_MS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())

@@ -55,6 +55,10 @@ type SubmitOrderResponse = {
   resting: boolean;
 };
 
+type CancelOrderResponse = {
+  order: OpenOrderResponse;
+};
+
 type MarketResponse = {
   market_id: string;
   display_name: string;
@@ -114,6 +118,16 @@ function normalizeMarket(market: MarketResponse): MarketDefinition {
   };
 }
 
+function weightedFillPrice(fills: FillResponse[]) {
+  const totalQuantity = fills.reduce((sum, fill) => sum + fill.quantity, 0);
+  if (totalQuantity <= 0) {
+    return null;
+  }
+
+  const weightedSum = fills.reduce((sum, fill) => sum + fill.price * fill.quantity, 0);
+  return weightedSum / totalQuantity;
+}
+
 function joinUrl(baseUrl: string, path: string) {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
@@ -139,6 +153,13 @@ export class TradeRestClient {
         openOrders: [],
         fills: [],
         warnings: ["No exchange API key configured. Account bootstrap skipped."],
+        loaded: {
+          markets: false,
+          user: false,
+          positions: false,
+          openOrders: false,
+          fills: false,
+        },
       };
     }
 
@@ -198,6 +219,13 @@ export class TradeRestClient {
       openOrders,
       fills,
       warnings,
+      loaded: {
+        markets: marketsResult.status === "fulfilled",
+        user: userResult.status === "fulfilled",
+        positions: positionsResult.status === "fulfilled",
+        openOrders: openOrdersResult.status === "fulfilled",
+        fills: fillsResult.status === "fulfilled",
+      },
     };
   }
 
@@ -214,10 +242,12 @@ export class TradeRestClient {
       body: JSON.stringify({
         market: intent.marketId,
         side: toApiSide(intent.side),
-        price: intent.effectivePrice,
+        order_type: intent.orderType,
+        price: intent.orderType === "limit" ? intent.effectivePrice : 0,
         quantity: intent.quantity,
       }),
     });
+    const actualPrice = weightedFillPrice(payload.fills) ?? payload.order.price;
 
     return {
       orderId: payload.order.id,
@@ -227,13 +257,30 @@ export class TradeRestClient {
       orderType: intent.orderType,
       quantity: intent.quantity,
       requestedPrice: intent.requestedPrice,
-      effectivePrice: intent.effectivePrice,
+      effectivePrice: actualPrice,
       resting: payload.resting,
       remaining: payload.order.remaining,
       fills: payload.fills.map(normalizeFill),
       createdAt: payload.order.created_at,
-      syntheticMarket: intent.orderType === "market",
     };
+  }
+
+  async cancelOrder(orderId: string): Promise<PendingOrder> {
+    if (!this.apiKey) {
+      throw new ExchangeApiError(
+        "No exchange API key configured. Set NEXT_PUBLIC_EXCHANGE_API_KEY to enable trading.",
+        401,
+      );
+    }
+
+    const payload = await this.request<CancelOrderResponse>(
+      `/api/v1/orders/${encodeURIComponent(orderId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+
+    return normalizePendingOrder(payload.order);
   }
 
   private async request<T>(

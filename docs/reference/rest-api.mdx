@@ -13,7 +13,7 @@ Use REST for bootstrap, recovery, and request-response order management. This is
     Identity, portfolio, positions, fills, open orders, and live leaderboard state.
   </Card>
   <Card title="Trading Endpoints" href="#trading-endpoints">
-    Submit, amend, and cancel limit orders over HTTP.
+    Submit, amend, and cancel limit and market orders over HTTP.
   </Card>
 </Columns>
 
@@ -48,7 +48,9 @@ Use REST for bootstrap, recovery, and request-response order management. This is
 ## Request model
 
 - `side` is `BUY` or `SELL`
+- `order_type` is `limit` or `market` and defaults to `limit`
 - `price`, `quantity`, and `remaining` are integer values
+- for market orders, send `price: 0`; the server ignores the field and executes against live opposite-side depth
 - competitors can buy from flat, sell from flat, go long, and go short
 - risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
 - authenticated competitor operations are limited to `100 ops/sec` per API key, and that budget is shared with authenticated WebSocket trading messages

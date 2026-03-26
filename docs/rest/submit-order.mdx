@@ -1,27 +1,36 @@
 ---
 title: "Create Order"
 api: "POST /api/v1/orders"
-description: "Submit a new limit order."
+description: "Submit a new limit or market order."
 ---
 
-Submit a new limit order through REST when you want simple request-response behavior. WebSocket order entry is also available if you prefer to keep everything on one low-latency socket.
+Submit a new order through REST when you want simple request-response behavior. WebSocket order entry is also available if you prefer to keep everything on one low-latency socket.
 
 <RequestExample>
 
-```bash Request
+```bash Limit request
 curl \
   -X POST \
   -H "x-api-key: YOUR_API_KEY" \
   -H "content-type: application/json" \
   https://exchange.jamesxu.dev/api/v1/orders \
-  -d '{"market":"BTC-USD","side":"BUY","price":100,"quantity":2}'
+  -d '{"market":"BTC-USD","side":"BUY","order_type":"limit","price":100,"quantity":2}'
+```
+
+```bash Market request
+curl \
+  -X POST \
+  -H "x-api-key: YOUR_API_KEY" \
+  -H "content-type: application/json" \
+  https://exchange.jamesxu.dev/api/v1/orders \
+  -d '{"market":"BTC-USD","side":"BUY","order_type":"market","price":0,"quantity":2}'
 ```
 
 </RequestExample>
 
 <ResponseExample>
 
-```json 200 Response
+```json 201 Limit response
 {
   "order": {
     "id": "66377526-7b98-485a-8c40-7024e68fa3c5",
@@ -35,6 +44,33 @@ curl \
   },
   "fills": [],
   "resting": true
+}
+```
+
+```json 201 Market response
+{
+  "order": {
+    "id": "ff377526-7b98-485a-8c40-7024e68fa3c5",
+    "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
+    "market": "BTC-USD",
+    "side": "BUY",
+    "price": 100,
+    "quantity": 2,
+    "remaining": 0,
+    "created_at": "2026-03-18T15:29:01.342510Z"
+  },
+  "fills": [
+    {
+      "fill_id": "fef1b4fd-d0b0-4270-8831-b4c51aa43f1d",
+      "market": "BTC-USD",
+      "maker_order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
+      "taker_order_id": "ff377526-7b98-485a-8c40-7024e68fa3c5",
+      "price": 100,
+      "quantity": 2,
+      "occurred_at": "2026-03-18T15:29:01.342510Z"
+    }
+  ],
+  "resting": false
 }
 ```
 
@@ -57,7 +93,11 @@ curl \
 </ParamField>
 
 <ParamField body="price" type="u64" required>
-  Limit price. Must be greater than zero and aligned to the market tick size.
+  For `limit` orders, the limit price. It must be greater than zero and aligned to the market tick size. For `market` orders, this field is ignored; send `0`.
+</ParamField>
+
+<ParamField body="order_type" type="limit | market" default="limit">
+  Order behavior. Omit this field or set it to `limit` to place a normal resting-capable limit order. Set it to `market` to consume opposite-side liquidity immediately without resting.
 </ParamField>
 
 <ParamField body="quantity" type="u64" required>
@@ -75,24 +115,31 @@ curl \
 </ResponseField>
 
 <ResponseField name="order.remaining" type="u64" required>
-  Quantity still resting after any immediate fills.
+  Quantity still resting after any immediate fills. This is always `0` for market orders.
+</ResponseField>
+
+<ResponseField name="order.price" type="u64" required>
+  Submitted limit price for limit orders. For market orders, this is the weighted average executed price across immediate fills, rounded down to an integer.
 </ResponseField>
 
 <ResponseField name="fills" type="object[]" required>
-  Immediate executions produced while the order was being matched.
+  Immediate executions produced while the order was being matched. Market orders may return multiple fills if they sweep through multiple price levels.
 </ResponseField>
 
 <ResponseField name="resting" type="boolean" required>
-  `true` when some remaining quantity was posted to the book. `false` when the order was fully matched immediately.
+  `true` when some quantity was posted to the book. `false` when nothing rests, including all market orders.
 </ResponseField>
 
 ## Validation rules
 
-- `price` must be greater than zero and aligned to the market `tick_size`.
+- `order_type` defaults to `limit` when omitted.
+- `price` must be greater than zero and aligned to the market `tick_size` for limit orders.
+- Send `price: 0` for market orders. The server ignores the field.
 - `quantity` must be greater than zero and at least the market `min_order_quantity`.
 - The order must keep your worst-case per-market net position within `+/-1000` unless the API key belongs to an admin trader.
 - You can sell from flat and go short.
-- Crossing the book is allowed. The order may fill immediately, partially rest, or fully rest depending on available liquidity.
+- Crossing the book is allowed. Limit orders may fill immediately, partially rest, or fully rest depending on available liquidity.
+- Market orders consume as much opposite-side liquidity as is currently available and never rest on the book.
 
 ## Common rejects
 
@@ -101,4 +148,5 @@ curl \
 - `market has already been settled`
 - `price must align to tick size ...`
 - `quantity must be at least ...`
+- `market order could not be filled because no opposite-side liquidity is available`
 - `projected net position for ... would be ...; limit is +/-1000`

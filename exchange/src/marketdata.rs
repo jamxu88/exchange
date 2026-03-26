@@ -1,5 +1,6 @@
 use crate::admin::AdminMessageEntry;
-use crate::orderbook::{Fill, Order, Side};
+use crate::orderbook::{BookLevel, Fill, Order, Side};
+use crate::trading::OrderType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -24,6 +25,8 @@ pub enum ClientMessage {
         request_id: Option<String>,
         market: String,
         side: Side,
+        #[serde(default)]
+        order_type: OrderType,
         price: u64,
         quantity: u64,
     },
@@ -58,8 +61,8 @@ pub enum ServerMessage {
         channel: String,
         market: String,
         sequence: u64,
-        bids: Vec<L3Order>,
-        asks: Vec<L3Order>,
+        bids: Vec<BookLevel>,
+        asks: Vec<BookLevel>,
     },
     Delta {
         channel: String,
@@ -118,44 +121,15 @@ pub struct UserBroadcastEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct L3Order {
-    pub order_id: Uuid,
-    pub side: Side,
-    pub price: u64,
-    pub remaining: u64,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BookDelta {
-    OrderAdded {
-        order: L3Order,
-    },
-    OrderUpdated {
-        order: L3Order,
-    },
-    OrderRemoved {
-        order_id: Uuid,
+    LevelUpdated {
         side: Side,
-        price: u64,
-    },
-    Trade {
-        maker_order_id: Uuid,
-        taker_order_id: Uuid,
         price: u64,
         quantity: u64,
     },
-}
-
-impl From<&Order> for L3Order {
-    fn from(order: &Order) -> Self {
-        Self {
-            order_id: order.id,
-            side: order.side,
-            price: order.price,
-            remaining: order.remaining,
-            created_at: order.created_at.to_rfc3339(),
-        }
-    }
+    Trade {
+        price: u64,
+        quantity: u64,
+    },
 }

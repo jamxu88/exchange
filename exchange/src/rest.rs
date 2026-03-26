@@ -1,14 +1,20 @@
-use crate::admin::{
-    AdminService, DeleteMarketResponse, ListQuery, LoadExchangeConfigRequest,
-    LoadExchangeConfigResponse, MarketDefinition, SendAdminMessageRequest, SettleMarketRequest,
-    SettleMarketResponse, UpdateMarketRequest, UpsertMarketRequest,
-};
 use crate::accounts::UserProfile;
+use crate::admin::{
+    AdminService, CompetitionLeaderboardSnapshot, CompetitionSnapshotQuery, DeleteMarketResponse,
+    FinalizeCompetitionRequest, FinalizeCompetitionResponse, ListQuery, LoadExchangeConfigRequest,
+    LoadExchangeConfigResponse, MarketDefinition, ProvisionedUsersQuery, ProvisionedUsersResponse,
+    SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse, UpdateMarketRequest,
+    UpsertMarketRequest,
+};
 use crate::auth::{
     AuthError, AuthService, AuthenticatedAdmin, AuthenticatedUser, ProvisionUserRequest,
     ProvisionUserResponse,
 };
-use crate::state::{AppState, PortfolioSnapshot, Position, NET_POSITION_LIMIT};
+use crate::settlement::SettlementEngine;
+use crate::state::{
+    AccountBarrierStatus, AppState, DispatchQueueMode, DispatchQueueStatus, PortfolioSnapshot,
+    Position,
+};
 use crate::storage::{PersistenceMode, PersistenceStatus};
 use crate::trading::{
     AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, SubmitOrderRequest,
@@ -17,7 +23,7 @@ use crate::trading::{
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -31,6 +37,10 @@ pub struct HealthResponse {
     pub service: String,
     pub now: String,
     pub persistence: PersistenceStatus,
+    pub runtime_dispatch: DispatchQueueStatus,
+    pub account_dispatch: DispatchQueueStatus,
+    pub persistence_dispatch: DispatchQueueStatus,
+    pub account_barrier: AccountBarrierStatus,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, ToSchema)]
@@ -64,16 +74,23 @@ impl TradingError {
             TradingError::InvalidMarket
             | TradingError::TickSizeViolation { .. }
             | TradingError::QuantityBelowMinimum { .. }
+            | TradingError::NoLiquidity
             | TradingError::InvalidPrice
+            | TradingError::PriceTooLarge { .. }
             | TradingError::InvalidQuantity
+            | TradingError::QuantityTooLarge { .. }
             | TradingError::InvalidRemaining
             | TradingError::InvalidAmend => StatusCode::BAD_REQUEST,
-            TradingError::MarketNotConfigured | TradingError::OrderNotFound => StatusCode::NOT_FOUND,
+            TradingError::MarketNotConfigured | TradingError::OrderNotFound => {
+                StatusCode::NOT_FOUND
+            }
             TradingError::OrderNotOwned => StatusCode::FORBIDDEN,
             TradingError::MarketDisabled
             | TradingError::MarketSettled
             | TradingError::PositionLimitExceeded { .. } => StatusCode::CONFLICT,
-            TradingError::Overflow => StatusCode::INTERNAL_SERVER_ERROR,
+            TradingError::EngineUnavailable | TradingError::Overflow => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 }
@@ -100,11 +117,26 @@ impl IntoResponse for TradingError {
 )]
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let persistence = state.storage.persistence_status();
-    let status = match persistence.mode {
-        PersistenceMode::Retrying | PersistenceMode::Backpressured | PersistenceMode::Stopped => {
-            "degraded"
-        }
-        PersistenceMode::Disabled | PersistenceMode::Ok => "ok",
+    let runtime_dispatch = state.runtime_dispatch_status();
+    let account_dispatch = state.account_dispatch_status();
+    let persistence_dispatch = state.persistence_dispatch_status();
+    let account_barrier = state.account_barrier_status();
+    let status = if matches!(
+        persistence.mode,
+        PersistenceMode::Retrying | PersistenceMode::Backpressured | PersistenceMode::Stopped
+    ) || matches!(
+        runtime_dispatch.mode,
+        DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+    ) || matches!(
+        account_dispatch.mode,
+        DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+    ) || matches!(
+        persistence_dispatch.mode,
+        DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+    ) {
+        "degraded"
+    } else {
+        "ok"
     };
 
     Json(HealthResponse {
@@ -112,7 +144,33 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         service: "exchange".to_string(),
         now: Utc::now().to_rfc3339(),
         persistence,
+        runtime_dispatch,
+        account_dispatch,
+        persistence_dispatch,
+        account_barrier,
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/users",
+    tag = "admin",
+    params(
+        ("username_prefix" = Option<String>, Query, description = "Optional username prefix filter"),
+        ("role" = Option<crate::accounts::UserRole>, Query, description = "Optional role filter"),
+        ("limit" = Option<usize>, Query, description = "Optional maximum number of rows to return")
+    ),
+    responses(
+        (status = 200, description = "Provisioned user roster with API keys", body = ProvisionedUsersResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
+pub async fn list_provisioned_users(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Query(query): Query<ProvisionedUsersQuery>,
+) -> impl IntoResponse {
+    Json(AdminService::list_provisioned_users(&state, &admin, query))
 }
 
 #[utoipa::path(
@@ -135,6 +193,39 @@ pub async fn provision_user(
     AuthService::provision_user_as_admin(&state, &admin, request)
         .map(|response| (StatusCode::CREATED, Json(response)))
         .map_err(|err| (err.status_code(), Json(ApiError::from(err))))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/users/export.csv",
+    tag = "admin",
+    params(
+        ("username_prefix" = Option<String>, Query, description = "Optional username prefix filter"),
+        ("role" = Option<crate::accounts::UserRole>, Query, description = "Optional role filter"),
+        ("limit" = Option<usize>, Query, description = "Optional maximum number of rows to export")
+    ),
+    responses(
+        (status = 200, description = "Provisioned users exported as CSV", body = String),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
+pub async fn export_provisioned_users_csv(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Query(query): Query<ProvisionedUsersQuery>,
+) -> Response {
+    let csv = AdminService::export_provisioned_users_csv(&state, &admin, query);
+    (
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"provisioned-users.csv\"",
+            ),
+        ],
+        csv,
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -190,7 +281,7 @@ pub async fn get_portfolio(
 ) -> impl IntoResponse {
     Json(PortfolioSnapshot {
         trader_id: auth.trader_id,
-        position_limit: NET_POSITION_LIMIT,
+        position_limit: SettlementEngine::position_limit_for_role(auth.role),
         positions: state.storage.list_positions(auth.trader_id),
     })
 }
@@ -257,7 +348,7 @@ pub async fn submit_order(
     auth: AuthenticatedUser,
     Json(request): Json<SubmitOrderRequest>,
 ) -> Result<(StatusCode, Json<SubmitOrderResponse>), TradingError> {
-    let response = TradingService::submit_limit_order(&state, auth.trader_id, request).await?;
+    let response = TradingService::submit_order(&state, auth.trader_id, request).await?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
@@ -460,6 +551,90 @@ pub async fn settle_market(
                 }),
             )
         })
+}
+
+pub async fn finalize_competition(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<FinalizeCompetitionRequest>,
+) -> Result<Json<FinalizeCompetitionResponse>, (StatusCode, Json<ApiError>)> {
+    AdminService::finalize_competition(&state, &admin, request)
+        .await
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn get_competition_snapshot(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+    Path(snapshot_id): Path<Uuid>,
+) -> Result<Json<CompetitionLeaderboardSnapshot>, (StatusCode, Json<ApiError>)> {
+    AdminService::get_competition_snapshot(&state, snapshot_id)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn get_latest_competition_snapshot(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+    Query(query): Query<CompetitionSnapshotQuery>,
+) -> Result<Json<CompetitionLeaderboardSnapshot>, (StatusCode, Json<ApiError>)> {
+    AdminService::latest_competition_snapshot(&state, &query.competition_id)
+        .map(Json)
+        .map_err(|err| {
+            (
+                err.status_code(),
+                Json(ApiError {
+                    error: err.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn export_competition_snapshot_csv(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+    Path(snapshot_id): Path<Uuid>,
+) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    let snapshot = AdminService::get_competition_snapshot(&state, snapshot_id).map_err(|err| {
+        (
+            err.status_code(),
+            Json(ApiError {
+                error: err.to_string(),
+            }),
+        )
+    })?;
+    let filename = format!(
+        "{}-{}.csv",
+        snapshot.competition_id.replace(' ', "-"),
+        snapshot.snapshot_id
+    );
+    let csv = AdminService::export_competition_snapshot_csv(&snapshot);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                &format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        csv,
+    )
+        .into_response())
 }
 
 #[utoipa::path(

@@ -42,6 +42,9 @@ async fn balance_endpoint_p95_latency_smoke() {
         database_url: "postgres://latency-test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 64,
+        runtime_dispatch_queue_capacity: 4_096,
+        account_dispatch_queue_capacity: 4_096,
+        persistence_dispatch_queue_capacity: 4_096,
         per_user_requests_per_second: 1_000_000,
         admin_api_token: "test-admin-token".to_string(),
         postgres_write_batch_size: 128,
@@ -53,6 +56,7 @@ async fn balance_endpoint_p95_latency_smoke() {
         &state,
         ProvisionUserRequest {
             username: "latency-user".to_string(),
+            role: None,
         },
     )
     .expect("provision user");

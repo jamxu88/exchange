@@ -1,5 +1,5 @@
 use crate::orderbook::{Fill, Order, OrderBook, Side};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,6 +8,8 @@ pub struct MatchExecution {
     pub maker_trader_id: Uuid,
     pub maker_side: Side,
     pub maker_limit_price: u64,
+    pub maker_order_quantity: u64,
+    pub maker_created_at: DateTime<Utc>,
     pub price: u64,
     pub quantity: u64,
 }
@@ -65,6 +67,8 @@ impl MatchingEngine {
                 maker_trader_id,
                 maker_side,
                 maker_limit_price,
+                maker_order_quantity,
+                maker_created_at,
                 matched_qty,
             )) = orderbook.execute_against_best(incoming.side, incoming.remaining)
             else {
@@ -77,6 +81,8 @@ impl MatchingEngine {
                 maker_trader_id,
                 maker_side,
                 maker_limit_price,
+                maker_order_quantity,
+                maker_created_at,
                 price,
                 quantity: matched_qty,
             });
@@ -84,6 +90,44 @@ impl MatchingEngine {
 
         if incoming.remaining > 0 {
             orderbook.add_order(incoming);
+        }
+
+        executions
+    }
+
+    pub fn process_market_order_executions(
+        orderbook: &mut OrderBook,
+        incoming_side: Side,
+        mut quantity: u64,
+    ) -> Vec<MatchExecution> {
+        let mut executions = Vec::new();
+
+        while quantity > 0 {
+            let Some((
+                price,
+                maker_order_id,
+                maker_trader_id,
+                maker_side,
+                maker_limit_price,
+                maker_order_quantity,
+                maker_created_at,
+                matched_qty,
+            )) = orderbook.execute_against_best(incoming_side, quantity)
+            else {
+                break;
+            };
+
+            quantity -= matched_qty;
+            executions.push(MatchExecution {
+                maker_order_id,
+                maker_trader_id,
+                maker_side,
+                maker_limit_price,
+                maker_order_quantity,
+                maker_created_at,
+                price,
+                quantity: matched_qty,
+            });
         }
 
         executions
@@ -172,6 +216,27 @@ mod tests {
         let remaining = book
             .get_order(remaining_id)
             .expect("remaining bid order should exist");
+        assert_eq!(remaining.remaining, 2);
+    }
+
+    #[test]
+    fn market_buy_order_consumes_best_asks_without_resting() {
+        let mut book = OrderBook::default();
+        book.add_order(make_order(Side::Sell, 100, 5));
+        book.add_order(make_order(Side::Sell, 101, 5));
+
+        let executions = MatchingEngine::process_market_order_executions(&mut book, Side::Buy, 8);
+
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0].price, 100);
+        assert_eq!(executions[0].quantity, 5);
+        assert_eq!(executions[1].price, 101);
+        assert_eq!(executions[1].quantity, 3);
+
+        let remaining_id = book
+            .top_order_id_at_price(Side::Sell, 101)
+            .expect("remaining ask id");
+        let remaining = book.get_order(remaining_id).expect("remaining ask order");
         assert_eq!(remaining.remaining, 2);
     }
 }

@@ -1,4 +1,4 @@
-use crate::accounts::{UserProfile, UserRecord};
+use crate::accounts::{UserProfile, UserRecord, UserRole};
 use crate::admin::AdminAuditEntry;
 use crate::state::AppState;
 use crate::storage::StorageError;
@@ -17,6 +17,7 @@ const API_KEY_HEADER: &str = "x-api-key";
 pub struct AuthenticatedUser {
     pub trader_id: Uuid,
     pub username: String,
+    pub role: UserRole,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,7 @@ pub struct AuthenticatedAdmin {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProvisionUserRequest {
     pub username: String,
+    pub role: Option<UserRole>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -74,6 +76,7 @@ impl AuthService {
         request: ProvisionUserRequest,
     ) -> Result<ProvisionUserResponse, AuthError> {
         let username = request.username.trim().to_string();
+        let role = request.role.unwrap_or_default();
         if username.is_empty() {
             return Err(AuthError::MissingUsername);
         }
@@ -83,6 +86,7 @@ impl AuthService {
                 trader_id: Uuid::new_v4(),
                 username: username.clone(),
                 api_key: format!("exch_{}", Uuid::new_v4().simple()),
+                role,
                 created_at: Utc::now(),
             };
             let record = UserRecord {
@@ -115,8 +119,8 @@ impl AuthService {
                 Some(response.profile.username.clone()),
                 Some(response.profile.trader_id),
                 format!(
-                    "competition account provisioned with api key {}",
-                    response.profile.api_key
+                    "competition account provisioned with role {:?} and api key {}",
+                    response.profile.role, response.profile.api_key
                 ),
             ),
             Err(error) => Self::record_admin_audit(
@@ -143,6 +147,7 @@ impl AuthService {
         Ok(AuthenticatedUser {
             trader_id: user.profile.trader_id,
             username: user.profile.username,
+            role: user.profile.role,
         })
     }
 
@@ -255,6 +260,9 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
             per_user_requests_per_second: 100,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
@@ -271,6 +279,7 @@ mod tests {
             &state,
             ProvisionUserRequest {
                 username: "alice".to_string(),
+                role: None,
             },
         )
         .expect("provision should succeed");
@@ -285,6 +294,7 @@ mod tests {
             &state,
             ProvisionUserRequest {
                 username: "bob".to_string(),
+                role: None,
             },
         )
         .expect("provision should succeed");

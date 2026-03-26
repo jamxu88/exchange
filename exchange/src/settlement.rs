@@ -1,6 +1,7 @@
-use crate::orderbook::Side;
+use crate::accounts::UserRole;
 #[cfg(test)]
 use crate::orderbook::Order;
+use crate::orderbook::Side;
 use crate::state::{AppState, NET_POSITION_LIMIT, Position};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,9 +15,7 @@ pub enum SettlementError {
     InvalidMarket,
     #[error("settlement price must be greater than zero")]
     InvalidSettlementPrice,
-    #[error(
-        "projected net position for {market} would be {projected}; limit is +/-{limit}"
-    )]
+    #[error("projected net position for {market} would be {projected}; limit is +/-{limit}")]
     PositionLimitExceeded {
         market: String,
         projected: i64,
@@ -62,6 +61,14 @@ impl SettlementEngine {
         NET_POSITION_LIMIT
     }
 
+    pub fn position_limit_for_role(role: UserRole) -> Option<i64> {
+        if role.has_unlimited_position_power() {
+            None
+        } else {
+            Some(NET_POSITION_LIMIT)
+        }
+    }
+
     pub fn ensure_order_within_limit(
         state: &AppState,
         trader_id: Uuid,
@@ -74,12 +81,18 @@ impl SettlementEngine {
         if quantity == 0 {
             return Ok(());
         }
+        if state
+            .storage
+            .get_user(trader_id)
+            .map(|user| user.profile.role.has_unlimited_position_power())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
 
         let current_net = state
             .storage
-            .list_positions(trader_id)
-            .into_iter()
-            .find(|position| position.market == market)
+            .get_position(trader_id, market)
             .map(|position| position.net_quantity)
             .unwrap_or(0);
 
@@ -89,7 +102,8 @@ impl SettlementEngine {
             if skip_order_id == Some(order.id) {
                 continue;
             }
-            let remaining = i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
+            let remaining =
+                i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
             match order.side {
                 Side::Buy => {
                     pending_buy_quantity = pending_buy_quantity
@@ -152,16 +166,15 @@ impl SettlementEngine {
 
         let current_net = state
             .storage
-            .list_positions(trader_id)
-            .into_iter()
-            .find(|position| position.market == market)
+            .get_position(trader_id, market)
             .map(|position| position.net_quantity)
             .unwrap_or(0);
 
         let mut pending_buy_quantity = 0_i64;
         let mut pending_sell_quantity = 0_i64;
         for order in state.storage.list_open_orders(trader_id, Some(market)) {
-            let remaining = i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
+            let remaining =
+                i64::try_from(order.remaining).map_err(|_| SettlementError::Overflow)?;
             match order.side {
                 Side::Buy => {
                     pending_buy_quantity = pending_buy_quantity
@@ -199,10 +212,9 @@ impl SettlementEngine {
             return Ok(());
         }
 
-        let mut positions = state.storage.list_positions(trader_id);
-        let index = positions.iter().position(|position| position.market == market);
-        let mut position = index
-            .and_then(|idx| positions.get(idx).cloned())
+        let mut position = state
+            .storage
+            .get_position(trader_id, market)
             .unwrap_or_else(|| Position {
                 market: market.to_string(),
                 net_quantity: 0,
@@ -214,14 +226,11 @@ impl SettlementEngine {
         apply_fill_to_position(&mut position, side, fill_price, quantity)?;
         position.updated_at = Utc::now();
 
-        if let Some(existing) = index {
-            positions[existing] = position;
+        if should_persist_position(&position) {
+            state.storage.upsert_position(trader_id, position);
         } else {
-            positions.push(position);
+            let _ = state.storage.delete_position(trader_id, market);
         }
-
-        normalize_positions(&mut positions);
-        state.storage.replace_positions(trader_id, positions);
         Ok(())
     }
 
@@ -241,7 +250,9 @@ impl SettlementEngine {
         };
 
         for (trader_id, mut positions) in state.storage.list_all_positions() {
-            let Some(position) = positions.iter_mut().find(|position| position.market == market)
+            let Some(position) = positions
+                .iter_mut()
+                .find(|position| position.market == market)
             else {
                 continue;
             };
@@ -301,11 +312,15 @@ fn validate_market_symbol(market: &str) -> Result<(), SettlementError> {
 }
 
 fn normalize_positions(positions: &mut Vec<Position>) {
-    positions.retain(|position| position.net_quantity != 0 || position.realized_pnl != 0);
+    positions.retain(should_persist_position);
     positions.sort_by(|left, right| left.market.cmp(&right.market));
 }
 
-fn apply_fill_to_position(
+pub(crate) fn should_persist_position(position: &Position) -> bool {
+    position.net_quantity != 0 || position.realized_pnl != 0
+}
+
+pub(crate) fn apply_fill_to_position(
     position: &mut Position,
     side: Side,
     fill_price: u64,
@@ -330,12 +345,14 @@ fn apply_fill_to_position(
         let next_abs = current_abs
             .checked_add(fill_abs)
             .ok_or(SettlementError::Overflow)?;
-        let average = position
-            .average_entry_price
-            .unwrap_or(fill_price);
+        let average = position.average_entry_price.unwrap_or(fill_price);
         let weighted = average
             .checked_mul(current_abs)
-            .and_then(|value| fill_price.checked_mul(fill_abs).and_then(|delta| value.checked_add(delta)))
+            .and_then(|value| {
+                fill_price
+                    .checked_mul(fill_abs)
+                    .and_then(|delta| value.checked_add(delta))
+            })
             .ok_or(SettlementError::Overflow)?;
         position.net_quantity = current_net
             .checked_add(fill_delta)
@@ -384,14 +401,11 @@ fn settle_position(position: &mut Position, settlement_price: u64) -> Result<(),
     if position.net_quantity == 0 {
         return Ok(());
     }
-    let average = position
-        .average_entry_price
-        .unwrap_or(settlement_price);
-    let settlement_i64 =
-        i64::try_from(settlement_price).map_err(|_| SettlementError::Overflow)?;
+    let average = position.average_entry_price.unwrap_or(settlement_price);
+    let settlement_i64 = i64::try_from(settlement_price).map_err(|_| SettlementError::Overflow)?;
     let average_i64 = i64::try_from(average).map_err(|_| SettlementError::Overflow)?;
-    let quantity_i64 =
-        i64::try_from(position.net_quantity.unsigned_abs()).map_err(|_| SettlementError::Overflow)?;
+    let quantity_i64 = i64::try_from(position.net_quantity.unsigned_abs())
+        .map_err(|_| SettlementError::Overflow)?;
     let realized_delta = if position.net_quantity > 0 {
         settlement_i64
             .checked_sub(average_i64)
@@ -416,6 +430,7 @@ fn settle_position(position: &mut Position, settlement_price: u64) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::{UserProfile, UserRecord, UserRole};
     use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
 
@@ -425,6 +440,9 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
             per_user_requests_per_second: 100,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
@@ -480,7 +498,10 @@ mod tests {
 
         assert!(matches!(
             error,
-            SettlementError::PositionLimitExceeded { projected: 1_025, .. }
+            SettlementError::PositionLimitExceeded {
+                projected: 1_025,
+                ..
+            }
         ));
     }
 
@@ -515,8 +536,39 @@ mod tests {
 
         assert!(matches!(
             error,
-            SettlementError::PositionLimitExceeded { projected: 1_050, .. }
+            SettlementError::PositionLimitExceeded {
+                projected: 1_050,
+                ..
+            }
         ));
+    }
+
+    #[test]
+    fn admin_trader_is_exempt_from_position_limit_checks() {
+        let state = test_state();
+        let trader = UserRecord {
+            profile: UserProfile {
+                trader_id: Uuid::new_v4(),
+                username: "desk-admin".to_string(),
+                api_key: "exch_admin".to_string(),
+                role: UserRole::Admin,
+                created_at: Utc::now(),
+            },
+        };
+        state
+            .storage
+            .create_user(trader.clone())
+            .expect("admin user");
+
+        SettlementEngine::ensure_order_within_limit(
+            &state,
+            trader.profile.trader_id,
+            "BTC-USD",
+            Side::Buy,
+            (NET_POSITION_LIMIT + 10_000) as u64,
+            None,
+        )
+        .expect("admin trader should bypass fixed position checks");
     }
 
     #[test]
@@ -551,12 +603,9 @@ mod tests {
             },
         );
 
-        let bounds = SettlementEngine::projected_bounds_with_open_orders(
-            &state,
-            trader_id,
-            "BTC-USD",
-        )
-        .expect("bounds should compute");
+        let bounds =
+            SettlementEngine::projected_bounds_with_open_orders(&state, trader_id, "BTC-USD")
+                .expect("bounds should compute");
 
         assert_eq!(bounds, (175, 60));
     }
@@ -575,6 +624,18 @@ mod tests {
         assert_eq!(positions[0].net_quantity, -6);
         assert_eq!(positions[0].average_entry_price, Some(100));
         assert_eq!(positions[0].realized_pnl, 45);
+    }
+
+    #[test]
+    fn flat_zero_pnl_fill_removes_position() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        SettlementEngine::seed_position(&state, trader_id, "BTC-USD", 1, Some(100), 0);
+
+        SettlementEngine::apply_fill(&state, trader_id, Side::Sell, "BTC-USD", 100, 1)
+            .expect("fill should flatten position");
+
+        assert!(state.storage.list_positions(trader_id).is_empty());
     }
 
     #[test]

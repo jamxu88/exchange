@@ -1,13 +1,13 @@
+use crate::accounts::UserRole;
 use crate::auth::AuthenticatedAdmin;
-use crate::marketdata::{
-    BookDelta, BroadcastEvent, OrderStateStatus, ServerMessage, UserBroadcastEvent,
-};
+use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
 use crate::settlement::{SettlementEngine, SettlementError};
 use crate::state::AppState;
 use crate::storage::PersistenceStatus;
 use crate::trading::{TradingError, TradingService};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use thiserror::Error;
 use tracing::info;
 use utoipa::ToSchema;
@@ -134,7 +134,7 @@ pub struct SettleMarketRequest {
     pub announcement: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct SettleMarketResponse {
     pub market: MarketDefinition,
     pub canceled_orders: usize,
@@ -143,7 +143,7 @@ pub struct SettleMarketResponse {
     pub settlement_price: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct LeaderboardRow {
     pub rank: usize,
     pub trader_id: Uuid,
@@ -152,6 +152,72 @@ pub struct LeaderboardRow {
     pub realized_pnl: i64,
     pub unrealized_pnl: i64,
     pub gross_exposure: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct CompetitionSettlementRequest {
+    pub market_id: String,
+    pub settlement_price: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct FinalizeCompetitionRequest {
+    #[serde(default = "default_competition_id")]
+    pub competition_id: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub settlements: Vec<CompetitionSettlementRequest>,
+    #[serde(default)]
+    pub eligible_usernames: Vec<String>,
+    #[serde(default)]
+    pub eligible_trader_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub include_all_traders: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct CompetitionLeaderboardSnapshot {
+    pub snapshot_id: Uuid,
+    pub competition_id: String,
+    pub label: String,
+    pub created_at: DateTime<Utc>,
+    pub entrants: usize,
+    pub leaderboard: Vec<LeaderboardRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct FinalizeCompetitionResponse {
+    pub controls: ExchangeControls,
+    pub settled_markets: Vec<SettleMarketResponse>,
+    pub snapshot: CompetitionLeaderboardSnapshot,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ProvisionedUsersQuery {
+    pub username_prefix: Option<String>,
+    pub role: Option<UserRole>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ProvisionedUserCredential {
+    pub trader_id: Uuid,
+    pub username: String,
+    pub api_key: String,
+    pub role: UserRole,
+    pub position_limit: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ProvisionedUsersResponse {
+    pub users: Vec<ProvisionedUserCredential>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct CompetitionSnapshotQuery {
+    #[serde(default = "default_competition_id")]
+    pub competition_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -200,6 +266,18 @@ pub enum AdminError {
     MarketNotFound,
     #[error("market already settled")]
     MarketAlreadySettled,
+    #[error("competition settlement list is required")]
+    MissingCompetitionSettlements,
+    #[error("competition entrant filter is required unless include_all_traders is true")]
+    MissingCompetitionEntrants,
+    #[error("duplicate settlement entry for market {market_id}")]
+    DuplicateCompetitionSettlementMarket { market_id: String },
+    #[error("competition user not found: {identifier}")]
+    CompetitionUserNotFound { identifier: String },
+    #[error("user {username} is not eligible for competition standings")]
+    CompetitionUserIneligible { username: String },
+    #[error("competition snapshot not found")]
+    CompetitionSnapshotNotFound,
     #[error("cannot delete market with open orders")]
     MarketHasOpenOrders,
     #[error("message body is required")]
@@ -219,12 +297,19 @@ impl AdminError {
         use axum::http::StatusCode;
 
         match self {
-            Self::MarketNotFound | Self::TargetUserNotFound => StatusCode::NOT_FOUND,
+            Self::MarketNotFound
+            | Self::TargetUserNotFound
+            | Self::CompetitionUserNotFound { .. }
+            | Self::CompetitionSnapshotNotFound => StatusCode::NOT_FOUND,
             Self::MarketAlreadySettled | Self::MarketHasOpenOrders | Self::SettlementFailed(_) => {
                 StatusCode::CONFLICT
             }
             Self::Overflow => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingMarketId
+            | Self::MissingCompetitionSettlements
+            | Self::MissingCompetitionEntrants
+            | Self::DuplicateCompetitionSettlementMarket { .. }
+            | Self::CompetitionUserIneligible { .. }
             | Self::MarketIdMismatch { .. }
             | Self::MissingBaseAsset
             | Self::InvalidTickSize
@@ -292,6 +377,94 @@ impl AdminService {
 
     pub fn list_admin_messages(state: &AppState, limit: usize) -> Vec<AdminMessageEntry> {
         state.storage.list_admin_messages(Some(limit))
+    }
+
+    pub fn list_provisioned_users(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        query: ProvisionedUsersQuery,
+    ) -> ProvisionedUsersResponse {
+        let response = ProvisionedUsersResponse {
+            users: provisioned_users_for_query(state, &query),
+        };
+        record_admin_audit(
+            state,
+            admin.username.clone(),
+            "list_provisioned_users",
+            None,
+            None,
+            format!(
+                "count={} username_prefix={:?} role={:?} limit={:?}",
+                response.users.len(),
+                query.username_prefix.as_deref().map(str::trim),
+                query.role,
+                query.limit
+            ),
+        );
+        response
+    }
+
+    pub async fn finalize_competition(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        request: FinalizeCompetitionRequest,
+    ) -> Result<FinalizeCompetitionResponse, AdminError> {
+        let competition_id = normalized_competition_id(&request.competition_id);
+        let label = normalized_competition_label(request.label.as_deref(), &competition_id);
+        let entrant_users = resolve_competition_users(
+            state,
+            &request.eligible_usernames,
+            &request.eligible_trader_ids,
+            request.include_all_traders,
+        )?;
+        let settlements = validate_competition_settlements(state, &request.settlements)?;
+
+        let controls = Self::set_trading_enabled(state, admin, false).controls;
+        let mut settled_markets = Vec::with_capacity(settlements.len());
+        for settlement in settlements {
+            settled_markets.push(
+                Self::settle_market(
+                    state,
+                    admin,
+                    &settlement.market_id,
+                    SettleMarketRequest {
+                        settlement_price: settlement.settlement_price,
+                        announcement: None,
+                    },
+                )
+                .await?,
+            );
+        }
+
+        let snapshot = CompetitionLeaderboardSnapshot {
+            snapshot_id: Uuid::new_v4(),
+            competition_id,
+            label,
+            created_at: Utc::now(),
+            entrants: entrant_users.len(),
+            leaderboard: build_leaderboard_rows(state, entrant_users, None).await,
+        };
+        state.storage.append_competition_snapshot(snapshot.clone());
+
+        record_admin_audit(
+            state,
+            admin.username.clone(),
+            "finalize_competition",
+            Some(snapshot.competition_id.clone()),
+            None,
+            format!(
+                "snapshot_id={} entrants={} settled_markets={}",
+                snapshot.snapshot_id,
+                snapshot.entrants,
+                settled_markets.len()
+            ),
+        );
+
+        Ok(FinalizeCompetitionResponse {
+            controls,
+            settled_markets,
+            snapshot,
+        })
     }
 
     pub fn upsert_market(
@@ -414,8 +587,7 @@ impl AdminService {
             .storage
             .delete_market(trimmed_market)
             .ok_or(AdminError::MarketNotFound)?;
-        state.orderbooks.remove(trimmed_market);
-        state.market_sequences.remove(trimmed_market);
+        state.remove_market_runtime(trimmed_market);
         record_admin_audit(
             state,
             admin.username.clone(),
@@ -613,10 +785,7 @@ impl AdminService {
         })
     }
 
-    pub fn reset_all_users(
-        state: &AppState,
-        admin: &AuthenticatedAdmin,
-    ) -> ResetUsersResponse {
+    pub fn reset_all_users(state: &AppState, admin: &AuthenticatedAdmin) -> ResetUsersResponse {
         let open_orders = state.storage.list_all_open_orders();
         let cleared_orders = open_orders.len();
         let cleared_positions = state
@@ -644,17 +813,17 @@ impl AdminService {
             publish_market_delta(
                 state,
                 &order.market,
-                BookDelta::OrderRemoved {
-                    order_id: order.id,
+                BookDelta::LevelUpdated {
                     side: order.side,
                     price: order.price,
+                    quantity: 0,
                 },
             );
         }
 
         state.storage.reset_all_trading_state();
-        state.orderbooks.clear();
-        let _ = state.system_events_tx.send(ServerMessage::ResyncRequired {
+        state.clear_market_runtime();
+        state.dispatch_system_message(ServerMessage::ResyncRequired {
             channel: "account".to_string(),
             market: None,
             expected_sequence: None,
@@ -682,64 +851,322 @@ impl AdminService {
     }
 
     pub async fn leaderboard(state: &AppState, limit: Option<usize>) -> Vec<LeaderboardRow> {
-        let markets = state.storage.list_markets();
-        let mut market_marks = std::collections::BTreeMap::new();
-        for market in &markets {
-            market_marks.insert(market.market_id.clone(), market_mark_price(state, market).await);
-        }
+        build_leaderboard_rows(state, state.storage.list_users(), limit).await
+    }
 
-        let mut rows = state
+    pub fn get_competition_snapshot(
+        state: &AppState,
+        snapshot_id: Uuid,
+    ) -> Result<CompetitionLeaderboardSnapshot, AdminError> {
+        state
             .storage
-            .list_users()
-            .into_iter()
-            .map(|user| {
-                let mut realized_pnl = 0_i64;
-                let mut unrealized_pnl = 0_i64;
-                let mut gross_exposure = 0_u64;
-                for position in state.storage.list_positions(user.profile.trader_id) {
-                    realized_pnl = realized_pnl.saturating_add(position.realized_pnl);
-                    let mark = market_marks.get(&position.market).copied().unwrap_or(0);
-                    gross_exposure = gross_exposure
-                        .saturating_add(position.net_quantity.unsigned_abs().saturating_mul(mark));
-                    if position.net_quantity != 0 {
-                        if let Some(average_entry_price) = position.average_entry_price {
-                            let mark_i64 = i64::try_from(mark).unwrap_or(i64::MAX);
-                            let average_i64 =
-                                i64::try_from(average_entry_price).unwrap_or(i64::MAX);
-                            let delta = mark_i64.saturating_sub(average_i64);
-                            unrealized_pnl = unrealized_pnl.saturating_add(
-                                delta.saturating_mul(position.net_quantity),
-                            );
-                        }
+            .get_competition_snapshot(snapshot_id)
+            .ok_or(AdminError::CompetitionSnapshotNotFound)
+    }
+
+    pub fn latest_competition_snapshot(
+        state: &AppState,
+        competition_id: &str,
+    ) -> Result<CompetitionLeaderboardSnapshot, AdminError> {
+        state
+            .storage
+            .latest_competition_snapshot(&normalized_competition_id(competition_id))
+            .ok_or(AdminError::CompetitionSnapshotNotFound)
+    }
+
+    pub fn export_competition_snapshot_csv(snapshot: &CompetitionLeaderboardSnapshot) -> String {
+        let mut csv = String::from(
+            "rank,trader_id,username,net_pnl,realized_pnl,unrealized_pnl,gross_exposure\n",
+        );
+        for row in &snapshot.leaderboard {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{}\n",
+                row.rank,
+                row.trader_id,
+                csv_escape(&row.username),
+                row.net_pnl,
+                row.realized_pnl,
+                row.unrealized_pnl,
+                row.gross_exposure
+            ));
+        }
+        csv
+    }
+
+    pub fn export_provisioned_users_csv(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        query: ProvisionedUsersQuery,
+    ) -> String {
+        let users = provisioned_users_for_query(state, &query);
+        record_admin_audit(
+            state,
+            admin.username.clone(),
+            "export_provisioned_users_csv",
+            None,
+            None,
+            format!(
+                "count={} username_prefix={:?} role={:?} limit={:?}",
+                users.len(),
+                query.username_prefix.as_deref().map(str::trim),
+                query.role,
+                query.limit
+            ),
+        );
+
+        let mut csv = String::from("trader_id,username,api_key,role,position_limit,created_at\n");
+        for user in users {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{}\n",
+                user.trader_id,
+                csv_escape(&user.username),
+                csv_escape(&user.api_key),
+                user_role_slug(user.role),
+                user.position_limit
+                    .map(|limit| limit.to_string())
+                    .unwrap_or_else(|| "unlimited".to_string()),
+                user.created_at.to_rfc3339()
+            ));
+        }
+        csv
+    }
+}
+
+fn default_competition_id() -> String {
+    "default".to_string()
+}
+
+fn normalized_competition_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        default_competition_id()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalized_competition_label(raw: Option<&str>, competition_id: &str) -> String {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(label) => label.to_string(),
+        None => format!("{competition_id} final standings"),
+    }
+}
+
+fn validate_competition_settlements(
+    state: &AppState,
+    settlements: &[CompetitionSettlementRequest],
+) -> Result<Vec<CompetitionSettlementRequest>, AdminError> {
+    if settlements.is_empty() {
+        return Err(AdminError::MissingCompetitionSettlements);
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut validated = Vec::with_capacity(settlements.len());
+    for settlement in settlements {
+        let market_id = settlement.market_id.trim().to_ascii_uppercase();
+        if !seen.insert(market_id.clone()) {
+            return Err(AdminError::DuplicateCompetitionSettlementMarket { market_id });
+        }
+        let market = state
+            .storage
+            .get_market(&market_id)
+            .ok_or(AdminError::MarketNotFound)?;
+        if market.status == MarketStatus::Settled {
+            return Err(AdminError::MarketAlreadySettled);
+        }
+        if settlement.settlement_price == 0 {
+            return Err(AdminError::InvalidSettlementPrice);
+        }
+        validated.push(CompetitionSettlementRequest {
+            market_id,
+            settlement_price: settlement.settlement_price,
+        });
+    }
+
+    Ok(validated)
+}
+
+fn resolve_competition_users(
+    state: &AppState,
+    usernames: &[String],
+    trader_ids: &[Uuid],
+    include_all_traders: bool,
+) -> Result<Vec<crate::accounts::UserRecord>, AdminError> {
+    if usernames.is_empty() && trader_ids.is_empty() && !include_all_traders {
+        return Err(AdminError::MissingCompetitionEntrants);
+    }
+
+    let mut trader_id_set = BTreeSet::new();
+    if include_all_traders {
+        for user in state.storage.list_users() {
+            if user.profile.role == crate::accounts::UserRole::Trader {
+                trader_id_set.insert(user.profile.trader_id);
+            }
+        }
+    }
+
+    for username in usernames {
+        let normalized = username.trim();
+        let user = state
+            .storage
+            .get_user_by_username(normalized)
+            .ok_or_else(|| AdminError::CompetitionUserNotFound {
+                identifier: normalized.to_string(),
+            })?;
+        if user.profile.role != crate::accounts::UserRole::Trader {
+            return Err(AdminError::CompetitionUserIneligible {
+                username: user.profile.username,
+            });
+        }
+        trader_id_set.insert(user.profile.trader_id);
+    }
+
+    for trader_id in trader_ids {
+        let user = state.storage.get_user(*trader_id).ok_or_else(|| {
+            AdminError::CompetitionUserNotFound {
+                identifier: trader_id.to_string(),
+            }
+        })?;
+        if user.profile.role != crate::accounts::UserRole::Trader {
+            return Err(AdminError::CompetitionUserIneligible {
+                username: user.profile.username,
+            });
+        }
+        trader_id_set.insert(*trader_id);
+    }
+
+    if trader_id_set.is_empty() {
+        return Err(AdminError::MissingCompetitionEntrants);
+    }
+
+    let mut users = trader_id_set
+        .into_iter()
+        .filter_map(|trader_id| state.storage.get_user(trader_id))
+        .collect::<Vec<_>>();
+    users.sort_by(|left, right| {
+        left.profile
+            .username
+            .cmp(&right.profile.username)
+            .then_with(|| left.profile.trader_id.cmp(&right.profile.trader_id))
+    });
+    Ok(users)
+}
+
+async fn build_leaderboard_rows(
+    state: &AppState,
+    users: Vec<crate::accounts::UserRecord>,
+    limit: Option<usize>,
+) -> Vec<LeaderboardRow> {
+    let markets = state.storage.list_markets();
+    let mut market_marks = std::collections::BTreeMap::new();
+    for market in &markets {
+        market_marks.insert(
+            market.market_id.clone(),
+            market_mark_price(state, market).await,
+        );
+    }
+
+    let mut rows = users
+        .into_iter()
+        .map(|user| {
+            let mut realized_pnl = 0_i64;
+            let mut unrealized_pnl = 0_i64;
+            let mut gross_exposure = 0_u64;
+            for position in state.storage.list_positions(user.profile.trader_id) {
+                realized_pnl = realized_pnl.saturating_add(position.realized_pnl);
+                let mark = market_marks.get(&position.market).copied().unwrap_or(0);
+                gross_exposure = gross_exposure
+                    .saturating_add(position.net_quantity.unsigned_abs().saturating_mul(mark));
+                if position.net_quantity != 0 {
+                    if let Some(average_entry_price) = position.average_entry_price {
+                        let mark_i64 = i64::try_from(mark).unwrap_or(i64::MAX);
+                        let average_i64 = i64::try_from(average_entry_price).unwrap_or(i64::MAX);
+                        let delta = mark_i64.saturating_sub(average_i64);
+                        unrealized_pnl = unrealized_pnl
+                            .saturating_add(delta.saturating_mul(position.net_quantity));
                     }
                 }
-                let net_pnl = realized_pnl.saturating_add(unrealized_pnl);
-                LeaderboardRow {
-                    rank: 0,
-                    trader_id: user.profile.trader_id,
-                    username: user.profile.username,
-                    net_pnl,
-                    realized_pnl,
-                    unrealized_pnl,
-                    gross_exposure,
-                }
-            })
-            .collect::<Vec<_>>();
+            }
+            let net_pnl = realized_pnl.saturating_add(unrealized_pnl);
+            LeaderboardRow {
+                rank: 0,
+                trader_id: user.profile.trader_id,
+                username: user.profile.username,
+                net_pnl,
+                realized_pnl,
+                unrealized_pnl,
+                gross_exposure,
+            }
+        })
+        .collect::<Vec<_>>();
 
-        rows.sort_by(|left, right| {
-            right
-                .net_pnl
-                .cmp(&left.net_pnl)
-                .then_with(|| left.username.cmp(&right.username))
-                .then_with(|| left.trader_id.cmp(&right.trader_id))
-        });
-        for (index, row) in rows.iter_mut().enumerate() {
-            row.rank = index + 1;
-        }
-        if let Some(limit) = limit {
-            rows.truncate(limit);
-        }
-        rows
+    rows.sort_by(|left, right| {
+        right
+            .net_pnl
+            .cmp(&left.net_pnl)
+            .then_with(|| left.username.cmp(&right.username))
+            .then_with(|| left.trader_id.cmp(&right.trader_id))
+    });
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.rank = index + 1;
+    }
+    if let Some(limit) = limit {
+        rows.truncate(limit);
+    }
+    rows
+}
+
+fn provisioned_users_for_query(
+    state: &AppState,
+    query: &ProvisionedUsersQuery,
+) -> Vec<ProvisionedUserCredential> {
+    let username_prefix = query
+        .username_prefix
+        .as_deref()
+        .map(str::trim)
+        .filter(|prefix| !prefix.is_empty());
+    let mut users = state
+        .storage
+        .list_users()
+        .into_iter()
+        .filter(|user| {
+            query
+                .role
+                .map(|role| user.profile.role == role)
+                .unwrap_or(true)
+        })
+        .filter(|user| {
+            username_prefix
+                .map(|prefix| user.profile.username.starts_with(prefix))
+                .unwrap_or(true)
+        })
+        .map(|user| ProvisionedUserCredential {
+            trader_id: user.profile.trader_id,
+            username: user.profile.username,
+            api_key: user.profile.api_key,
+            role: user.profile.role,
+            position_limit: SettlementEngine::position_limit_for_role(user.profile.role),
+            created_at: user.profile.created_at,
+        })
+        .collect::<Vec<_>>();
+    if let Some(limit) = query.limit {
+        users.truncate(limit);
+    }
+    users
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains([',', '"', '\n']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn user_role_slug(role: UserRole) -> &'static str {
+    match role {
+        UserRole::Trader => "trader",
+        UserRole::Admin => "admin",
     }
 }
 
@@ -808,16 +1235,13 @@ async fn market_mark_price(state: &AppState, market: &MarketDefinition) -> u64 {
     if let Some(settlement_price) = market.settlement_price {
         return settlement_price;
     }
-    if let Some(book) = state.orderbooks.get(&market.market_id) {
-        let book = book.lock().await;
-        return match (book.best_bid_price(), book.best_ask_price()) {
-            (Some(bid), Some(ask)) => bid.saturating_add(ask) / 2,
-            (Some(bid), None) => bid,
-            (None, Some(ask)) => ask,
-            (None, None) => market.reference_price.unwrap_or(0),
-        };
+    let (best_bid, best_ask) = state.market_best_prices(&market.market_id).await;
+    match (best_bid, best_ask) {
+        (Some(bid), Some(ask)) => bid.saturating_add(ask) / 2,
+        (Some(bid), None) => bid,
+        (None, Some(ask)) => ask,
+        (None, None) => market.reference_price.unwrap_or(0),
     }
-    market.reference_price.unwrap_or(0)
 }
 
 fn publish_admin_message(state: &AppState, entry: AdminMessageEntry) {
@@ -825,26 +1249,18 @@ fn publish_admin_message(state: &AppState, entry: AdminMessageEntry) {
         message: entry.clone(),
     };
     if let Some(trader_id) = entry.target_trader_id {
-        let _ = state
-            .user_events_tx
-            .send(UserBroadcastEvent { trader_id, message });
+        state.dispatch_user_event(trader_id, message);
         return;
     }
-    let _ = state.system_events_tx.send(message);
+    state.dispatch_system_message(message);
 }
 
 fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
-    let _ = state.events_tx.send(BroadcastEvent {
-        market: market.to_string(),
-        sequence: state.next_market_sequence(market),
-        event,
-    });
+    state.dispatch_market_delta(market, event);
 }
 
 fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage) {
-    let _ = state
-        .user_events_tx
-        .send(UserBroadcastEvent { trader_id, message });
+    state.dispatch_user_event(trader_id, message);
 }
 
 fn record_admin_audit(
@@ -880,7 +1296,7 @@ fn record_admin_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::{UserProfile, UserRecord};
+    use crate::accounts::{UserProfile, UserRecord, UserRole};
     use crate::config::Config;
     use crate::settlement::SettlementEngine;
 
@@ -890,6 +1306,9 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            persistence_dispatch_queue_capacity: 4_096,
             per_user_requests_per_second: 100,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
@@ -959,6 +1378,7 @@ mod tests {
                 trader_id: Uuid::new_v4(),
                 username: "alice".to_string(),
                 api_key: "exch_alice".to_string(),
+                role: UserRole::Trader,
                 created_at: Utc::now(),
             },
         };
@@ -967,6 +1387,7 @@ mod tests {
                 trader_id: Uuid::new_v4(),
                 username: "bob".to_string(),
                 api_key: "exch_bob".to_string(),
+                role: UserRole::Trader,
                 created_at: Utc::now(),
             },
         };

@@ -35,6 +35,13 @@ function bootstrapData(): TradeBootstrapData {
     ],
     fills: [],
     warnings: [],
+    loaded: {
+      markets: true,
+      user: true,
+      positions: true,
+      openOrders: true,
+      fills: true,
+    },
   };
 }
 
@@ -101,24 +108,8 @@ describe("tradeReducer", () => {
       type: "ws-snapshot",
       marketId: "BTC-USD",
       sequence: 3,
-      bids: [
-        {
-          orderId: "bid-1",
-          side: "buy",
-          price: 100,
-          remaining: 2,
-          createdAt: "2026-03-17T09:30:00Z",
-        },
-      ],
-      asks: [
-        {
-          orderId: "ask-1",
-          side: "sell",
-          price: 101,
-          remaining: 4,
-          createdAt: "2026-03-17T09:30:00Z",
-        },
-      ],
+      bids: [{ price: 100, quantity: 2 }],
+      asks: [{ price: 101, quantity: 4 }],
     });
 
     state = tradeReducer(state, {
@@ -127,19 +118,13 @@ describe("tradeReducer", () => {
       sequence: 4,
       events: [
         {
-          kind: "order_added",
-          order: {
-            orderId: "bid-2",
-            side: "buy",
-            price: 100,
-            remaining: 3,
-            createdAt: "2026-03-17T09:30:01Z",
-          },
+          kind: "level_updated",
+          side: "buy",
+          price: 100,
+          quantity: 5,
         },
         {
           kind: "trade",
-          makerOrderId: "ask-1",
-          takerOrderId: "bid-2",
           price: 101,
           quantity: 1,
         },
@@ -173,8 +158,8 @@ describe("tradeReducer", () => {
       side: "buy",
       orderType: "limit",
       quantity: 4,
-      requestedPrice: 101,
-      effectivePrice: 101,
+      requestedPrice: 105,
+      effectivePrice: 100.6666666667,
       resting: true,
       remaining: 1,
       fills: [
@@ -183,13 +168,21 @@ describe("tradeReducer", () => {
           market: "BTC-USD",
           makerOrderId: "resting-1",
           takerOrderId: "order-2",
-          price: 101,
-          quantity: 3,
+          price: 100,
+          quantity: 1,
           occurredAt: "2026-03-17T09:31:00Z",
+        },
+        {
+          fillId: "fill-2",
+          market: "BTC-USD",
+          makerOrderId: "resting-2",
+          takerOrderId: "order-2",
+          price: 101,
+          quantity: 2,
+          occurredAt: "2026-03-17T09:31:01Z",
         },
       ],
       createdAt: "2026-03-17T09:31:00Z",
-      syntheticMarket: false,
     };
 
     state = tradeReducer(state, { type: "submit-start" });
@@ -203,7 +196,75 @@ describe("tradeReducer", () => {
     expect(state.isSubmitting).toBe(false);
     expect(state.positionsByMarket["BTC-USD"].netQuantity).toBe(6);
     expect(state.pendingOrders.find((order) => order.id === "order-2")?.shares).toBe(1);
+    expect(state.pendingOrders.find((order) => order.id === "order-2")?.limitPrice).toBe(105);
     expect(state.filledOrders).toBe(1);
+    expect(state.marketTradesByMarket["BTC-USD"]).toEqual([]);
+    expect(state.messages.at(-1)?.text).toBe(
+      "Accepted buy BTC-USD for 4 shares. Filled 3 at avg $100.67 and 1 remain resting at $105.00.",
+    );
+  });
+
+  it("preserves existing pending orders when account sync cannot reload open orders", () => {
+    let state = createInitialTradeState(markets);
+    state = tradeReducer(state, {
+      type: "bootstrap-success",
+      data: bootstrapData(),
+      id: 1,
+      time: "09:30:00",
+    });
+
+    state = tradeReducer(state, {
+      type: "account-sync",
+      data: {
+        ...bootstrapData(),
+        openOrders: [],
+        warnings: ["Open order bootstrap failed. per-user rate limit exceeded: max 100 ops/sec"],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: false,
+          fills: true,
+        },
+      },
+    });
+
+    expect(state.pendingOrders).toHaveLength(1);
+    expect(state.pendingOrders[0]?.id).toBe("order-1");
+  });
+
+  it("removes only the canceled order on cancel success", () => {
+    let state = createInitialTradeState(markets);
+    state = tradeReducer(state, {
+      type: "bootstrap-success",
+      data: {
+        ...bootstrapData(),
+        openOrders: [
+          bootstrapData().openOrders[0],
+          {
+            id: "order-2",
+            createdAt: "2026-03-17T09:31:00Z",
+            marketId: "ETH-USD",
+            marketName: "ETH-USD",
+            side: "sell",
+            shares: 4,
+            limitPrice: 202,
+            status: "open",
+          },
+        ],
+      },
+      id: 1,
+      time: "09:30:00",
+    });
+
+    state = tradeReducer(state, {
+      type: "cancel-success",
+      orderId: "order-1",
+      id: 2,
+      time: "09:31:00",
+    });
+
+    expect(state.pendingOrders.map((order) => order.id)).toEqual(["order-2"]);
   });
 
   it("assigns unique message ids even when incoming event ids collide", () => {
@@ -233,24 +294,8 @@ describe("tradeReducer", () => {
       type: "ws-snapshot",
       marketId: "BTC-USD",
       sequence: 1,
-      bids: [
-        {
-          orderId: "bid-1",
-          side: "buy",
-          price: 99,
-          remaining: 2,
-          createdAt: "2026-03-17T09:30:00Z",
-        },
-      ],
-      asks: [
-        {
-          orderId: "ask-1",
-          side: "sell",
-          price: 101,
-          remaining: 2,
-          createdAt: "2026-03-17T09:30:00Z",
-        },
-      ],
+      bids: [{ price: 99, quantity: 2 }],
+      asks: [{ price: 101, quantity: 2 }],
     });
 
     const metrics = selectPnlMetrics(state);

@@ -8,6 +8,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 
 - Axum HTTP server (REST + WS)
 - Operator-provisioned competition users via `POST /api/v1/admin/users`
+- Provisioned user roster export via `GET /api/v1/admin/users` and `GET /api/v1/admin/users/export.csv`
 - Simple user auth via assigned `x-api-key`
 - Simple admin auth via `Authorization: Bearer $ADMIN_API_TOKEN`
 - Operator control-plane REST endpoints for:
@@ -17,7 +18,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - bulk config load
   - admin messages
   - leaderboard queries
-- Per-user `100 ops/sec` rate limiting on authenticated REST account/trading routes
+- Per-user `100 ops/sec` rate limiting on authenticated competitor operations, shared across REST account/trading routes and authenticated WebSocket trading messages
 - Matching engine + in-memory orderbook skeleton
 - PostgreSQL-oriented repository abstraction for user/position/order/fill state
 - Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
@@ -36,6 +37,8 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - `DELETE /api/v1/orders/{order_id}`
 - REST endpoints for operator workflows:
   - `GET /api/v1/admin/state`
+  - `GET|POST /api/v1/admin/users`
+  - `GET /api/v1/admin/users/export.csv`
   - `POST /api/v1/admin/trading/start`
   - `POST /api/v1/admin/trading/stop`
   - `GET|POST /api/v1/admin/markets`
@@ -65,6 +68,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Users do not self-register.
 - Operators provision competition users directly.
 - Each provisioned user receives a unique API key.
+- Operators can export provisioned user credentials as JSON or CSV, with optional `username_prefix`, `role`, and `limit` filters.
 - That API key is both the user identity and the API access credential.
 - User-facing REST routes authenticate with `x-api-key`.
 - WebSocket authentication uses the same assigned API key.
@@ -84,6 +88,8 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Realized PnL accumulates as positions are reduced, flipped, or settled.
 - Startup recovery rebuilds in-memory orderbooks from persisted open orders before the exchange begins serving traffic.
 - The initial schema lives at `sql/migrations/001_initial.sql`.
+- Provisioned users can now carry `role=admin`, which removes the fixed per-market net position cap for that API key.
+- A zero-dependency multi-trader stress harness lives at `tools/trader-stress-bot/`.
 
 ## Current deployed test endpoint
 

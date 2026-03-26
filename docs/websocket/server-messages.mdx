@@ -110,6 +110,8 @@ These are the main message types a competitor client should expect from the serv
 - `filled`
 - `canceled`
 
+For market orders, accepted taker flow is terminal. You should expect `status: "filled"` with `remaining: 0` because market orders never rest on the book. In that case, `order.price` is the weighted average executed price across the immediate fills, rounded down to an integer.
+
 ## `admin_message`
 
 ```json

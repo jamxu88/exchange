@@ -17,22 +17,15 @@ export type MarketDefinition = {
   quoteAsset: string;
 };
 
-export type MarketBookOrder = {
-  orderId: string;
-  side: TradeSide;
+export type MarketBookLevel = {
   price: number;
-  remaining: number;
-  createdAt: string;
+  quantity: number;
 };
 
 export type MarketBookDelta =
-  | { kind: "order_added"; order: MarketBookOrder }
-  | { kind: "order_updated"; order: MarketBookOrder }
-  | { kind: "order_removed"; orderId: string; side: TradeSide; price: number }
+  | { kind: "level_updated"; side: TradeSide; price: number; quantity: number }
   | {
       kind: "trade";
-      makerOrderId: string;
-      takerOrderId: string;
       price: number;
       quantity: number;
     };
@@ -40,10 +33,17 @@ export type MarketBookDelta =
 export type MarketBookState = {
   marketId: MarketId;
   sequence: number;
-  bids: MarketBookOrder[];
-  asks: MarketBookOrder[];
+  bids: MarketBookLevel[];
+  asks: MarketBookLevel[];
   lastTradePrice: number | null;
   lastTradeQuantity: number | null;
+};
+
+export type MarketTrade = {
+  marketId: MarketId;
+  price: number;
+  quantity: number;
+  occurredAt: string;
 };
 
 export type PositionState = {
@@ -99,6 +99,13 @@ export type TradeBootstrapData = {
   openOrders: PendingOrder[];
   fills: TradeFill[];
   warnings: string[];
+  loaded: {
+    markets: boolean;
+    user: boolean;
+    positions: boolean;
+    openOrders: boolean;
+    fills: boolean;
+  };
 };
 
 export type SubmitOrderIntent = {
@@ -124,7 +131,6 @@ export type SubmitOrderResult = {
   remaining: number;
   fills: TradeFill[];
   createdAt: string;
-  syntheticMarket: boolean;
 };
 
 export type PnlMetric = {

@@ -94,11 +94,8 @@ describe("TradeWsClient", () => {
         bids: [],
         asks: [
           {
-            order_id: "ask-1",
-            side: "SELL",
             price: 101,
-            remaining: 2,
-            created_at: "2026-03-17T09:30:00Z",
+            quantity: 2,
           },
         ],
       }),
@@ -112,8 +109,6 @@ describe("TradeWsClient", () => {
         events: [
           {
             kind: "trade",
-            maker_order_id: "ask-1",
-            taker_order_id: "bid-1",
             price: 101,
             quantity: 1,
           },
@@ -127,11 +122,8 @@ describe("TradeWsClient", () => {
       bids: [],
       asks: [
         {
-          orderId: "ask-1",
-          side: "sell",
           price: 101,
-          remaining: 2,
-          createdAt: "2026-03-17T09:30:00Z",
+          quantity: 2,
         },
       ],
     });
@@ -141,8 +133,6 @@ describe("TradeWsClient", () => {
       events: [
         {
           kind: "trade",
-          makerOrderId: "ask-1",
-          takerOrderId: "bid-1",
           price: 101,
           quantity: 1,
         },

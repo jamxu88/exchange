@@ -59,6 +59,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               type="password"
             />
           </label>
+          <p className="text-center text-base text-[var(--muted-strong)]">
+            Use key &quot;trader&quot; for demo access.
+          </p>
           {errorMessage ? (
             <p className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-4 py-3 text-lg text-[#ffb2b2]">
               {errorMessage}

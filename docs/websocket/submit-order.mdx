@@ -1,19 +1,32 @@
 ---
 title: "Submit Order"
-description: "Submit a new limit order over WebSocket."
+description: "Submit a new limit or market order over WebSocket."
 ---
 
 WebSocket order entry is useful when you want order actions and execution events on the same connection.
 
 <RequestExample>
 
-```json Client Message
+```json Limit client message
 {
   "op": "submit_order",
   "request_id": "req-1",
   "market": "BTC-USD",
   "side": "BUY",
+  "order_type": "limit",
   "price": 100,
+  "quantity": 2
+}
+```
+
+```json Market client message
+{
+  "op": "submit_order",
+  "request_id": "req-2",
+  "market": "BTC-USD",
+  "side": "BUY",
+  "order_type": "market",
+  "price": 0,
   "quantity": 2
 }
 ```
@@ -42,13 +55,17 @@ WebSocket order entry is useful when you want order actions and execution events
 
 - `op` must be `submit_order`.
 - `request_id` is client-defined and echoed back in `ack` or `reject`.
-- `market`, `side`, `price`, and `quantity` follow the same rules as [Create Order](/rest/submit-order).
+- `market`, `side`, `price`, `quantity`, and `order_type` follow the same rules as [Create Order](/rest/submit-order).
 
 ## Success behavior
 
 - An `ack` confirms the server accepted the request.
 - After acceptance, expect later `order_state` and `fill` messages as matching and account state evolve.
+- `order_type` defaults to `limit` when omitted.
+- Market orders consume opposite-side liquidity immediately and never rest on the book.
+- If a market order finds some liquidity, it can sweep multiple price levels and still finishes with `remaining: 0`.
 
 ## Notes
 
 - The same validation rules apply as REST order submission.
+- If a market order has no opposite-side liquidity at all, the server returns `reject` with code `no_liquidity`.
