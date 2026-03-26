@@ -1,5 +1,10 @@
 use crate::accounts::UserRole;
 use crate::auth::AuthenticatedAdmin;
+use crate::bots::{
+    AdminBotState, AdminDeskError, AdminDeskOrderRequest, AdminDeskOrderResponse, AdminDeskSummary,
+    BotControlError, UpsertAdminBotRequest, admin_desk_summary, ensure_admin_desk,
+    submit_admin_desk_order,
+};
 use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
 use crate::settlement::{SettlementEngine, SettlementError};
 use crate::state::AppState;
@@ -14,6 +19,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 const DEFAULT_COMPETITION_QUOTE_ASSET: &str = "USD";
+const DEFAULT_COMPETITION_MARKET_SUFFIX: &str = "MARKET";
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AdminAuditEntry {
@@ -89,6 +95,7 @@ pub struct UpsertMarketRequest {
     #[serde(default)]
     pub market_id: String,
     pub display_name: Option<String>,
+    #[serde(default)]
     pub base_asset: String,
     #[serde(default)]
     pub quote_asset: String,
@@ -224,6 +231,8 @@ pub struct CompetitionSnapshotQuery {
 pub struct AdminStateResponse {
     pub controls: ExchangeControls,
     pub markets: Vec<MarketDefinition>,
+    pub bots: Vec<AdminBotState>,
+    pub admin_desk: Option<AdminDeskSummary>,
     pub recent_messages: Vec<AdminMessageEntry>,
     pub persistence: PersistenceStatus,
 }
@@ -254,10 +263,10 @@ pub struct ListQuery {
 pub enum AdminError {
     #[error("market id is required")]
     MissingMarketId,
-    #[error("market id must match {expected}")]
-    MarketIdMismatch { expected: String },
-    #[error("base asset is required")]
-    MissingBaseAsset,
+    #[error("market id must include a non-empty suffix")]
+    InvalidMarketId,
+    #[error("display name, base asset, or market id is required")]
+    MissingMarketLabel,
     #[error("tick size must be greater than zero")]
     InvalidTickSize,
     #[error("minimum order quantity must be greater than zero")]
@@ -310,8 +319,8 @@ impl AdminError {
             | Self::MissingCompetitionEntrants
             | Self::DuplicateCompetitionSettlementMarket { .. }
             | Self::CompetitionUserIneligible { .. }
-            | Self::MarketIdMismatch { .. }
-            | Self::MissingBaseAsset
+            | Self::InvalidMarketId
+            | Self::MissingMarketLabel
             | Self::InvalidTickSize
             | Self::InvalidMinimumOrderQuantity
             | Self::MissingMessageBody
@@ -340,9 +349,58 @@ impl AdminService {
         AdminStateResponse {
             controls: state.storage.get_exchange_controls(),
             markets: state.storage.list_markets(),
+            bots: state.bot_manager.list(),
+            admin_desk: admin_desk_summary(state),
             recent_messages: state.storage.list_admin_messages(Some(message_limit)),
             persistence: state.storage.persistence_status(),
         }
+    }
+
+    pub async fn upsert_bot(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        request: UpsertAdminBotRequest,
+    ) -> Result<AdminBotState, BotControlError> {
+        state.bot_manager.upsert(state, admin, request).await
+    }
+
+    pub async fn start_bot(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        bot_id: &str,
+    ) -> Result<AdminBotState, BotControlError> {
+        state.bot_manager.start(state.clone(), admin, bot_id).await
+    }
+
+    pub async fn pause_bot(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        bot_id: &str,
+    ) -> Result<AdminBotState, BotControlError> {
+        state.bot_manager.pause(state, admin, bot_id).await
+    }
+
+    pub async fn delete_bot(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        bot_id: &str,
+    ) -> Result<AdminBotState, BotControlError> {
+        state.bot_manager.delete(state, admin, bot_id).await
+    }
+
+    pub fn ensure_admin_desk(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<AdminDeskSummary, crate::auth::AuthError> {
+        ensure_admin_desk(state, admin)
+    }
+
+    pub async fn submit_admin_desk_order(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+        request: AdminDeskOrderRequest,
+    ) -> Result<AdminDeskOrderResponse, AdminDeskError> {
+        submit_admin_desk_order(state, admin, request).await
     }
 
     pub fn set_trading_enabled(
@@ -1170,15 +1228,105 @@ fn user_role_slug(role: UserRole) -> &'static str {
     }
 }
 
+fn normalize_market_stem(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_uppercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn strip_market_suffix(value: &str) -> String {
+    let suffix = format!("-{DEFAULT_COMPETITION_MARKET_SUFFIX}");
+    value.strip_suffix(&suffix).unwrap_or(value).to_string()
+}
+
+fn derive_market_id_from_label(value: &str) -> String {
+    let stem = strip_market_suffix(&normalize_market_stem(value));
+    if stem.is_empty() {
+        return String::new();
+    }
+
+    format!("{stem}-{DEFAULT_COMPETITION_MARKET_SUFFIX}")
+}
+
+fn normalize_market_id(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let Some((stem, suffix)) = trimmed.rsplit_once('-') else {
+        return trimmed.to_ascii_uppercase();
+    };
+
+    let normalized_stem = normalize_market_stem(stem);
+    let normalized_suffix = normalize_market_stem(suffix);
+    if normalized_stem.is_empty() || normalized_suffix.is_empty() {
+        return String::new();
+    }
+
+    format!("{normalized_stem}-{normalized_suffix}")
+}
+
+fn validate_market_id(market_id: &str) -> Result<(), AdminError> {
+    let Some((stem, suffix)) = market_id.rsplit_once('-') else {
+        return Err(AdminError::InvalidMarketId);
+    };
+    if stem.is_empty() || suffix.is_empty() {
+        return Err(AdminError::InvalidMarketId);
+    }
+
+    Ok(())
+}
+
+fn derive_base_asset(
+    requested_base_asset: &str,
+    display_name: Option<&str>,
+    market_id: &str,
+) -> String {
+    let normalized_base_asset = normalize_market_stem(requested_base_asset);
+    if !normalized_base_asset.is_empty() {
+        return normalized_base_asset;
+    }
+
+    let derived_display_name = display_name
+        .map(derive_market_id_from_label)
+        .unwrap_or_default();
+    if let Some((stem, _)) = derived_display_name.rsplit_once('-') {
+        if !stem.is_empty() {
+            return stem.to_string();
+        }
+    }
+
+    market_id
+        .rsplit_once('-')
+        .map(|(stem, _)| stem.to_string())
+        .unwrap_or_default()
+}
+
 fn build_market_definition(
     existing: Option<&MarketDefinition>,
     request: UpsertMarketRequest,
 ) -> Result<MarketDefinition, AdminError> {
-    let requested_market_id = request.market_id.trim().to_ascii_uppercase();
-    let base_asset = request.base_asset.trim().to_ascii_uppercase();
-    if base_asset.is_empty() {
-        return Err(AdminError::MissingBaseAsset);
-    }
+    let requested_market_id = normalize_market_id(&request.market_id);
+    let display_name = request
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let quote_asset = {
         let normalized = request.quote_asset.trim().to_ascii_uppercase();
         if normalized.is_empty() {
@@ -1187,16 +1335,22 @@ fn build_market_definition(
             normalized
         }
     };
-    let expected_market_id = format!("{base_asset}-{quote_asset}");
     let market_id = if requested_market_id.is_empty() {
-        expected_market_id.clone()
+        let derived_market_id = display_name
+            .map(derive_market_id_from_label)
+            .or_else(|| {
+                let derived = derive_market_id_from_label(&request.base_asset);
+                (!derived.is_empty()).then_some(derived)
+            })
+            .ok_or(AdminError::MissingMarketLabel)?;
+        derived_market_id
     } else {
         requested_market_id
     };
-    if market_id != expected_market_id {
-        return Err(AdminError::MarketIdMismatch {
-            expected: expected_market_id,
-        });
+    validate_market_id(&market_id)?;
+    let base_asset = derive_base_asset(&request.base_asset, display_name, &market_id);
+    if base_asset.is_empty() {
+        return Err(AdminError::MissingMarketLabel);
     }
     if request.tick_size == 0 {
         return Err(AdminError::InvalidTickSize);
@@ -1208,13 +1362,7 @@ fn build_market_definition(
     let now = Utc::now();
     Ok(MarketDefinition {
         market_id: market_id.clone(),
-        display_name: request
-            .display_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&market_id)
-            .to_string(),
+        display_name: display_name.unwrap_or(&market_id).to_string(),
         base_asset,
         quote_asset,
         tick_size: request.tick_size,
@@ -1343,19 +1491,19 @@ mod tests {
         )
         .expect_err("market should be rejected");
 
-        assert!(matches!(error, AdminError::MarketIdMismatch { .. }));
+        assert_eq!(error, AdminError::InvalidMarketId);
     }
 
     #[test]
-    fn upsert_market_defaults_quote_asset_and_generates_market_id() {
+    fn upsert_market_defaults_quote_asset_and_generates_market_id_from_display_name() {
         let state = test_state();
         let market = AdminService::upsert_market(
             &state,
             &admin(),
             UpsertMarketRequest {
                 market_id: String::new(),
-                display_name: Some("Solana".to_string()),
-                base_asset: "sol".to_string(),
+                display_name: Some("Solana Winner".to_string()),
+                base_asset: String::new(),
                 quote_asset: String::new(),
                 tick_size: 1,
                 min_order_quantity: 1,
@@ -1365,8 +1513,8 @@ mod tests {
         )
         .expect("market should be created");
 
-        assert_eq!(market.market_id, "SOL-USD");
-        assert_eq!(market.base_asset, "SOL");
+        assert_eq!(market.market_id, "SOLANA-WINNER-MARKET");
+        assert_eq!(market.base_asset, "SOLANA-WINNER");
         assert_eq!(market.quote_asset, DEFAULT_COMPETITION_QUOTE_ASSET);
     }
 

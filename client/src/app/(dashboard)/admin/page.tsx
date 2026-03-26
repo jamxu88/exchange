@@ -1,13 +1,19 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
+  deleteBotAction,
   deleteMarketAction,
+  ensureAdminDeskAction,
   loadConfigAction,
+  pauseBotAction,
   resetAllUsersAction,
+  saveBotAction,
   sendMessageAction,
   settleMarketAction,
+  startBotAction,
   startTradingAction,
   stopTradingAction,
+  submitAdminDeskOrderAction,
   toggleMarketAction,
 } from "@/app/(dashboard)/admin/actions";
 import { CreateMarketForm } from "@/app/(dashboard)/admin/create-market-form";
@@ -61,6 +67,29 @@ function toneClass(level: "info" | "warning" | "critical") {
   return "text-[var(--green)]";
 }
 
+function botStatusClass(status: "paused" | "running") {
+  return status === "running"
+    ? "border-[#2f6b37] bg-[#102015] text-[#b8ffbd]"
+    : "border-[#31343a] bg-[#101114] text-white";
+}
+
+function formatPositionLimit(value: number | null) {
+  if (value === null) {
+    return "Unlimited";
+  }
+
+  return `${value.toLocaleString("en-US")} shares`;
+}
+
+const primaryButtonClass = "ops-button ops-button-primary";
+const neutralButtonClass = "ops-button ops-button-neutral";
+const warningButtonClass = "ops-button ops-button-warning";
+const dangerButtonClass = "ops-button ops-button-danger";
+const inputClass = "ops-input";
+const selectClass = "ops-select";
+const textareaClass = "ops-textarea";
+const cardClass = "ops-panel-soft px-4 py-4 text-[15px] text-[var(--muted-strong)]";
+
 export default async function AdminPage({ searchParams }: AdminPageProps) {
   const cookieStore = await cookies();
   const session = readSessionFromCookieValue(cookieStore.get(SESSION_COOKIE)?.value);
@@ -86,67 +115,45 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const notice = resolvedSearchParams?.notice;
   const error = resolvedSearchParams?.error;
+  const adminDesk = adminState.admin_desk ?? null;
+  const bots = adminState.bots ?? [];
+  const recentMessages = adminState.recent_messages ?? [];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
-      <section className="surface-panel flex flex-col gap-6 px-6 py-6 lg:flex-row lg:items-end lg:justify-between lg:px-8">
+    <main className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col gap-4 px-5 py-5 lg:px-8">
+      <section className="ops-panel flex items-start justify-between gap-4 px-4 py-4 lg:px-5">
         <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
-            Admin
-          </p>
-          <h1 className="mt-3 text-5xl font-extrabold leading-none text-white">
-            Event operations panel
-          </h1>
-          <p className="mt-4 max-w-3xl text-2xl text-[var(--muted-strong)]">
-            Live exchange controls, market lifecycle, settlement, messaging,
-            and leaderboard state from the backend control plane.
+          <p className="ops-kicker">
+            Admin Panel
           </p>
         </div>
-        <div className="surface-panel-soft flex gap-6 px-5 py-4 text-xl text-[var(--muted-strong)]">
-          <div>
-            <p className="text-3xl font-bold text-white">
-              {adminState.controls.trading_enabled ? "Live" : "Stopped"}
-            </p>
-            <p>Trading state</p>
-          </div>
-          <div>
-            <p className="text-3xl font-bold text-white">
-              {adminState.persistence.mode}
-            </p>
-            <p>Writer mode</p>
-          </div>
-          <div>
-            <p className="text-3xl font-bold text-white">{session.apiKeyPreview}</p>
-            <p>Signed-in key</p>
-          </div>
-          <form action="/api/auth/logout" className="flex items-start" method="post">
-            <button
-              className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-base font-semibold text-white hover:border-[rgba(66,204,78,0.45)]"
-              type="submit"
-            >
-              Log out
-            </button>
-          </form>
-        </div>
+        <form action="/api/auth/logout" className="shrink-0" method="post">
+          <button
+            className={neutralButtonClass}
+            type="submit"
+          >
+            Log out
+          </button>
+        </form>
       </section>
 
       {notice ? (
-        <p className="rounded-2xl border border-[rgba(66,204,78,0.35)] bg-[rgba(66,204,78,0.1)] px-4 py-3 text-lg text-[#b8ffbd]">
+        <p className="ops-note border-[rgba(66,204,78,0.35)] bg-[rgba(66,204,78,0.08)] px-4 py-3 text-base text-[#b8ffbd]">
           {notice}
         </p>
       ) : null}
       {error ? (
-        <p className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-4 py-3 text-lg text-[#ffb2b2]">
+        <p className="ops-note border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.08)] px-4 py-3 text-base text-[#ffb2b2]">
           {error}
         </p>
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="surface-panel px-6 py-6">
-          <div className="flex items-center justify-between gap-4">
+        <section className="ops-panel px-5 py-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="surface-title">Exchange controls</h2>
-              <p className="mt-2 text-lg text-[var(--muted-strong)]">
+              <h2 className="ops-section-title">Exchange controls</h2>
+              <p className="mt-2 text-base text-[var(--muted-strong)]">
                 Trading is currently{" "}
                 <span className="font-semibold text-white">
                   {adminState.controls.trading_enabled ? "enabled" : "stopped"}
@@ -154,10 +161,10 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                 .
               </p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-2">
               <form action={startTradingAction}>
                 <button
-                  className="rounded-2xl bg-[var(--green)] px-4 py-3 text-base font-semibold text-white"
+                  className={primaryButtonClass}
                   type="submit"
                 >
                   Start trading
@@ -165,7 +172,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </form>
               <form action={stopTradingAction}>
                 <button
-                  className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.12)] px-4 py-3 text-base font-semibold text-white"
+                  className={dangerButtonClass}
                   type="submit"
                 >
                   Stop trading
@@ -173,7 +180,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </form>
               <form action={resetAllUsersAction}>
                 <button
-                  className="rounded-2xl border border-[rgba(255,211,122,0.35)] bg-[rgba(255,211,122,0.12)] px-4 py-3 text-base font-semibold text-white"
+                  className={warningButtonClass}
                   type="submit"
                 >
                   Reset all users
@@ -181,49 +188,49 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </form>
             </div>
           </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-3 text-xl text-[var(--muted-strong)]">
-            <div className="surface-panel-soft flex items-center justify-between px-4 py-4">
-              <span>Queue depth</span>
-              <span className="font-semibold text-white">
+          <div className="mt-4 grid gap-3 md:grid-cols-3 text-base text-[var(--muted-strong)]">
+            <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
+              <span className="ops-kicker">Queue depth</span>
+              <span className="text-xl font-semibold text-white">
                 {adminState.persistence.queue_depth}
               </span>
             </div>
-            <div className="surface-panel-soft flex items-center justify-between px-4 py-4">
-              <span>Last flush</span>
-              <span className="font-semibold text-white">
+            <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
+              <span className="ops-kicker">Last flush</span>
+              <span className="text-xl font-semibold text-white">
                 {adminState.persistence.last_flush_latency_ms} ms
               </span>
             </div>
-            <div className="surface-panel-soft flex items-center justify-between px-4 py-4">
-              <span>Tracked markets</span>
-              <span className="font-semibold text-white">
+            <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
+              <span className="ops-kicker">Tracked markets</span>
+              <span className="text-xl font-semibold text-white">
                 {adminState.markets.length}
               </span>
             </div>
           </div>
         </section>
 
-        <section className="surface-panel px-6 py-6">
-          <h2 className="surface-title">Send message</h2>
-          <form action={sendMessageAction} className="mt-5 grid gap-3">
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Send message</h2>
+          <form action={sendMessageAction} className="mt-4 grid gap-3">
             <input
-              className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
+              className={inputClass}
               name="title"
               placeholder="Optional title"
             />
             <div className="grid gap-3 md:grid-cols-3">
               <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
+                className={inputClass}
                 name="targetUsername"
                 placeholder="Target username"
               />
               <input
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
+                className={inputClass}
                 name="market"
                 placeholder="Market"
               />
               <select
-                className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
+                className={selectClass}
                 defaultValue="info"
                 name="level"
               >
@@ -233,13 +240,13 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </select>
             </div>
             <textarea
-              className="min-h-28 rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-lg text-white outline-none"
+              className={`${textareaClass} min-h-28`}
               name="body"
               placeholder="Broadcast or user-specific message"
               required
             />
             <button
-              className="rounded-2xl bg-[var(--green)] px-4 py-3 text-base font-semibold text-white"
+              className={primaryButtonClass}
               type="submit"
             >
               Send message
@@ -248,29 +255,320 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </section>
       </div>
 
+      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <section className="ops-panel px-5 py-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="ops-section-title">Admin desk</h2>
+              <p className="mt-2 text-base text-[var(--muted-strong)]">
+                Submit live orders through a hidden admin-role trader with no position limit.
+              </p>
+            </div>
+            <form action={ensureAdminDeskAction}>
+              <button
+                className={neutralButtonClass}
+                type="submit"
+              >
+                {adminDesk ? "Refresh desk" : "Provision desk"}
+              </button>
+            </form>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3 text-[15px] text-[var(--muted-strong)]">
+            <div className="ops-panel-soft px-4 py-4">
+              <p className="ops-kicker">Trader</p>
+              <p className="mt-2 text-xl font-bold text-white">
+                {adminDesk?.username ?? "Not provisioned"}
+              </p>
+            </div>
+            <div className="ops-panel-soft px-4 py-4">
+              <p className="ops-kicker">Position limit</p>
+              <p className="mt-2 text-xl font-bold text-white">
+                {formatPositionLimit(adminDesk?.position_limit ?? null)}
+              </p>
+            </div>
+            <div className="ops-panel-soft px-4 py-4">
+              <p className="ops-kicker">Created</p>
+              <p className="mt-2 text-xl font-bold text-white">
+                {adminDesk
+                  ? formatTimestamp(adminDesk.created_at)
+                  : "On first use"}
+              </p>
+            </div>
+          </div>
+          <form action={submitAdminDeskOrderAction} className="mt-4 grid gap-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <select
+                className={selectClass}
+                defaultValue={adminState.markets[0]?.market_id}
+                name="marketId"
+              >
+                {adminState.markets.map((market) => (
+                  <option key={market.market_id} value={market.market_id}>
+                    {market.display_name} ({market.market_id})
+                  </option>
+                ))}
+              </select>
+              <div className="grid gap-3 md:grid-cols-2">
+                <select
+                  className={selectClass}
+                  defaultValue="BUY"
+                  name="side"
+                >
+                  <option value="BUY">Buy</option>
+                  <option value="SELL">Sell</option>
+                </select>
+                <select
+                  className={selectClass}
+                  defaultValue="limit"
+                  name="orderType"
+                >
+                  <option value="limit">Limit</option>
+                  <option value="market">Market</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <input
+                className={inputClass}
+                min="1"
+                name="quantity"
+                placeholder="Shares"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                min="0"
+                name="price"
+                placeholder="Limit price. Ignored for market orders."
+                type="number"
+              />
+            </div>
+            <button
+              className={primaryButtonClass}
+              type="submit"
+            >
+              Submit admin order
+            </button>
+          </form>
+        </section>
+
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Trading bots</h2>
+          <p className="mt-2 text-base text-[var(--muted-strong)]">
+            Save a bot config, launch it immediately, then pause or restart it from the roster.
+          </p>
+          <form action={saveBotAction} className="mt-4 grid gap-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <input
+                className={inputClass}
+                name="botId"
+                placeholder="Bot ID, for example depth-maker-1"
+                required
+              />
+              <input
+                className={inputClass}
+                name="displayName"
+                placeholder="Display name"
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <select
+                className={selectClass}
+                defaultValue={adminState.markets[0]?.market_id}
+                name="marketId"
+              >
+                {adminState.markets.map((market) => (
+                  <option key={market.market_id} value={market.market_id}>
+                    {market.market_id}
+                  </option>
+                ))}
+              </select>
+              <select
+                className={selectClass}
+                defaultValue="both"
+                name="sideMode"
+              >
+                <option value="both">Both sides</option>
+                <option value="buy">Buy only</option>
+                <option value="sell">Sell only</option>
+              </select>
+              <select
+                className={selectClass}
+                defaultValue="limit"
+                name="orderType"
+              >
+                <option value="limit">Limit</option>
+                <option value="market">Market</option>
+              </select>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <input
+                className={inputClass}
+                defaultValue="1"
+                min="1"
+                name="minQuantity"
+                placeholder="Min qty"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                defaultValue="5"
+                min="1"
+                name="maxQuantity"
+                placeholder="Max qty"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                defaultValue="500"
+                min="100"
+                name="intervalMs"
+                placeholder="Interval ms"
+                required
+                type="number"
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-4">
+              <input
+                className={inputClass}
+                defaultValue="8"
+                min="1"
+                name="maxOpenOrders"
+                placeholder="Open order cap"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                defaultValue="1"
+                min="0"
+                name="priceOffsetTicks"
+                placeholder="Offset ticks"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                defaultValue="2"
+                min="0"
+                name="walkStepTicks"
+                placeholder="Walk ticks"
+                required
+                type="number"
+              />
+              <input
+                className={inputClass}
+                min="0"
+                name="fallbackPrice"
+                placeholder="Fallback price"
+                type="number"
+              />
+            </div>
+            <label className="flex items-center gap-3 text-sm text-[var(--muted-strong)]">
+              <input className="ops-check" defaultChecked name="startImmediately" type="checkbox" />
+              Start immediately after saving
+            </label>
+            <button
+              className={primaryButtonClass}
+              type="submit"
+            >
+              Save bot
+            </button>
+          </form>
+
+          <div className="mt-5 grid gap-3">
+            {bots.length === 0 ? (
+              <div className={cardClass}>
+                No bots configured yet.
+              </div>
+            ) : (
+              bots.map((bot) => (
+                <div
+                  className="ops-panel-soft grid gap-4 px-4 py-4 text-[15px] text-[var(--muted-strong)]"
+                  key={bot.bot_id}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xl font-bold text-white">{bot.display_name}</p>
+                      <p>
+                        {bot.bot_id} · {bot.market_id} · {bot.trader_username}
+                      </p>
+                    </div>
+                    <span className={`ops-badge ${botStatusClass(bot.status)}`}>
+                      {bot.status}
+                    </span>
+                  </div>
+                  <p>
+                    {bot.side_mode} · {bot.order_type} · qty {bot.min_quantity} to {bot.max_quantity}
+                    {" · "}interval {bot.interval_ms} ms · cap {bot.max_open_orders} open
+                    {" · "}offset {bot.price_offset_ticks} ticks · walk {bot.walk_step_ticks} ticks
+                    {bot.fallback_price !== null ? ` · fallback ${formatCurrency(bot.fallback_price)}` : ""}
+                  </p>
+                  <p>
+                    Last submit: {bot.last_submitted_at ? formatTimestamp(bot.last_submitted_at) : "Never"}
+                    {bot.last_error ? ` · Error: ${bot.last_error}` : ""}
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    <form action={startBotAction}>
+                      <input name="botId" type="hidden" value={bot.bot_id} />
+                      <button
+                        className={primaryButtonClass}
+                        type="submit"
+                      >
+                        Start
+                      </button>
+                    </form>
+                    <form action={pauseBotAction}>
+                      <input name="botId" type="hidden" value={bot.bot_id} />
+                      <button
+                        className={neutralButtonClass}
+                        type="submit"
+                      >
+                        Pause
+                      </button>
+                    </form>
+                    <form action={deleteBotAction}>
+                      <input name="botId" type="hidden" value={bot.bot_id} />
+                      <button
+                        className={dangerButtonClass}
+                        type="submit"
+                      >
+                        Delete
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <section className="surface-panel px-6 py-6">
-          <h2 className="surface-title">Create market</h2>
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Create market</h2>
           <CreateMarketForm />
         </section>
 
-        <section className="surface-panel px-6 py-6">
-          <h2 className="surface-title">Load config</h2>
-          <form action={loadConfigAction} className="mt-5 grid gap-3">
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Load config</h2>
+          <form action={loadConfigAction} className="mt-4 grid gap-3">
             <textarea
-              className="min-h-56 rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 font-mono text-sm text-white outline-none"
+              className={`${textareaClass} min-h-56 font-mono text-sm`}
               defaultValue={JSON.stringify(
                 {
                   trading_enabled: adminState.controls.trading_enabled,
                   markets: adminState.markets.map((market) => {
-                    const defaultMarketId = deriveCompetitionMarketId(market.base_asset);
+                    const defaultMarketId = deriveCompetitionMarketId(market.display_name);
 
                     return {
                       ...(market.market_id !== defaultMarketId
                         ? { market_id: market.market_id }
                         : {}),
                       display_name: market.display_name,
-                      base_asset: market.base_asset,
                       ...(market.quote_asset !== COMPETITION_QUOTE_ASSET
                         ? { quote_asset: market.quote_asset }
                         : {}),
@@ -287,7 +585,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               name="config"
             />
             <button
-              className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-base font-semibold text-white"
+              className={neutralButtonClass}
               type="submit"
             >
               Apply config JSON
@@ -297,23 +595,23 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="surface-panel px-6 py-6">
-          <h2 className="surface-title">Markets</h2>
-          <div className="mt-5 grid gap-3">
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Markets</h2>
+          <div className="mt-4 grid gap-3">
             {adminState.markets.map((market) => (
               <div
-                className="surface-panel-soft grid gap-4 px-4 py-4 text-lg text-[var(--muted-strong)]"
+                className="ops-panel-soft grid gap-4 px-4 py-4 text-[15px] text-[var(--muted-strong)]"
                 key={market.market_id}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-2xl font-bold text-white">{market.display_name}</p>
+                    <p className="text-xl font-bold text-white">{market.display_name}</p>
                     <p>
                       {market.market_id} · tick {market.tick_size} · min qty{" "}
                       {market.min_order_quantity}
                     </p>
                   </div>
-                  <span className="rounded-full border border-[var(--surface-stroke)] px-3 py-1 text-sm uppercase tracking-[0.2em] text-white">
+                  <span className="ops-badge text-white">
                     {market.status}
                   </span>
                 </div>
@@ -327,7 +625,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         value={String(market.status !== "enabled")}
                       />
                       <button
-                        className="rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-2 text-base font-semibold text-white"
+                        className={neutralButtonClass}
                         type="submit"
                       >
                         {market.status === "enabled" ? "Disable" : "Enable"}
@@ -338,7 +636,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     <form action={settleMarketAction} className="flex flex-wrap gap-3">
                       <input name="marketId" type="hidden" value={market.market_id} />
                       <input
-                        className="rounded-2xl border border-[var(--surface-stroke)] bg-black/20 px-4 py-2 text-base text-white outline-none"
+                        className={inputClass}
                         min="1"
                         name="settlementPrice"
                         placeholder="True value per share"
@@ -346,12 +644,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         type="number"
                       />
                       <input
-                        className="rounded-2xl border border-[var(--surface-stroke)] bg-black/20 px-4 py-2 text-base text-white outline-none"
+                        className={inputClass}
                         name="announcement"
                         placeholder="Optional announcement"
                       />
                       <button
-                        className="rounded-2xl border border-[rgba(255,211,122,0.35)] bg-[rgba(255,211,122,0.12)] px-4 py-2 text-base font-semibold text-white"
+                        className={warningButtonClass}
                         type="submit"
                       >
                         Settle
@@ -361,7 +659,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                   <form action={deleteMarketAction}>
                     <input name="marketId" type="hidden" value={market.market_id} />
                     <button
-                      className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.12)] px-4 py-2 text-base font-semibold text-white"
+                      className={dangerButtonClass}
                       type="submit"
                     >
                       Delete
@@ -373,16 +671,16 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           </div>
         </section>
 
-        <section className="surface-panel px-6 py-6">
-          <h2 className="surface-title">Leaderboard</h2>
-          <div className="mt-5 grid gap-3">
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Leaderboard</h2>
+          <div className="mt-4 grid gap-3">
             {leaderboard.map((row) => (
               <div
-                className="surface-panel-soft flex items-center justify-between gap-4 px-4 py-4 text-lg text-[var(--muted-strong)]"
+                className="ops-panel-soft flex items-center justify-between gap-4 px-4 py-4 text-[15px] text-[var(--muted-strong)]"
                 key={row.trader_id}
               >
                 <div>
-                  <p className="text-xl font-bold text-white">
+                  <p className="text-lg font-bold text-white">
                     #{row.rank} {row.username}
                   </p>
                   <p>
@@ -391,7 +689,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     {formatCurrency(row.gross_exposure)}
                   </p>
                 </div>
-                <p className="text-xl font-semibold text-white">
+                <p className="text-lg font-semibold text-white">
                   {formatSignedCurrency(row.net_pnl)}
                 </p>
               </div>
@@ -400,27 +698,27 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </section>
       </div>
 
-      <section className="surface-panel px-6 py-6">
-        <h2 className="surface-title">Recent messages</h2>
-        <div className="mt-5 grid gap-3">
-          {adminState.recent_messages.length === 0 ? (
-            <div className="surface-panel-soft px-4 py-4 text-lg text-[var(--muted-strong)]">
+      <section className="ops-panel px-5 py-5">
+        <h2 className="ops-section-title">Recent messages</h2>
+        <div className="mt-4 grid gap-3">
+          {recentMessages.length === 0 ? (
+            <div className={cardClass}>
               No admin messages have been sent yet.
             </div>
           ) : (
-            adminState.recent_messages.map((message) => (
+            recentMessages.map((message) => (
               <div
-                className="surface-panel-soft px-4 py-4 text-lg text-[var(--muted-strong)]"
+                className="ops-panel-soft px-4 py-4 text-[15px] text-[var(--muted-strong)]"
                 key={message.message_id}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className={`text-base font-semibold uppercase tracking-[0.2em] ${toneClass(message.level)}`}>
+                  <p className={`ops-kicker ${toneClass(message.level)}`}>
                     {message.level}
                   </p>
                   <p>{formatTimestamp(message.created_at)}</p>
                 </div>
                 {message.title ? (
-                  <p className="mt-2 text-xl font-bold text-white">{message.title}</p>
+                  <p className="mt-2 text-lg font-bold text-white">{message.title}</p>
                 ) : null}
                 <p className="mt-2">{message.body}</p>
                 <p className="mt-2 text-sm">

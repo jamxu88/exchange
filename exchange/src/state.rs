@@ -1,3 +1,4 @@
+use crate::bots::BotManager;
 use crate::config::Config;
 use crate::marketdata::{BookDelta, BroadcastEvent, ServerMessage, UserBroadcastEvent};
 use crate::orderbook::{Fill, Order, OrderBook};
@@ -313,6 +314,7 @@ pub struct AppState {
     pub config: Config,
     pub market_engines: Arc<DashMap<String, MarketEngineHandle>>,
     pub storage: StorageRepository,
+    pub bot_manager: BotManager,
     runtime_dispatcher: RuntimeDispatchHandle,
     account_dispatcher: AccountDispatchHandle,
     account_barrier_telemetry: AccountBarrierTelemetry,
@@ -351,6 +353,7 @@ impl AppState {
             config,
             market_engines: Arc::new(DashMap::new()),
             storage,
+            bot_manager: BotManager::default(),
             runtime_dispatcher,
             account_dispatcher,
             account_barrier_telemetry,

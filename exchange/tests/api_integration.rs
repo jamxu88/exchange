@@ -13,6 +13,10 @@ use exchange::{
         SettleMarketRequest, SettleMarketResponse, TradingControlResponse, UpdateMarketRequest,
     },
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
+    bots::{
+        ADMIN_DESK_USERNAME, AdminBotState, AdminDeskOrderRequest, AdminDeskOrderResponse,
+        BotSideMode, BotStatus, UpsertAdminBotRequest,
+    },
     build_app,
     config::Config,
     orderbook::{Fill, Order, Side},
@@ -24,6 +28,7 @@ use exchange::{
         SubmitOrderResponse,
     },
 };
+use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 
 fn test_state() -> AppState {
@@ -411,6 +416,159 @@ async fn admin_role_trader_has_unlimited_position_power() {
     let portfolio: PortfolioSnapshot = json_body(portfolio_response).await;
     assert_eq!(portfolio.position_limit, None);
     assert_eq!(portfolio.positions.len(), 0);
+}
+
+#[tokio::test]
+async fn admin_desk_orders_use_an_unlimited_role_trader() {
+    let state = test_state();
+    let app = build_app(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/desk/orders",
+            "test-admin-token",
+            &AdminDeskOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: (NET_POSITION_LIMIT + 500) as u64,
+            },
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload: AdminDeskOrderResponse = json_body(response).await;
+    assert_eq!(payload.desk.username, ADMIN_DESK_USERNAME);
+    assert_eq!(payload.desk.position_limit, None);
+    assert!(payload.submission.resting);
+
+    let desk_user = state
+        .storage
+        .get_user_by_username(ADMIN_DESK_USERNAME)
+        .expect("desk user");
+    assert_eq!(desk_user.profile.role, UserRole::Admin);
+
+    let portfolio_response = app
+        .oneshot(api_key_request(
+            Method::GET,
+            "/api/v1/portfolio",
+            &desk_user.profile.api_key,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(portfolio_response.status(), StatusCode::OK);
+    let portfolio: PortfolioSnapshot = json_body(portfolio_response).await;
+    assert_eq!(portfolio.position_limit, None);
+}
+
+#[tokio::test]
+async fn admin_can_save_start_pause_and_delete_bots() {
+    let state = test_state();
+    let app = build_app(state.clone());
+
+    let save_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/bots",
+            "test-admin-token",
+            &UpsertAdminBotRequest {
+                bot_id: "depth-maker-1".to_string(),
+                display_name: Some("Depth maker".to_string()),
+                market_id: "BTC-USD".to_string(),
+                order_type: OrderType::Limit,
+                side_mode: BotSideMode::Both,
+                min_quantity: 1,
+                max_quantity: 2,
+                interval_ms: 100,
+                max_open_orders: 2,
+                price_offset_ticks: 1,
+                walk_step_ticks: 1,
+                fallback_price: Some(100),
+                start_immediately: true,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(save_response.status(), StatusCode::CREATED);
+    let saved: AdminBotState = json_body(save_response).await;
+    assert_eq!(saved.status, BotStatus::Running);
+
+    sleep(Duration::from_millis(250)).await;
+
+    let bot_user = state
+        .storage
+        .get_user_by_username("bot-depth-maker-1")
+        .expect("bot user");
+    assert_eq!(bot_user.profile.role, UserRole::Trader);
+    assert!(
+        !state
+            .storage
+            .list_open_orders(bot_user.profile.trader_id, Some("BTC-USD"))
+            .is_empty()
+    );
+
+    let state_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/v1/admin/state",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    let admin_state: AdminStateResponse = json_body(state_response).await;
+    assert!(
+        admin_state
+            .bots
+            .iter()
+            .any(|bot| { bot.bot_id == "depth-maker-1" && bot.status == BotStatus::Running })
+    );
+
+    let pause_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/bots/depth-maker-1/pause",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(pause_response.status(), StatusCode::OK);
+    let paused: AdminBotState = json_body(pause_response).await;
+    assert_eq!(paused.status, BotStatus::Paused);
+
+    let delete_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            "/api/v1/admin/bots/depth-maker-1",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let deleted: AdminBotState = json_body(delete_response).await;
+    assert_eq!(deleted.bot_id, "depth-maker-1");
+
+    let final_state_response = app
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/v1/admin/state",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    let final_state: AdminStateResponse = json_body(final_state_response).await;
+    assert!(final_state.bots.is_empty());
 }
 
 #[tokio::test]
@@ -1146,7 +1304,6 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
             "test-admin-token",
             &serde_json::json!({
                 "display_name": "Solana",
-                "base_asset": "sol",
                 "tick_size": 5,
                 "min_order_quantity": 2,
                 "reference_price": 25,
@@ -1157,8 +1314,8 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
         .expect("response");
     assert_eq!(create_response.status(), StatusCode::OK);
     let created: MarketDefinition = json_body(create_response).await;
-    assert_eq!(created.market_id, "SOL-USD");
-    assert_eq!(created.base_asset, "SOL");
+    assert_eq!(created.market_id, "SOLANA-MARKET");
+    assert_eq!(created.base_asset, "SOLANA");
     assert_eq!(created.quote_asset, "USD");
     assert_eq!(created.tick_size, 5);
 
@@ -1166,7 +1323,7 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
         .clone()
         .oneshot(admin_json_request(
             Method::PATCH,
-            "/api/v1/admin/markets/SOL-USD",
+            "/api/v1/admin/markets/SOLANA-MARKET",
             "test-admin-token",
             &UpdateMarketRequest {
                 display_name: None,
@@ -1189,7 +1346,7 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
             "/api/v1/orders",
             &trader.profile.api_key,
             &SubmitOrderRequest {
-                market: "SOL-USD".to_string(),
+                market: "SOLANA-MARKET".to_string(),
                 side: Side::Buy,
                 order_type: OrderType::Limit,
                 price: 25,
@@ -1204,7 +1361,7 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
         .clone()
         .oneshot(admin_request(
             Method::DELETE,
-            "/api/v1/admin/markets/SOL-USD",
+            "/api/v1/admin/markets/SOLANA-MARKET",
             "test-admin-token",
             Body::empty(),
         ))
@@ -1212,7 +1369,7 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
         .expect("response");
     assert_eq!(delete_response.status(), StatusCode::OK);
     let deleted: DeleteMarketResponse = json_body(delete_response).await;
-    assert_eq!(deleted.market_id, "SOL-USD");
+    assert_eq!(deleted.market_id, "SOLANA-MARKET");
 
     let load_response = app
         .oneshot(admin_json_request(
@@ -1224,7 +1381,6 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
                 "markets": [
                     {
                         "display_name": "Dogecoin",
-                        "base_asset": "doge",
                         "tick_size": 1,
                         "min_order_quantity": 10,
                         "reference_price": 1,
@@ -1242,7 +1398,7 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
         loaded
             .markets
             .iter()
-            .any(|market| market.market_id == "DOGE-USD")
+            .any(|market| market.market_id == "DOGECOIN-MARKET")
     );
 }
 

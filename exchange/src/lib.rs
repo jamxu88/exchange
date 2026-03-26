@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod admin;
 pub mod auth;
+pub mod bots;
 pub mod config;
 pub mod docs;
 pub mod marketdata;
@@ -45,6 +46,21 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/api/v1/admin/state", get(rest::get_admin_state))
         .route("/api/v1/admin/trading/start", post(rest::start_trading))
         .route("/api/v1/admin/trading/stop", post(rest::stop_trading))
+        .route("/api/v1/admin/bots", post(rest::upsert_admin_bot))
+        .route(
+            "/api/v1/admin/bots/:bot_id/start",
+            post(rest::start_admin_bot),
+        )
+        .route(
+            "/api/v1/admin/bots/:bot_id/pause",
+            post(rest::pause_admin_bot),
+        )
+        .route("/api/v1/admin/bots/:bot_id", delete(rest::delete_admin_bot))
+        .route("/api/v1/admin/desk/ensure", post(rest::ensure_admin_desk))
+        .route(
+            "/api/v1/admin/desk/orders",
+            post(rest::submit_admin_desk_order),
+        )
         .route(
             "/api/v1/admin/markets",
             get(rest::list_admin_markets).post(rest::create_or_update_market),

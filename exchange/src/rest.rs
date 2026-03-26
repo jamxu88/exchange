@@ -10,6 +10,10 @@ use crate::auth::{
     AuthError, AuthService, AuthenticatedAdmin, AuthenticatedUser, ProvisionUserRequest,
     ProvisionUserResponse,
 };
+use crate::bots::{
+    AdminBotState, AdminDeskOrderRequest, AdminDeskOrderResponse, AdminDeskSummary,
+    BotControlError, UpsertAdminBotRequest,
+};
 use crate::settlement::SettlementEngine;
 use crate::state::{
     AccountBarrierStatus, AppState, DispatchQueueMode, DispatchQueueStatus, PortfolioSnapshot,
@@ -67,35 +71,19 @@ impl From<AuthError> for ApiError {
     }
 }
 
-impl TradingError {
-    fn status_code(&self) -> StatusCode {
-        match self {
-            TradingError::TradingDisabled => StatusCode::CONFLICT,
-            TradingError::InvalidMarket
-            | TradingError::TickSizeViolation { .. }
-            | TradingError::QuantityBelowMinimum { .. }
-            | TradingError::NoLiquidity
-            | TradingError::InvalidPrice
-            | TradingError::PriceTooLarge { .. }
-            | TradingError::InvalidQuantity
-            | TradingError::QuantityTooLarge { .. }
-            | TradingError::InvalidRemaining
-            | TradingError::InvalidAmend => StatusCode::BAD_REQUEST,
-            TradingError::MarketNotConfigured | TradingError::OrderNotFound => {
-                StatusCode::NOT_FOUND
-            }
-            TradingError::OrderNotOwned => StatusCode::FORBIDDEN,
-            TradingError::MarketDisabled
-            | TradingError::MarketSettled
-            | TradingError::PositionLimitExceeded { .. } => StatusCode::CONFLICT,
-            TradingError::EngineUnavailable | TradingError::Overflow => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        }
+impl IntoResponse for TradingError {
+    fn into_response(self) -> Response {
+        (
+            self.status_code(),
+            Json(ApiError {
+                error: self.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
-impl IntoResponse for TradingError {
+impl IntoResponse for BotControlError {
     fn into_response(self) -> Response {
         (
             self.status_code(),
@@ -414,6 +402,74 @@ pub async fn get_admin_state(
     _admin: AuthenticatedAdmin,
 ) -> impl IntoResponse {
     Json(AdminService::get_state(&state, 50))
+}
+
+pub async fn ensure_admin_desk(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> Result<Json<AdminDeskSummary>, (StatusCode, Json<ApiError>)> {
+    AdminService::ensure_admin_desk(&state, &admin)
+        .map(Json)
+        .map_err(|error| (error.status_code(), Json(ApiError::from(error))))
+}
+
+pub async fn submit_admin_desk_order(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<AdminDeskOrderRequest>,
+) -> Result<(StatusCode, Json<AdminDeskOrderResponse>), (StatusCode, Json<ApiError>)> {
+    AdminService::submit_admin_desk_order(&state, &admin, request)
+        .await
+        .map(|response| (StatusCode::CREATED, Json(response)))
+        .map_err(|error| {
+            let status = error.status_code();
+            (
+                status,
+                Json(ApiError {
+                    error: error.to_string(),
+                }),
+            )
+        })
+}
+
+pub async fn upsert_admin_bot(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Json(request): Json<UpsertAdminBotRequest>,
+) -> Result<(StatusCode, Json<AdminBotState>), BotControlError> {
+    AdminService::upsert_bot(&state, &admin, request)
+        .await
+        .map(|response| (StatusCode::CREATED, Json(response)))
+}
+
+pub async fn start_admin_bot(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(bot_id): Path<String>,
+) -> Result<Json<AdminBotState>, BotControlError> {
+    AdminService::start_bot(&state, &admin, &bot_id)
+        .await
+        .map(Json)
+}
+
+pub async fn pause_admin_bot(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(bot_id): Path<String>,
+) -> Result<Json<AdminBotState>, BotControlError> {
+    AdminService::pause_bot(&state, &admin, &bot_id)
+        .await
+        .map(Json)
+}
+
+pub async fn delete_admin_bot(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+    Path(bot_id): Path<String>,
+) -> Result<Json<AdminBotState>, BotControlError> {
+    AdminService::delete_bot(&state, &admin, &bot_id)
+        .await
+        .map(Json)
 }
 
 pub async fn start_trading(

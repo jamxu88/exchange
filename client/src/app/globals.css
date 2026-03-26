@@ -86,6 +86,131 @@ button {
   line-height: 1;
 }
 
+.ops-panel {
+  border: 1px solid #26272b;
+  background: #121317;
+  border-radius: 0.875rem;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.015);
+}
+
+.ops-panel-soft {
+  border: 1px solid #2b2d32;
+  background: #0f1013;
+  border-radius: 0.625rem;
+}
+
+.ops-section-title {
+  color: #ffffff;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.ops-kicker {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.ops-input,
+.ops-select,
+.ops-textarea {
+  width: 100%;
+  border: 1px solid #2b2d32;
+  background: #0d0f12;
+  border-radius: 0.625rem;
+  color: #ffffff;
+  padding: 0.75rem 0.9rem;
+  font-size: 1rem;
+  line-height: 1.2;
+  outline: none;
+}
+
+.ops-textarea {
+  resize: vertical;
+}
+
+.ops-input::placeholder,
+.ops-textarea::placeholder {
+  color: #7f8289;
+}
+
+.ops-input:focus,
+.ops-select:focus,
+.ops-textarea:focus {
+  border-color: rgba(64, 217, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(64, 217, 255, 0.14);
+}
+
+.ops-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  padding: 0.72rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ops-button-primary {
+  background: #41c34c;
+  color: #071108;
+}
+
+.ops-button-neutral {
+  border-color: #2b2d32;
+  background: #101114;
+  color: #ffffff;
+}
+
+.ops-button-danger {
+  border-color: rgba(216, 91, 91, 0.38);
+  background: rgba(216, 91, 91, 0.12);
+  color: #ffd6d6;
+}
+
+.ops-button-warning {
+  border-color: rgba(255, 211, 122, 0.34);
+  background: rgba(255, 211, 122, 0.12);
+  color: #ffe5ab;
+}
+
+.ops-button:hover {
+  transform: translateY(-1px);
+}
+
+.ops-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #31343a;
+  border-radius: 999px;
+  padding: 0.32rem 0.7rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.ops-check {
+  accent-color: var(--green);
+}
+
+.ops-note {
+  border-radius: 0.625rem;
+  border: 1px solid #2b2d32;
+  background: #0f1012;
+}
+
 .surface-muted {
   color: var(--muted);
 }

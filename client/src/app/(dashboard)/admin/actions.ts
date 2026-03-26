@@ -3,12 +3,16 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
+  deriveCompetitionBaseAsset,
   COMPETITION_QUOTE_ASSET,
   deriveCompetitionMarketId,
-  normalizeBaseAsset,
 } from "@/app/(dashboard)/admin/market-utils";
 import { readSessionFromCookieValue, SESSION_COOKIE } from "@/lib/auth";
-import { ExchangeServerError, sendAdminMutation } from "@/lib/exchange-server";
+import {
+  ExchangeAdminDeskOrderResponse,
+  ExchangeServerError,
+  sendAdminMutation,
+} from "@/lib/exchange-server";
 
 function adminRedirect(params: Record<string, string>) {
   const search = new URLSearchParams(params);
@@ -40,9 +44,18 @@ async function runMutation<T>(
   body: T | undefined,
   successNotice: string,
 ) {
+  await performMutation(path, method, body);
+  adminRedirect({ notice: successNotice });
+}
+
+async function performMutation<TRequest, TResponse = void>(
+  path: string,
+  method: "POST" | "PATCH" | "DELETE",
+  body: TRequest | undefined,
+): Promise<TResponse> {
   const apiKey = await requireAdminApiKey();
   try {
-    await sendAdminMutation(apiKey, path, method, body);
+    return await sendAdminMutation<TResponse>(apiKey, path, method, body);
   } catch (error) {
     if (error instanceof ExchangeServerError && error.status === 401) {
       redirect("/login?error=session-expired");
@@ -50,8 +63,8 @@ async function runMutation<T>(
     adminRedirect({
       error: error instanceof Error ? error.message : "Admin action failed.",
     });
+    throw new Error("unreachable");
   }
-  adminRedirect({ notice: successNotice });
 }
 
 export async function startTradingAction() {
@@ -72,14 +85,14 @@ export async function resetAllUsersAction() {
 }
 
 export async function createMarketAction(formData: FormData) {
-  const baseAsset = normalizeBaseAsset(String(formData.get("baseAsset") ?? ""));
+  const displayName = String(formData.get("displayName") ?? "").trim();
   await runMutation(
     "/api/v1/admin/markets",
     "POST",
     {
-      market_id: deriveCompetitionMarketId(baseAsset),
-      display_name: asOptionalString(formData, "displayName"),
-      base_asset: baseAsset,
+      market_id: deriveCompetitionMarketId(displayName),
+      display_name: displayName,
+      base_asset: deriveCompetitionBaseAsset(displayName),
       quote_asset: COMPETITION_QUOTE_ASSET,
       tick_size: Number(formData.get("tickSize") ?? 0),
       min_order_quantity: Number(formData.get("minOrderQuantity") ?? 0),
@@ -156,4 +169,117 @@ export async function sendMessageAction(formData: FormData) {
     },
     "Admin message sent.",
   );
+}
+
+export async function saveBotAction(formData: FormData) {
+  await runMutation(
+    "/api/v1/admin/bots",
+    "POST",
+    {
+      bot_id: String(formData.get("botId") ?? "").trim(),
+      display_name: asOptionalString(formData, "displayName"),
+      market_id: String(formData.get("marketId") ?? "").trim(),
+      order_type: String(formData.get("orderType") ?? "limit"),
+      side_mode: String(formData.get("sideMode") ?? "both"),
+      min_quantity: Number(formData.get("minQuantity") ?? 0),
+      max_quantity: Number(formData.get("maxQuantity") ?? 0),
+      interval_ms: Number(formData.get("intervalMs") ?? 0),
+      max_open_orders: Number(formData.get("maxOpenOrders") ?? 0),
+      price_offset_ticks: Number(formData.get("priceOffsetTicks") ?? 0),
+      walk_step_ticks: Number(formData.get("walkStepTicks") ?? 0),
+      fallback_price: parseNumberField(formData, "fallbackPrice"),
+      start_immediately: String(formData.get("startImmediately") ?? "") === "on",
+    },
+    "Bot configuration saved.",
+  );
+}
+
+export async function startBotAction(formData: FormData) {
+  const botId = String(formData.get("botId") ?? "").trim();
+  await runMutation(
+    `/api/v1/admin/bots/${encodeURIComponent(botId)}/start`,
+    "POST",
+    undefined,
+    `${botId} started.`,
+  );
+}
+
+export async function pauseBotAction(formData: FormData) {
+  const botId = String(formData.get("botId") ?? "").trim();
+  await runMutation(
+    `/api/v1/admin/bots/${encodeURIComponent(botId)}/pause`,
+    "POST",
+    undefined,
+    `${botId} paused.`,
+  );
+}
+
+export async function deleteBotAction(formData: FormData) {
+  const botId = String(formData.get("botId") ?? "").trim();
+  await runMutation(
+    `/api/v1/admin/bots/${encodeURIComponent(botId)}`,
+    "DELETE",
+    undefined,
+    `${botId} deleted.`,
+  );
+}
+
+export async function ensureAdminDeskAction() {
+  const desk = await performMutation<void, { username: string }>(
+    "/api/v1/admin/desk/ensure",
+    "POST",
+    undefined,
+  );
+  adminRedirect({
+    notice: `Admin desk ${desk.username} is ready for unlimited-position trading.`,
+  });
+}
+
+function formatPrice(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function weightedFillPrice(fills: ExchangeAdminDeskOrderResponse["submission"]["fills"]) {
+  const totalQuantity = fills.reduce((sum, fill) => sum + fill.quantity, 0);
+  if (totalQuantity <= 0) {
+    return null;
+  }
+
+  const weightedSum = fills.reduce((sum, fill) => sum + fill.quantity * fill.price, 0);
+  return weightedSum / totalQuantity;
+}
+
+export async function submitAdminDeskOrderAction(formData: FormData) {
+  const response = await performMutation<
+    {
+      market: string;
+      side: "BUY" | "SELL";
+      order_type: "limit" | "market";
+      price: number;
+      quantity: number;
+    },
+    ExchangeAdminDeskOrderResponse
+  >("/api/v1/admin/desk/orders", "POST", {
+    market: String(formData.get("marketId") ?? "").trim(),
+    side: String(formData.get("side") ?? "BUY").trim().toUpperCase() as "BUY" | "SELL",
+    order_type: String(formData.get("orderType") ?? "limit").trim() as "limit" | "market",
+    price: Number(formData.get("price") ?? 0),
+    quantity: Number(formData.get("quantity") ?? 0),
+  });
+
+  const fills = response.submission.fills;
+  const filledQuantity = fills.reduce((sum, fill) => sum + fill.quantity, 0);
+  const executionPrice = weightedFillPrice(fills) ?? response.submission.order.price;
+  const notice = response.submission.resting && response.submission.order.remaining > 0
+    ? filledQuantity > 0
+      ? `Admin desk ${response.desk.username} filled ${filledQuantity} at ${formatPrice(executionPrice)} and left ${response.submission.order.remaining} resting at ${formatPrice(response.submission.order.price)}.`
+      : `Admin desk ${response.desk.username} placed ${response.submission.order.side} ${response.submission.order.market} for ${response.submission.order.quantity} shares at ${formatPrice(response.submission.order.price)}.`
+    : `Admin desk ${response.desk.username} filled ${filledQuantity || response.submission.order.quantity} ${response.submission.order.market} shares at ${formatPrice(executionPrice)}.`;
+
+  adminRedirect({ notice });
 }

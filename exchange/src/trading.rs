@@ -4,6 +4,7 @@ use crate::matching::{MatchExecution, MatchingEngine};
 use crate::orderbook::{BookLevel, Fill, Order, OrderBook, Side};
 use crate::settlement::{SettlementError, apply_fill_to_position, should_persist_position};
 use crate::state::{AccountBarrierTelemetry, AppState, BarrierKind, Position};
+use axum::http::StatusCode;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -457,6 +458,34 @@ pub enum TradingError {
     },
     #[error("numeric overflow")]
     Overflow,
+}
+
+impl TradingError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            TradingError::TradingDisabled => StatusCode::CONFLICT,
+            TradingError::InvalidMarket
+            | TradingError::TickSizeViolation { .. }
+            | TradingError::QuantityBelowMinimum { .. }
+            | TradingError::NoLiquidity
+            | TradingError::InvalidPrice
+            | TradingError::PriceTooLarge { .. }
+            | TradingError::InvalidQuantity
+            | TradingError::QuantityTooLarge { .. }
+            | TradingError::InvalidRemaining
+            | TradingError::InvalidAmend => StatusCode::BAD_REQUEST,
+            TradingError::MarketNotConfigured | TradingError::OrderNotFound => {
+                StatusCode::NOT_FOUND
+            }
+            TradingError::OrderNotOwned => StatusCode::FORBIDDEN,
+            TradingError::MarketDisabled
+            | TradingError::MarketSettled
+            | TradingError::PositionLimitExceeded { .. } => StatusCode::CONFLICT,
+            TradingError::EngineUnavailable | TradingError::Overflow => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
+    }
 }
 
 impl From<SettlementError> for TradingError {

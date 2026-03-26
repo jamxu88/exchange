@@ -64,6 +64,35 @@ export type ExchangeAdminMessage = {
   created_at: string;
 };
 
+export type ExchangeAdminBot = {
+  bot_id: string;
+  display_name: string;
+  trader_id: string;
+  trader_username: string;
+  market_id: string;
+  order_type: "limit" | "market";
+  side_mode: "buy" | "sell" | "both";
+  status: "paused" | "running";
+  min_quantity: number;
+  max_quantity: number;
+  interval_ms: number;
+  max_open_orders: number;
+  price_offset_ticks: number;
+  walk_step_ticks: number;
+  fallback_price: number | null;
+  last_error: string | null;
+  last_submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExchangeAdminDesk = {
+  trader_id: string;
+  username: string;
+  position_limit: number | null;
+  created_at: string;
+};
+
 export type ExchangeControls = {
   trading_enabled: boolean;
   updated_at: string;
@@ -72,8 +101,49 @@ export type ExchangeControls = {
 export type ExchangeAdminState = {
   controls: ExchangeControls;
   markets: ExchangeMarket[];
+  bots: ExchangeAdminBot[];
+  admin_desk: ExchangeAdminDesk | null;
   recent_messages: ExchangeAdminMessage[];
   persistence: ExchangePersistenceStatus;
+};
+
+type ExchangeAdminStatePayload = Omit<
+  ExchangeAdminState,
+  "bots" | "admin_desk" | "recent_messages"
+> & {
+  bots?: ExchangeAdminBot[];
+  admin_desk?: ExchangeAdminDesk | null;
+  recent_messages?: ExchangeAdminMessage[];
+};
+
+export type ExchangeFill = {
+  fill_id: string;
+  market: string;
+  maker_order_id: string;
+  taker_order_id: string;
+  price: number;
+  quantity: number;
+  occurred_at: string;
+};
+
+export type ExchangeSubmittedOrder = {
+  id: string;
+  trader_id: string;
+  market: string;
+  side: "BUY" | "SELL";
+  price: number;
+  quantity: number;
+  remaining: number;
+  created_at: string;
+};
+
+export type ExchangeAdminDeskOrderResponse = {
+  desk: ExchangeAdminDesk;
+  submission: {
+    order: ExchangeSubmittedOrder;
+    fills: ExchangeFill[];
+    resting: boolean;
+  };
 };
 
 export type ExchangeLeaderboardRow = {
@@ -188,9 +258,18 @@ export async function getTraderProfile(apiKey: string) {
 }
 
 export async function getAdminState(adminToken: string) {
-  return exchangeRequest<ExchangeAdminState>("/api/v1/admin/state", {
+  const adminState = await exchangeRequest<ExchangeAdminStatePayload>("/api/v1/admin/state", {
     adminToken,
   });
+
+  return {
+    ...adminState,
+    bots: Array.isArray(adminState.bots) ? adminState.bots : [],
+    admin_desk: adminState.admin_desk ?? null,
+    recent_messages: Array.isArray(adminState.recent_messages)
+      ? adminState.recent_messages
+      : [],
+  };
 }
 
 export async function getAdminLeaderboard(adminToken: string, limit = 10) {

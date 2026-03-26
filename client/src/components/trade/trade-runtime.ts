@@ -13,10 +13,22 @@ const DEFAULT_WS_URL = "ws://localhost:8080/ws";
 const DEFAULT_MARKETS = ["BTC-USD", "ETH-USD", "SOL-USD"];
 const DEFAULT_RECONNECT_DELAY_MS = 1_500;
 
+function splitMarketId(id: string) {
+  const separatorIndex = id.lastIndexOf("-");
+  if (separatorIndex <= 0 || separatorIndex >= id.length - 1) {
+    return { baseAsset: id, quoteAsset: "USD" };
+  }
+
+  return {
+    baseAsset: id.slice(0, separatorIndex),
+    quoteAsset: id.slice(separatorIndex + 1),
+  };
+}
+
 function toMarketDefinition(entry: string): MarketDefinition {
   const [rawId, rawLabel] = entry.split("|");
   const id = rawId.trim();
-  const [baseAsset = id, quoteAsset = "USD"] = id.split("-");
+  const { baseAsset, quoteAsset } = splitMarketId(id);
 
   return {
     id,
