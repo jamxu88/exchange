@@ -5,6 +5,8 @@ description: "Subscribe to one sequenced market-data stream on the socket."
 
 Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-level deltas for one market.
 
+The channel name is `l3`, but the payload is aggregated price-level book data, not a public per-order L3 feed.
+
 <RequestExample>
 
 ```json Client Message
@@ -38,6 +40,7 @@ Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-
 
 - `op` must be `subscribe`.
 - `channel` must be `l3`.
+- `l3` is the current market-data channel name, even though the book payload is aggregated by price level.
 - `market` is the market you want to subscribe to.
 - `last_sequence` is part of the message shape, but the supported recovery flow still expects a fresh resubscribe after a gap.
 
@@ -47,6 +50,7 @@ Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-
 - `bids` and `asks` in that snapshot are aggregated price levels, not raw order rows.
 - After the snapshot, the server sends `delta` messages with increasing `sequence` values.
 - A `level_updated` delta sets the total visible quantity for one side and one price.
+- Those deltas are price-level updates, not per-order add, amend, or remove events.
 - `quantity: 0` means that price level should be removed from your local book.
 - `trade` deltas carry executed price and quantity only.
 - If the backend detects a gap or a lagged receiver, it sends `resync_required`.
@@ -55,4 +59,4 @@ Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-
 
 - The current implementation supports one `l3` market subscription per connection.
 - If you need multiple markets, open multiple sockets.
-- Use `order_state` messages for your own exact resting-order state. The market-data stream is intentionally aggregated.
+- Use `order_state` messages for your own exact resting-order state. The `l3` market-data stream is intentionally aggregated.

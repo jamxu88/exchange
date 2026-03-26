@@ -40,7 +40,7 @@ These are the main message types a competitor client should expect from the serv
 }
 ```
 
-`bids` and `asks` are aggregated price levels, not per-order rows.
+Even though `channel` is `l3`, `bids` and `asks` are aggregated price levels, not per-order rows.
 
 ## `delta`
 
@@ -66,7 +66,7 @@ These are the main message types a competitor client should expect from the serv
 }
 ```
 
-`level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book.
+`level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book. These are price-level updates, not per-order add, amend, or remove events.
 
 ## `fill`
 
@@ -109,6 +109,8 @@ These are the main message types a competitor client should expect from the serv
 - `open`
 - `filled`
 - `canceled`
+
+Use `order_state` for your own exact resting-order detail. This is the per-order account feed; the market-data `snapshot` and `delta` messages are intentionally aggregated.
 
 For market orders, accepted taker flow is terminal. You should expect `status: "filled"` with `remaining: 0` because market orders never rest on the book. In that case, `order.price` is the weighted average executed price across the immediate fills, rounded down to an integer.
 

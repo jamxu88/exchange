@@ -10,6 +10,7 @@ Every market delta carries a per-market `sequence`.
 Here’s how the flow works:
 
 - A fresh `subscribe` sends a snapshot.
+- That snapshot rebuilds your price-level book state for the `l3` channel; it is not a per-order replay.
 - Deltas arrive with increasing sequences.
 - The server emits `resync_required` whenever it detects a gap.
 - The same message fires when your broadcast receiver lags behind.
