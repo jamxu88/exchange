@@ -5,13 +5,14 @@ description: "How a competitor client should react to sequence gaps, lag, and ex
 
 ## Market-data sequencing
 
-Every market delta carries a per-market `sequence`.
+Every market delta carries a per-market sequence range.
 
 Here’s how the flow works:
 
 - A fresh `subscribe` sends a snapshot.
 - That snapshot rebuilds your price-level book state for the `l3` channel; it is not a per-order replay.
-- Deltas arrive with increasing sequences.
+- Each `delta` includes `start_sequence` for the first event in the batch and `sequence` for the last event in the batch.
+- Deltas arrive in contiguous sequence order, even when the server batches several events into one frame.
 - The server emits `resync_required` whenever it detects a gap.
 - The same message fires when your broadcast receiver lags behind.
 
@@ -32,10 +33,11 @@ When this message hits you:
 
 Do this:
 
-1. discard your local book for that market
-2. send a new `subscribe`
-3. replace local state with the returned snapshot
-4. resume processing deltas from the new snapshot sequence
+1. treat `start_sequence` as the first sequence number you expect for the next batch
+2. if `start_sequence` is not exactly your expected next sequence, discard your local book for that market
+3. send a new `subscribe`
+4. replace local state with the returned snapshot
+5. resume processing deltas from the new snapshot sequence
 
 ## User-event lag
 

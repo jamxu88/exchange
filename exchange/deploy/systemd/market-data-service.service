@@ -1,0 +1,17 @@
+[Unit]
+Description=Exchange Market Data Service
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-v2/exchange
+EnvironmentFile=/home/ec2-user/exchange-v2/exchange.env
+ExecStartPre=/usr/bin/rm -f /tmp/exchange-marketdata.sock
+ExecStart=/home/ec2-user/exchange-v2/exchange/target/release/market-data-service
+Restart=always
+RestartSec=1
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

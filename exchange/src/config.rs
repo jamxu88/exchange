@@ -7,6 +7,10 @@ pub struct Config {
     pub database_url: String,
     pub storage_backend: StorageBackendKind,
     pub ws_broadcast_buffer: usize,
+    pub ws_market_delta_batch_interval_ms: u64,
+    pub ws_market_broadcast_workers: usize,
+    pub market_data_service_socket: Option<String>,
+    pub market_data_service_retry_backoff_ms: u64,
     pub runtime_dispatch_queue_capacity: usize,
     pub account_dispatch_queue_capacity: usize,
     pub persistence_dispatch_queue_capacity: usize,
@@ -30,6 +34,25 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(1_024),
+            ws_market_delta_batch_interval_ms: env::var("WS_MARKET_DELTA_BATCH_INTERVAL_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(100),
+            ws_market_broadcast_workers: env::var("WS_MARKET_BROADCAST_WORKERS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or_else(default_market_broadcast_workers),
+            market_data_service_socket: env::var("MARKET_DATA_SERVICE_SOCKET").ok().and_then(
+                |value| {
+                    let trimmed = value.trim().to_string();
+                    (!trimmed.is_empty()).then_some(trimmed)
+                },
+            ),
+            market_data_service_retry_backoff_ms: env::var("MARKET_DATA_SERVICE_RETRY_BACKOFF_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(250),
             runtime_dispatch_queue_capacity: env::var("RUNTIME_DISPATCH_QUEUE_CAPACITY")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
@@ -66,6 +89,12 @@ impl Config {
                 .unwrap_or(250),
         }
     }
+}
+
+fn default_market_broadcast_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get().clamp(1, 8))
+        .unwrap_or(4)
 }
 
 fn parse_storage_backend() -> StorageBackendKind {

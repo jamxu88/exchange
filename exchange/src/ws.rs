@@ -7,26 +7,31 @@ use axum::{
     extract::{State, WebSocketUpgrade, ws::Message, ws::WebSocket},
     response::IntoResponse,
 };
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast::error::RecvError, mpsc as tokio_mpsc};
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| client_loop(socket, state))
 }
 
-#[derive(Default)]
 struct ClientConnection {
+    market_stream_id: uuid::Uuid,
     authenticated_user: Option<AuthenticatedUser>,
     subscription: Option<String>,
-    last_market_sequence: Option<u64>,
 }
 
 async fn client_loop(mut socket: WebSocket, state: AppState) {
-    let mut market_rx = state.events_tx.subscribe();
+    let (market_tx, mut market_rx) = tokio_mpsc::unbounded_channel::<Arc<ServerMessage>>();
+    let market_stream_id = state.register_market_stream(market_tx);
     let mut user_rx = state.user_events_tx.subscribe();
     let mut system_rx = state.system_events_tx.subscribe();
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
-    let mut connection = ClientConnection::default();
+    let mut connection = ClientConnection {
+        market_stream_id,
+        authenticated_user: None,
+        subscription: None,
+    };
 
     loop {
         tokio::select! {
@@ -35,25 +40,14 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                     break;
                 }
             }
-            event = market_rx.recv() => {
-                match event {
-                    Ok(payload) => {
-                        if let Some(message) = handle_market_broadcast(&mut connection, payload) {
-                            if send_server_message(&mut socket, &message).await.is_err() {
-                                break;
-                            }
+            message = market_rx.recv() => {
+                match message {
+                    Some(message) => {
+                        if send_server_message(&mut socket, message.as_ref()).await.is_err() {
+                            break;
                         }
                     }
-                    Err(RecvError::Lagged(skipped)) => {
-                        if let Some(message) =
-                            market_resync_required(&state, &mut connection, skipped)
-                        {
-                            if send_server_message(&mut socket, &message).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(RecvError::Closed) => break,
+                    None => break,
                 }
             }
             event = user_rx.recv() => {
@@ -104,6 +98,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         let replies = handle_client_text(&state, &mut connection, &text).await;
                         for reply in replies {
                             if send_server_message(&mut socket, &reply).await.is_err() {
+                                state.unregister_market_stream(connection.market_stream_id);
                                 return;
                             }
                         }
@@ -115,6 +110,8 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
             }
         }
     }
+
+    state.unregister_market_stream(connection.market_stream_id);
 }
 
 async fn handle_client_text(
@@ -162,9 +159,15 @@ async fn handle_client_text(
 
             connection.subscription = Some(market.clone());
             let snapshot = build_snapshot_message(state, &market).await;
-            if let ServerMessage::Snapshot { sequence, .. } = &snapshot {
-                connection.last_market_sequence = Some(*sequence);
-            }
+            let last_sequence = match &snapshot {
+                ServerMessage::Snapshot { sequence, .. } => Some(*sequence),
+                _ => None,
+            };
+            state.update_market_stream_subscription(
+                connection.market_stream_id,
+                Some(market),
+                last_sequence,
+            );
             vec![snapshot]
         }
         ClientMessage::Unsubscribe { channel, market } => {
@@ -177,7 +180,7 @@ async fn handle_client_text(
 
             if connection.subscription.as_deref() == Some(market.as_str()) {
                 connection.subscription = None;
-                connection.last_market_sequence = None;
+                state.update_market_stream_subscription(connection.market_stream_id, None, None);
             }
             vec![ServerMessage::Unsubscribed { channel, market }]
         }
@@ -286,62 +289,6 @@ async fn handle_client_text(
     }
 }
 
-fn handle_market_broadcast(
-    connection: &mut ClientConnection,
-    payload: crate::marketdata::BroadcastEvent,
-) -> Option<ServerMessage> {
-    if connection.subscription.as_deref() != Some(payload.market.as_str()) {
-        return None;
-    }
-
-    if let Some(last_sequence) = connection.last_market_sequence {
-        let expected_sequence = last_sequence.saturating_add(1);
-        if payload.sequence != expected_sequence {
-            connection.subscription = None;
-            connection.last_market_sequence = None;
-            return Some(ServerMessage::ResyncRequired {
-                channel: L3_CHANNEL.to_string(),
-                market: Some(payload.market),
-                expected_sequence: Some(expected_sequence),
-                current_sequence: Some(payload.sequence),
-                reason: "market sequence gap detected; resubscribe for a fresh snapshot"
-                    .to_string(),
-            });
-        }
-    }
-
-    connection.last_market_sequence = Some(payload.sequence);
-    Some(ServerMessage::Delta {
-        channel: L3_CHANNEL.to_string(),
-        market: payload.market,
-        sequence: payload.sequence,
-        events: vec![payload.event],
-    })
-}
-
-fn market_resync_required(
-    state: &AppState,
-    connection: &mut ClientConnection,
-    skipped: u64,
-) -> Option<ServerMessage> {
-    let market = connection.subscription.take()?;
-    let expected_sequence = connection
-        .last_market_sequence
-        .map(|value| value.saturating_add(1));
-    let current_sequence = Some(state.current_market_sequence(&market));
-    connection.last_market_sequence = None;
-
-    Some(ServerMessage::ResyncRequired {
-        channel: L3_CHANNEL.to_string(),
-        market: Some(market),
-        expected_sequence,
-        current_sequence,
-        reason: format!(
-            "market data lagged by {skipped} messages; resubscribe for a fresh snapshot"
-        ),
-    })
-}
-
 fn user_resync_required(connection: &ClientConnection, skipped: u64) -> Option<ServerMessage> {
     connection.authenticated_user.as_ref()?;
     Some(ServerMessage::ResyncRequired {
@@ -418,12 +365,12 @@ fn trading_error_code(error: &TradingError) -> &'static str {
 }
 
 async fn build_snapshot_message(state: &AppState, market: &str) -> ServerMessage {
-    let snapshot = state.market_book_snapshot(market).await;
+    let (snapshot, sequence) = state.market_book_snapshot_with_sequence(market).await;
 
     ServerMessage::Snapshot {
         channel: L3_CHANNEL.to_string(),
         market: market.to_string(),
-        sequence: state.current_market_sequence(market),
+        sequence,
         bids: snapshot.bids,
         asks: snapshot.asks,
     }
@@ -454,6 +401,10 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            ws_market_delta_batch_interval_ms: 10,
+            ws_market_broadcast_workers: 1,
+            market_data_service_socket: None,
+            market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
             persistence_dispatch_queue_capacity: 4_096,
@@ -494,6 +445,14 @@ mod tests {
         }
     }
 
+    fn test_connection() -> ClientConnection {
+        ClientConnection {
+            market_stream_id: Uuid::new_v4(),
+            authenticated_user: None,
+            subscription: None,
+        }
+    }
+
     #[tokio::test]
     async fn subscribe_returns_snapshot_for_requested_market() {
         let state = test_state();
@@ -503,7 +462,8 @@ mod tests {
         state
             .storage
             .upsert_open_order(Uuid::from_u128(10_002), stable_order(2, Side::Sell, 101, 2));
-        let mut connection = ClientConnection::default();
+        state.rebuild_derived_market_data();
+        let mut connection = test_connection();
 
         let reply = handle_client_text(
             &state,
@@ -547,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_channel_returns_error() {
         let state = test_state();
-        let mut connection = ClientConnection::default();
+        let mut connection = test_connection();
 
         let reply = handle_client_text(
             &state,
@@ -565,70 +525,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sequence_gap_emits_resync_required_and_clears_subscription() {
-        let mut connection = ClientConnection {
-            authenticated_user: None,
-            subscription: Some("BTC-USD".to_string()),
-            last_market_sequence: Some(4),
-        };
-
-        let message = handle_market_broadcast(
-            &mut connection,
-            crate::marketdata::BroadcastEvent {
-                market: "BTC-USD".to_string(),
-                sequence: 7,
-                event: BookDelta::LevelUpdated {
-                    side: Side::Sell,
-                    price: 101,
-                    quantity: 0,
-                },
-            },
-        )
-        .expect("resync message");
-
-        assert_eq!(connection.subscription, None);
-        assert_eq!(connection.last_market_sequence, None);
-        assert_eq!(
-            message,
-            ServerMessage::ResyncRequired {
-                channel: "l3".to_string(),
-                market: Some("BTC-USD".to_string()),
-                expected_sequence: Some(5),
-                current_sequence: Some(7),
-                reason: "market sequence gap detected; resubscribe for a fresh snapshot"
-                    .to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn lagged_market_receiver_emits_resync_required() {
-        let state = test_state();
-        state.market_sequences.insert("BTC-USD".to_string(), 9);
-        let mut connection = ClientConnection {
-            authenticated_user: None,
-            subscription: Some("BTC-USD".to_string()),
-            last_market_sequence: Some(4),
-        };
-
-        let message = market_resync_required(&state, &mut connection, 3).expect("resync");
-
-        assert_eq!(connection.subscription, None);
-        assert_eq!(connection.last_market_sequence, None);
-        assert_eq!(
-            message,
-            ServerMessage::ResyncRequired {
-                channel: "l3".to_string(),
-                market: Some("BTC-USD".to_string()),
-                expected_sequence: Some(5),
-                current_sequence: Some(9),
-                reason: "market data lagged by 3 messages; resubscribe for a fresh snapshot"
-                    .to_string(),
-            }
-        );
-    }
-
     #[tokio::test]
     async fn authenticate_message_returns_authenticated_ack() {
         let state = test_state();
@@ -640,7 +536,7 @@ mod tests {
             },
         )
         .expect("provision user");
-        let mut connection = ClientConnection::default();
+        let mut connection = test_connection();
 
         let reply = handle_client_text(
             &state,
@@ -675,7 +571,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_authenticate_message_returns_error() {
         let state = test_state();
-        let mut connection = ClientConnection::default();
+        let mut connection = test_connection();
 
         let reply = handle_client_text(
             &state,
@@ -696,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn submit_order_requires_authentication() {
         let state = test_state();
-        let mut connection = ClientConnection::default();
+        let mut connection = test_connection();
 
         let reply = handle_client_text(
             &state,
@@ -729,13 +625,13 @@ mod tests {
         .expect("provision user");
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
+            market_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: provisioned.profile.trader_id,
                 username: provisioned.profile.username.clone(),
                 role: provisioned.profile.role,
             }),
             subscription: None,
-            last_market_sequence: None,
         };
 
         let reply = handle_client_text(
@@ -786,13 +682,13 @@ mod tests {
         .expect("taker");
 
         let mut maker_connection = ClientConnection {
+            market_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: maker.profile.trader_id,
                 username: maker.profile.username.clone(),
                 role: maker.profile.role,
             }),
             subscription: None,
-            last_market_sequence: None,
         };
         let mut user_rx = state.user_events_tx.subscribe();
 
@@ -806,13 +702,13 @@ mod tests {
         let _ = user_rx.recv().await.expect("maker open state");
 
         let mut taker_connection = ClientConnection {
+            market_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: taker.profile.trader_id,
                 username: taker.profile.username.clone(),
                 role: taker.profile.role,
             }),
             subscription: None,
-            last_market_sequence: None,
         };
         let taker_reply = handle_client_text(
             &state,
@@ -889,13 +785,13 @@ mod tests {
         .expect("trader");
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
+            market_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: trader.profile.trader_id,
                 username: trader.profile.username.clone(),
                 role: trader.profile.role,
             }),
             subscription: None,
-            last_market_sequence: None,
         };
 
         let submit_reply = handle_client_text(
@@ -970,6 +866,7 @@ mod tests {
         let message = ServerMessage::Delta {
             channel: "l3".to_string(),
             market: "BTC-USD".to_string(),
+            start_sequence: 7,
             sequence: 7,
             events: vec![BookDelta::LevelUpdated {
                 side: Side::Sell,
@@ -980,6 +877,7 @@ mod tests {
 
         let json = serde_json::to_value(message).expect("delta json");
         assert_eq!(json["type"], "delta");
+        assert_eq!(json["start_sequence"], 7);
         assert_eq!(json["sequence"], 7);
         assert_eq!(json["events"][0]["kind"], "level_updated");
     }

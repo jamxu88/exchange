@@ -1,6 +1,12 @@
 use crate::bots::BotManager;
 use crate::config::Config;
-use crate::marketdata::{BookDelta, BroadcastEvent, ServerMessage, UserBroadcastEvent};
+use crate::derived_marketdata::{DerivedMarketDataHandle, MarketL3Snapshot};
+use crate::marketdata::{
+    BookDelta, BroadcastEvent, L3_CHANNEL, MarketEvent, MarketEventEnvelope, ServerMessage,
+    UserBroadcastEvent,
+};
+use crate::marketdata_bridge::MarketDataBridgeHandle;
+use crate::marketdata_ipc::MarketBootstrapState;
 use crate::orderbook::{Fill, Order, OrderBook};
 use crate::rate_limit::PerUserRateLimiter;
 use crate::storage::{StorageBackendKind, StorageRepository};
@@ -8,12 +14,12 @@ use crate::trading::{MarketBookSnapshot, MarketEngineHandle};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc, oneshot};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -314,15 +320,20 @@ pub struct AppState {
     pub config: Config,
     pub market_engines: Arc<DashMap<String, MarketEngineHandle>>,
     pub storage: StorageRepository,
+    derived_market_data: DerivedMarketDataHandle,
+    market_data_bridge: Arc<OnceLock<MarketDataBridgeHandle>>,
     pub bot_manager: BotManager,
     runtime_dispatcher: RuntimeDispatchHandle,
     account_dispatcher: AccountDispatchHandle,
     account_barrier_telemetry: AccountBarrierTelemetry,
     persistence_dispatcher: PersistenceDispatchHandle,
+    market_broadcaster: MarketBroadcastHandle,
     pub events_tx: broadcast::Sender<BroadcastEvent>,
+    pub market_event_tx: broadcast::Sender<MarketEventEnvelope>,
     pub user_events_tx: broadcast::Sender<UserBroadcastEvent>,
     pub system_events_tx: broadcast::Sender<ServerMessage>,
     pub market_sequences: Arc<DashMap<String, u64>>,
+    pub market_event_sequences: Arc<DashMap<String, u64>>,
     pub user_rate_limiter: PerUserRateLimiter,
 }
 
@@ -334,11 +345,19 @@ impl AppState {
 
     pub fn with_storage(config: Config, storage: StorageRepository) -> Self {
         let (events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
+        let (market_event_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (user_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (system_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
+        let market_broadcaster = MarketBroadcastHandle::spawn(
+            config.ws_market_broadcast_workers,
+            config.runtime_dispatch_queue_capacity,
+        );
         let runtime_dispatcher = RuntimeDispatchHandle::spawn(
             config.runtime_dispatch_queue_capacity,
+            config.ws_market_delta_batch_interval_ms,
             events_tx.clone(),
+            market_event_tx.clone(),
+            market_broadcaster.clone(),
             user_events_tx.clone(),
             system_events_tx.clone(),
         );
@@ -353,18 +372,25 @@ impl AppState {
             config,
             market_engines: Arc::new(DashMap::new()),
             storage,
+            derived_market_data: DerivedMarketDataHandle::default(),
+            market_data_bridge: Arc::new(OnceLock::new()),
             bot_manager: BotManager::default(),
             runtime_dispatcher,
             account_dispatcher,
             account_barrier_telemetry,
             persistence_dispatcher,
+            market_broadcaster,
             events_tx,
+            market_event_tx,
             user_events_tx,
             system_events_tx,
             market_sequences: Arc::new(DashMap::new()),
+            market_event_sequences: Arc::new(DashMap::new()),
             user_rate_limiter: PerUserRateLimiter::new(),
         };
         state.recover_runtime_state();
+        state.rebuild_derived_market_data();
+        state.start_market_data_bridge();
         state
     }
 
@@ -381,12 +407,73 @@ impl AppState {
         *entry
     }
 
+    pub fn current_market_event_sequence(&self, market: &str) -> u64 {
+        self.market_event_sequences
+            .get(market)
+            .map(|entry| *entry.value())
+            .unwrap_or(0)
+    }
+
+    pub fn next_market_event_sequence(&self, market: &str) -> u64 {
+        let mut entry = self
+            .market_event_sequences
+            .entry(market.to_string())
+            .or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
     pub fn dispatch_market_delta(&self, market: &str, event: BookDelta) {
+        let sequence = self.next_market_sequence(market);
         self.runtime_dispatcher.dispatch_market(BroadcastEvent {
             market: market.to_string(),
-            sequence: self.next_market_sequence(market),
-            event,
+            start_sequence: sequence,
+            sequence,
+            events: vec![event],
         });
+    }
+
+    pub fn dispatch_market_event(&self, market: &str, event: MarketEvent) {
+        let envelope = MarketEventEnvelope {
+            market: market.to_string(),
+            sequence: self.next_market_event_sequence(market),
+            recorded_at: Utc::now(),
+            event,
+        };
+        let market = envelope.market.clone();
+        let local_deltas = self
+            .derived_market_data
+            .apply_market_event(envelope.clone());
+        let bridged = self
+            .market_data_bridge()
+            .is_some_and(|bridge| bridge.publish_event(envelope.clone()));
+        if !bridged {
+            for delta in local_deltas {
+                self.dispatch_market_delta(&market, delta);
+            }
+        }
+        self.runtime_dispatcher.dispatch_market_event(envelope);
+    }
+
+    pub fn register_market_stream(
+        &self,
+        tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
+    ) -> Uuid {
+        self.market_broadcaster.register(tx)
+    }
+
+    pub fn update_market_stream_subscription(
+        &self,
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    ) {
+        self.market_broadcaster
+            .update_subscription(client_id, market, last_sequence);
+    }
+
+    pub fn unregister_market_stream(&self, client_id: Uuid) {
+        self.market_broadcaster.unregister(client_id);
     }
 
     pub fn dispatch_user_event(&self, trader_id: Uuid, message: ServerMessage) {
@@ -479,36 +566,104 @@ impl AppState {
     pub fn remove_market_runtime(&self, market: &str) {
         self.market_engines.remove(market);
         self.market_sequences.remove(market);
+        self.market_event_sequences.remove(market);
+        self.derived_market_data.clear_market(market);
     }
 
     pub fn clear_market_runtime(&self) {
         self.market_engines.clear();
+        self.derived_market_data.clear_all();
     }
 
     pub async fn market_book_snapshot(&self, market: &str) -> MarketBookSnapshot {
-        if let Some(engine) = self.market_engines.get(market) {
-            let handle = engine.clone();
-            return handle.snapshot().await.unwrap_or_default();
+        self.market_book_snapshot_with_sequence(market).await.0
+    }
+
+    pub async fn market_book_snapshot_with_sequence(
+        &self,
+        market: &str,
+    ) -> (MarketBookSnapshot, u64) {
+        if let Some(bridge) = self.market_data_bridge() {
+            if let Some(snapshot) = bridge.request_snapshot(market).await {
+                return (
+                    MarketBookSnapshot {
+                        bids: snapshot.bids,
+                        asks: snapshot.asks,
+                    },
+                    snapshot.sequence,
+                );
+            }
         }
-        let recovered = recover_orderbook(self.storage.list_all_open_orders(), market);
-        MarketBookSnapshot {
-            bids: recovered.levels_for_side(crate::orderbook::Side::Buy),
-            asks: recovered.levels_for_side(crate::orderbook::Side::Sell),
-        }
+        (
+            self.derived_market_data.book_snapshot(market),
+            self.current_market_sequence(market),
+        )
     }
 
     pub async fn market_best_prices(&self, market: &str) -> (Option<u64>, Option<u64>) {
-        if let Some(engine) = self.market_engines.get(market) {
-            let handle = engine.clone();
-            return handle.best_prices().await.unwrap_or((None, None));
+        self.derived_market_data.best_prices(market)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn market_l3_snapshot(&self, market: &str) -> MarketL3Snapshot {
+        self.derived_market_data.l3_snapshot(market)
+    }
+
+    pub(crate) fn rebuild_derived_market_data(&self) {
+        let market_sequences = self
+            .storage
+            .list_markets()
+            .into_iter()
+            .map(|market| {
+                let market_id = market.market_id;
+                let sequence = self.current_market_event_sequence(&market_id);
+                (market_id, sequence)
+            })
+            .collect();
+        self.derived_market_data
+            .replace_from_open_orders(market_sequences, self.storage.list_all_open_orders());
+    }
+
+    pub(crate) fn market_bootstrap_state(&self) -> Vec<MarketBootstrapState> {
+        self.storage
+            .list_markets()
+            .into_iter()
+            .map(|market| {
+                let market_id = market.market_id;
+                MarketBootstrapState {
+                    book_sequence: self.current_market_sequence(&market_id),
+                    event_sequence: self.current_market_event_sequence(&market_id),
+                    market: market_id,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn apply_bridge_market_batch(&self, batch: BroadcastEvent) {
+        self.market_sequences
+            .insert(batch.market.clone(), batch.sequence);
+        self.runtime_dispatcher.dispatch_market(batch);
+    }
+
+    fn start_market_data_bridge(&self) {
+        if self.config.market_data_service_socket.is_none() {
+            return;
         }
-        let recovered = recover_orderbook(self.storage.list_all_open_orders(), market);
-        (recovered.best_bid_price(), recovered.best_ask_price())
+
+        let _ = self
+            .market_data_bridge
+            .set(MarketDataBridgeHandle::spawn(self.clone()));
+    }
+
+    fn market_data_bridge(&self) -> Option<MarketDataBridgeHandle> {
+        self.market_data_bridge.get().cloned()
     }
 
     fn recover_runtime_state(&self) {
         for market in self.storage.list_markets() {
-            self.market_sequences.entry(market.market_id).or_insert(0);
+            let market_id = market.market_id;
+            self.market_sequences.entry(market_id.clone()).or_insert(0);
+            self.market_event_sequences.entry(market_id).or_insert(0);
         }
         let open_orders = self.storage.list_all_open_orders();
         let recovered = recover_orderbooks(open_orders.clone());
@@ -517,7 +672,8 @@ impl AppState {
                 market.clone(),
                 MarketEngineHandle::spawn(self.clone(), market.clone(), orderbook),
             );
-            self.market_sequences.entry(market).or_insert(0);
+            self.market_sequences.entry(market.clone()).or_insert(0);
+            self.market_event_sequences.entry(market).or_insert(0);
         }
     }
 }
@@ -544,6 +700,227 @@ fn recover_orderbook(orders: Vec<Order>, market: &str) -> OrderBook {
 }
 
 #[derive(Clone)]
+struct MarketBroadcastHandle {
+    workers: Arc<Vec<MarketBroadcastWorker>>,
+    worker_index_by_client: Arc<DashMap<Uuid, usize>>,
+    next_worker: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct MarketBroadcastWorker {
+    tx: mpsc::SyncSender<MarketBroadcastCommand>,
+}
+
+enum MarketBroadcastCommand {
+    Register {
+        client_id: Uuid,
+        tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
+    },
+    UpdateSubscription {
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    },
+    Publish(BroadcastEvent),
+    Remove {
+        client_id: Uuid,
+    },
+}
+
+struct MarketBroadcastClient {
+    tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
+    subscription: Option<String>,
+    last_market_sequence: Option<u64>,
+}
+
+impl MarketBroadcastHandle {
+    fn spawn(worker_count: usize, queue_capacity: usize) -> Self {
+        let worker_count = worker_count.max(1);
+        let workers = (0..worker_count)
+            .map(|index| MarketBroadcastWorker::spawn(index, queue_capacity))
+            .collect();
+
+        Self {
+            workers: Arc::new(workers),
+            worker_index_by_client: Arc::new(DashMap::new()),
+            next_worker: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn register(&self, tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>) -> Uuid {
+        let client_id = Uuid::new_v4();
+        let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        self.worker_index_by_client.insert(client_id, worker_index);
+        self.workers[worker_index].send(MarketBroadcastCommand::Register { client_id, tx });
+        client_id
+    }
+
+    fn update_subscription(
+        &self,
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    ) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketBroadcastCommand::UpdateSubscription {
+            client_id,
+            market,
+            last_sequence,
+        });
+    }
+
+    fn publish(&self, batch: BroadcastEvent) {
+        for worker in self.workers.iter() {
+            worker.send(MarketBroadcastCommand::Publish(batch.clone()));
+        }
+    }
+
+    fn unregister(&self, client_id: Uuid) {
+        let Some((_, worker_index)) = self.worker_index_by_client.remove(&client_id) else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketBroadcastCommand::Remove { client_id });
+    }
+}
+
+impl MarketBroadcastWorker {
+    fn spawn(index: usize, queue_capacity: usize) -> Self {
+        let (tx, rx) = mpsc::sync_channel(queue_capacity);
+        thread::Builder::new()
+            .name(format!("exchange-market-broadcast-{index}"))
+            .spawn(move || {
+                let mut clients = HashMap::<Uuid, MarketBroadcastClient>::new();
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        MarketBroadcastCommand::Register { client_id, tx } => {
+                            clients.insert(
+                                client_id,
+                                MarketBroadcastClient {
+                                    tx,
+                                    subscription: None,
+                                    last_market_sequence: None,
+                                },
+                            );
+                        }
+                        MarketBroadcastCommand::UpdateSubscription {
+                            client_id,
+                            market,
+                            last_sequence,
+                        } => {
+                            if let Some(client) = clients.get_mut(&client_id) {
+                                client.subscription = market;
+                                client.last_market_sequence = last_sequence;
+                            }
+                        }
+                        MarketBroadcastCommand::Publish(batch) => {
+                            publish_market_batch(&mut clients, batch);
+                        }
+                        MarketBroadcastCommand::Remove { client_id } => {
+                            clients.remove(&client_id);
+                        }
+                    }
+                }
+            })
+            .unwrap_or_else(|error| panic!("failed to spawn market broadcast thread: {error}"));
+        Self { tx }
+    }
+
+    fn send(&self, command: MarketBroadcastCommand) {
+        self.tx
+            .send(command)
+            .unwrap_or_else(|_| panic!("market broadcast thread terminated"));
+    }
+}
+
+fn publish_market_batch(clients: &mut HashMap<Uuid, MarketBroadcastClient>, batch: BroadcastEvent) {
+    let delta_message = Arc::new(ServerMessage::Delta {
+        channel: L3_CHANNEL.to_string(),
+        market: batch.market.clone(),
+        start_sequence: batch.start_sequence,
+        sequence: batch.sequence,
+        events: batch.events.clone(),
+    });
+    let mut disconnected = Vec::new();
+
+    for (client_id, client) in clients.iter_mut() {
+        if client.subscription.as_deref() != Some(batch.market.as_str()) {
+            continue;
+        }
+
+        if let Some(last_sequence) = client.last_market_sequence {
+            let expected_sequence = last_sequence.saturating_add(1);
+            if batch.start_sequence != expected_sequence {
+                let resync_message = Arc::new(ServerMessage::ResyncRequired {
+                    channel: L3_CHANNEL.to_string(),
+                    market: Some(batch.market.clone()),
+                    expected_sequence: Some(expected_sequence),
+                    current_sequence: Some(batch.sequence),
+                    reason: "market sequence gap detected; resubscribe for a fresh snapshot"
+                        .to_string(),
+                });
+                client.subscription = None;
+                client.last_market_sequence = None;
+                if client.tx.send(resync_message).is_err() {
+                    disconnected.push(*client_id);
+                }
+                continue;
+            }
+        }
+
+        client.last_market_sequence = Some(batch.sequence);
+        if client.tx.send(delta_message.clone()).is_err() {
+            disconnected.push(*client_id);
+        }
+    }
+
+    for client_id in disconnected {
+        clients.remove(&client_id);
+    }
+}
+
+fn merge_market_batch(
+    pending_by_market: &mut BTreeMap<String, BroadcastEvent>,
+    next: BroadcastEvent,
+) -> Option<BroadcastEvent> {
+    if let Some(pending) = pending_by_market.get_mut(&next.market) {
+        if pending.sequence.saturating_add(1) == next.start_sequence {
+            pending.sequence = next.sequence;
+            pending.events.extend(next.events);
+            return None;
+        }
+    }
+
+    pending_by_market.insert(next.market.clone(), next)
+}
+
+fn publish_market_batch_to_subscribers(
+    batch: BroadcastEvent,
+    events_tx: &broadcast::Sender<BroadcastEvent>,
+    market_broadcaster: &MarketBroadcastHandle,
+) {
+    let _ = events_tx.send(batch.clone());
+    market_broadcaster.publish(batch);
+}
+
+fn flush_market_batches(
+    pending_by_market: &mut BTreeMap<String, BroadcastEvent>,
+    events_tx: &broadcast::Sender<BroadcastEvent>,
+    market_broadcaster: &MarketBroadcastHandle,
+) {
+    for (_, batch) in std::mem::take(pending_by_market) {
+        publish_market_batch_to_subscribers(batch, events_tx, market_broadcaster);
+    }
+}
+
+#[derive(Clone)]
 struct RuntimeDispatchHandle {
     tx: mpsc::SyncSender<RuntimeDispatch>,
     telemetry: DispatchQueueTelemetry,
@@ -551,6 +928,7 @@ struct RuntimeDispatchHandle {
 
 enum RuntimeDispatch {
     Market(BroadcastEvent),
+    MarketEvent(MarketEventEnvelope),
     User(UserBroadcastEvent),
     System(ServerMessage),
 }
@@ -558,27 +936,85 @@ enum RuntimeDispatch {
 impl RuntimeDispatchHandle {
     fn spawn(
         queue_capacity: usize,
+        market_batch_interval_ms: u64,
         events_tx: broadcast::Sender<BroadcastEvent>,
+        market_event_tx: broadcast::Sender<MarketEventEnvelope>,
+        market_broadcaster: MarketBroadcastHandle,
         user_events_tx: broadcast::Sender<UserBroadcastEvent>,
         system_events_tx: broadcast::Sender<ServerMessage>,
     ) -> Self {
         let telemetry = DispatchQueueTelemetry::new(queue_capacity);
         let worker_telemetry = telemetry.clone();
         let (tx, rx) = mpsc::sync_channel(queue_capacity);
+        let market_batch_interval = Duration::from_millis(market_batch_interval_ms.max(1));
         thread::Builder::new()
             .name("exchange-runtime-dispatcher".to_string())
             .spawn(move || {
-                while let Ok(event) = rx.recv() {
-                    worker_telemetry.record_dequeued();
-                    match event {
-                        RuntimeDispatch::Market(message) => {
-                            let _ = events_tx.send(message);
+                let mut pending_market_batches = BTreeMap::<String, BroadcastEvent>::new();
+                let mut next_market_flush_at: Option<Instant> = None;
+
+                loop {
+                    if next_market_flush_at.is_some_and(|deadline| Instant::now() >= deadline) {
+                        flush_market_batches(
+                            &mut pending_market_batches,
+                            &events_tx,
+                            &market_broadcaster,
+                        );
+                        next_market_flush_at = None;
+                    }
+
+                    let next_event = match next_market_flush_at {
+                        Some(deadline) => {
+                            let wait_for = deadline.saturating_duration_since(Instant::now());
+                            rx.recv_timeout(wait_for)
                         }
-                        RuntimeDispatch::User(message) => {
-                            let _ = user_events_tx.send(message);
+                        None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                    };
+
+                    match next_event {
+                        Ok(event) => {
+                            worker_telemetry.record_dequeued();
+                            match event {
+                                RuntimeDispatch::Market(message) => {
+                                    if let Some(batch) =
+                                        merge_market_batch(&mut pending_market_batches, message)
+                                    {
+                                        publish_market_batch_to_subscribers(
+                                            batch,
+                                            &events_tx,
+                                            &market_broadcaster,
+                                        );
+                                    }
+                                    next_market_flush_at.get_or_insert_with(|| {
+                                        Instant::now() + market_batch_interval
+                                    });
+                                }
+                                RuntimeDispatch::MarketEvent(message) => {
+                                    let _ = market_event_tx.send(message);
+                                }
+                                RuntimeDispatch::User(message) => {
+                                    let _ = user_events_tx.send(message);
+                                }
+                                RuntimeDispatch::System(message) => {
+                                    let _ = system_events_tx.send(message);
+                                }
+                            }
                         }
-                        RuntimeDispatch::System(message) => {
-                            let _ = system_events_tx.send(message);
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            flush_market_batches(
+                                &mut pending_market_batches,
+                                &events_tx,
+                                &market_broadcaster,
+                            );
+                            next_market_flush_at = None;
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            flush_market_batches(
+                                &mut pending_market_batches,
+                                &events_tx,
+                                &market_broadcaster,
+                            );
+                            break;
                         }
                     }
                 }
@@ -590,6 +1026,10 @@ impl RuntimeDispatchHandle {
 
     fn dispatch_market(&self, event: BroadcastEvent) {
         self.send(RuntimeDispatch::Market(event));
+    }
+
+    fn dispatch_market_event(&self, event: MarketEventEnvelope) {
+        self.send(RuntimeDispatch::MarketEvent(event));
     }
 
     fn dispatch_user(&self, event: UserBroadcastEvent) {
@@ -882,6 +1322,7 @@ mod tests {
     use crate::config::Config;
     use crate::orderbook::Side;
     use chrono::{TimeZone, Utc};
+    use tokio::time::timeout;
 
     fn test_config() -> Config {
         Config {
@@ -889,6 +1330,10 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            ws_market_delta_batch_interval_ms: 10,
+            ws_market_broadcast_workers: 1,
+            market_data_service_socket: None,
+            market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
             persistence_dispatch_queue_capacity: 4_096,
@@ -979,8 +1424,20 @@ mod tests {
         assert_eq!(asks[0].price, 200);
         assert_eq!(asks[0].quantity, 1);
 
+        let btc_l3 = state.market_l3_snapshot("BTC-USD");
+        assert_eq!(btc_l3.sequence, 0);
+        assert_eq!(btc_l3.bids.len(), 2);
+        assert!(btc_l3.asks.is_empty());
+
+        let eth_l3 = state.market_l3_snapshot("ETH-USD");
+        assert_eq!(eth_l3.sequence, 0);
+        assert_eq!(eth_l3.asks.len(), 1);
+        assert!(eth_l3.bids.is_empty());
+
         assert_eq!(state.current_market_sequence("BTC-USD"), 0);
         assert_eq!(state.current_market_sequence("ETH-USD"), 0);
+        assert_eq!(state.current_market_event_sequence("BTC-USD"), 0);
+        assert_eq!(state.current_market_event_sequence("ETH-USD"), 0);
     }
 
     #[test]
@@ -1027,5 +1484,107 @@ mod tests {
         assert_eq!(status.amend.total_waits, 1);
         assert_eq!(status.amend.waits_over_100ms, 1);
         assert_eq!(status.amend.last_wait_time_ms, 120);
+    }
+
+    #[tokio::test]
+    async fn market_broadcast_batches_consecutive_deltas_for_fanout() {
+        let state = AppState::new(test_config());
+        let (tx, mut rx) = tokio_mpsc::unbounded_channel();
+        let client_id = state.register_market_stream(tx);
+        state.update_market_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(0));
+
+        state.dispatch_market_delta(
+            "BTC-USD",
+            BookDelta::LevelUpdated {
+                side: Side::Buy,
+                price: 100,
+                quantity: 2,
+            },
+        );
+        state.dispatch_market_delta(
+            "BTC-USD",
+            BookDelta::Trade {
+                price: 100,
+                quantity: 1,
+            },
+        );
+
+        let message = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for batched market delta")
+            .expect("market message");
+        match message.as_ref() {
+            ServerMessage::Delta {
+                channel,
+                market,
+                start_sequence,
+                sequence,
+                events,
+            } => {
+                assert_eq!(channel, "l3");
+                assert_eq!(market, "BTC-USD");
+                assert_eq!(*start_sequence, 1);
+                assert_eq!(*sequence, 2);
+                assert_eq!(events.len(), 2);
+                assert!(matches!(
+                    events[0],
+                    BookDelta::LevelUpdated {
+                        side: Side::Buy,
+                        price: 100,
+                        quantity: 2,
+                    }
+                ));
+                assert!(matches!(
+                    events[1],
+                    BookDelta::Trade {
+                        price: 100,
+                        quantity: 1,
+                    }
+                ));
+            }
+            other => panic!("unexpected market message: {other:?}"),
+        }
+
+        assert!(
+            timeout(Duration::from_millis(25), rx.recv()).await.is_err(),
+            "expected a single batched delta message",
+        );
+        state.unregister_market_stream(client_id);
+    }
+
+    #[tokio::test]
+    async fn market_broadcast_requests_resync_after_sequence_gap() {
+        let state = AppState::new(test_config());
+        let (tx, mut rx) = tokio_mpsc::unbounded_channel();
+        let client_id = state.register_market_stream(tx);
+        state.update_market_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(4));
+
+        state.runtime_dispatcher.dispatch_market(BroadcastEvent {
+            market: "BTC-USD".to_string(),
+            start_sequence: 7,
+            sequence: 7,
+            events: vec![BookDelta::LevelUpdated {
+                side: Side::Sell,
+                price: 101,
+                quantity: 0,
+            }],
+        });
+
+        let message = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for resync message")
+            .expect("market message");
+        assert_eq!(
+            message.as_ref(),
+            &ServerMessage::ResyncRequired {
+                channel: "l3".to_string(),
+                market: Some("BTC-USD".to_string()),
+                expected_sequence: Some(5),
+                current_sequence: Some(7),
+                reason: "market sequence gap detected; resubscribe for a fresh snapshot"
+                    .to_string(),
+            }
+        );
+        state.unregister_market_stream(client_id);
     }
 }

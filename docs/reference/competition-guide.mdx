@@ -49,6 +49,7 @@ Use REST for bootstrap and recovery:
 Use WebSocket for:
 
 - aggregated price-level market data on the `l3`-named channel
+- short batched `delta` updates, usually flushed about every `100ms`
 - user `fill` events
 - user `order_state` events
 - low-latency order actions
@@ -67,6 +68,7 @@ When an order is accepted:
 - `resting: true` means remaining quantity was posted to the book
 - `order_state` and `fill` messages are the live account-state feed while your socket is healthy
 - the market-data `snapshot` and `delta` feed is aggregated by price level, so use `order_state` for your own exact resting-order detail
+- market-data `delta` messages can carry multiple ordered events, so validate `start_sequence` and then advance your local book sequence to `sequence`
 
 ## Recovery during the event
 

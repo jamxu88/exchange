@@ -7,9 +7,10 @@ description: "How the split ECS plus EC2 deployment is structured and how to upd
 
 - one ECS/Fargate service for the Next.js client
 - one ALB in front of both client and backend paths
-- one EC2 instance for the Rust exchange service
+- one EC2 instance for the Rust exchange core and market-data services
 - one local PostgreSQL instance on the EC2 host
 - one systemd service named `exchange`
+- one systemd service named `market-data-service`
 - GitHub-backed checkout at `/home/ec2-user/exchange-v2`
 
 ## Important paths
@@ -17,6 +18,7 @@ description: "How the split ECS plus EC2 deployment is structured and how to upd
 - repo: `/home/ec2-user/exchange-v2`
 - backend env: `/home/ec2-user/exchange-v2/exchange.env`
 - binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
+- market-data binary: `/home/ec2-user/exchange-v2/exchange/target/release/market-data-service`
 - ECS stack: `exchange-client`
 - ALB hostname: `exchange-client-alb-1466111370.us-east-2.elb.amazonaws.com`
 
@@ -34,8 +36,13 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
   git pull --ff-only &&
   cd exchange &&
   source "$HOME/.cargo/env" &&
-  cargo build --release &&
+  cargo build --release --bin exchange --bin market-data-service &&
+  sudo cp deploy/systemd/market-data-service.service /etc/systemd/system/market-data-service.service &&
+  sudo systemctl daemon-reload &&
+  sudo systemctl enable market-data-service &&
+  sudo systemctl restart market-data-service &&
   sudo systemctl restart exchange &&
+  sudo systemctl status market-data-service --no-pager &&
   sudo systemctl status exchange --no-pager
 '
 ```
@@ -56,6 +63,10 @@ The deployed backend should define at least:
 - `STORAGE_BACKEND=postgres`
 - `ADMIN_API_TOKEN`
 - `WS_BROADCAST_BUFFER`
+- `WS_MARKET_DELTA_BATCH_INTERVAL_MS=100`
+- `WS_MARKET_BROADCAST_WORKERS`
+- `MARKET_DATA_SERVICE_SOCKET=/tmp/exchange-marketdata.sock`
+- `MARKET_DATA_SERVICE_RETRY_BACKOFF_MS`
 - `PER_USER_REQUESTS_PER_SECOND`
 - `POSTGRES_WRITE_BATCH_SIZE`
 - `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
@@ -68,14 +79,14 @@ Service status:
 
 ```bash
 ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
-  'sudo systemctl status exchange --no-pager'
+  "sudo systemctl status market-data-service --no-pager && sudo systemctl status exchange --no-pager"
 ```
 
 Logs:
 
 ```bash
 ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 \
-  'sudo journalctl -u exchange -f'
+  "sudo journalctl -u market-data-service -f & sudo journalctl -u exchange -f"
 ```
 
 ## Current public edge

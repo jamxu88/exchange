@@ -1,6 +1,7 @@
 use crate::admin::AdminMessageEntry;
 use crate::orderbook::{BookLevel, Fill, Order, Side};
 use crate::trading::OrderType;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -67,6 +68,7 @@ pub enum ServerMessage {
     Delta {
         channel: String,
         market: String,
+        start_sequence: u64,
         sequence: u64,
         events: Vec<BookDelta>,
     },
@@ -110,8 +112,55 @@ pub enum ServerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BroadcastEvent {
     pub market: String,
+    pub start_sequence: u64,
     pub sequence: u64,
-    pub event: BookDelta,
+    pub events: Vec<BookDelta>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketEventRemoveReason {
+    Filled,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MarketEvent {
+    OrderAdded {
+        order_id: Uuid,
+        side: Side,
+        price: u64,
+        remaining: u64,
+        created_at: DateTime<Utc>,
+    },
+    OrderUpdated {
+        order_id: Uuid,
+        side: Side,
+        price: u64,
+        remaining: u64,
+    },
+    OrderRemoved {
+        order_id: Uuid,
+        side: Side,
+        price: u64,
+        reason: MarketEventRemoveReason,
+    },
+    Trade {
+        maker_order_id: Uuid,
+        taker_order_id: Uuid,
+        taker_side: Side,
+        price: u64,
+        quantity: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MarketEventEnvelope {
+    pub market: String,
+    pub sequence: u64,
+    pub recorded_at: DateTime<Utc>,
+    pub event: MarketEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

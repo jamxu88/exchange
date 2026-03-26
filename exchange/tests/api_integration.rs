@@ -22,7 +22,7 @@ use exchange::{
     orderbook::{Fill, Order, Side},
     rest::HealthResponse,
     settlement::SettlementEngine,
-    state::{AppState, NET_POSITION_LIMIT, PortfolioSnapshot, Position},
+    state::{AppState, Balance, NET_POSITION_LIMIT, PortfolioSnapshot, Position},
     trading::{
         AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, OrderType, SubmitOrderRequest,
         SubmitOrderResponse,
@@ -37,6 +37,10 @@ fn test_state() -> AppState {
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 64,
+        ws_market_delta_batch_interval_ms: 10,
+        ws_market_broadcast_workers: 1,
+        market_data_service_socket: None,
+        market_data_service_retry_backoff_ms: 250,
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
@@ -58,6 +62,10 @@ fn rate_limited_state(per_user_requests_per_second: u64) -> AppState {
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 64,
+        ws_market_delta_batch_interval_ms: 10,
+        ws_market_broadcast_workers: 1,
+        market_data_service_socket: None,
+        market_data_service_retry_backoff_ms: 250,
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
@@ -204,6 +212,85 @@ async fn balance_endpoint_requires_authentication() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn balance_endpoint_returns_seeded_balances() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "balance-user");
+    state.storage.put_balance(
+        trader.profile.trader_id,
+        Balance {
+            asset: "BTC".to_string(),
+            free: 3,
+            locked: 1,
+        },
+    );
+    state.storage.put_balance(
+        trader.profile.trader_id,
+        Balance {
+            asset: "USD".to_string(),
+            free: 1_000,
+            locked: 25,
+        },
+    );
+
+    let response = app
+        .oneshot(api_key_request(
+            Method::GET,
+            "/api/v1/balance",
+            &trader.profile.api_key,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let balances: Vec<Balance> = json_body(response).await;
+    assert_eq!(balances.len(), 2);
+    assert!(
+        balances
+            .iter()
+            .any(|balance| balance.asset == "BTC" && balance.free == 3 && balance.locked == 1)
+    );
+    assert!(
+        balances
+            .iter()
+            .any(|balance| balance.asset == "USD" && balance.free == 1_000 && balance.locked == 25)
+    );
+}
+
+#[tokio::test]
+async fn authenticated_routes_reject_invalid_api_keys() {
+    let app = build_app(test_state());
+
+    let profile_response = app
+        .clone()
+        .oneshot(api_key_request(Method::GET, "/api/v1/user", "invalid"))
+        .await
+        .expect("response");
+    assert_eq!(profile_response.status(), StatusCode::UNAUTHORIZED);
+    let profile_error: exchange::rest::ApiError = json_body(profile_response).await;
+    assert_eq!(profile_error.error, "invalid api key");
+
+    let order_response = app
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            "invalid",
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(order_response.status(), StatusCode::UNAUTHORIZED);
+    let order_error: exchange::rest::ApiError = json_body(order_response).await;
+    assert_eq!(order_error.error, "invalid api key");
 }
 
 #[tokio::test]
@@ -663,6 +750,64 @@ async fn provisioned_api_key_can_read_profile() {
 }
 
 #[tokio::test]
+async fn submit_order_rejects_malformed_json_and_invalid_enum_values() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "invalid-payload-user");
+
+    let malformed_json = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v1/orders")
+                .header("x-api-key", trader.profile.api_key.clone())
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"market":"BTC-USD""#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(malformed_json.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_side = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v1/orders")
+                .header("x-api-key", trader.profile.api_key.clone())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"market":"BTC-USD","side":"HOLD","price":100,"quantity":1}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(invalid_side.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let invalid_order_type = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v1/orders")
+                .header("x-api-key", trader.profile.api_key.clone())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"market":"BTC-USD","side":"BUY","order_type":"stop","price":100,"quantity":1}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(
+        invalid_order_type.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
 async fn api_key_request_can_access_positions() {
     let state = test_state();
     let app = build_app(state.clone());
@@ -688,6 +833,350 @@ async fn api_key_request_can_access_positions() {
     let positions: Vec<Position> = json_body(response).await;
     assert_eq!(positions.len(), 1);
     assert_eq!(positions[0].market, "BTC-USD");
+}
+
+#[tokio::test]
+async fn submit_order_rejects_invalid_market_states_and_order_constraints() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "constraint-user");
+    let now = Utc::now();
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "SOL-USD".to_string(),
+        display_name: "Solana".to_string(),
+        base_asset: "SOL".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 5,
+        min_order_quantity: 10,
+        reference_price: Some(25),
+        settlement_price: None,
+        status: MarketStatus::Enabled,
+        created_at: now,
+        updated_at: now,
+    });
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "DOGE-USD".to_string(),
+        display_name: "Dogecoin".to_string(),
+        base_asset: "DOGE".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: Some(1),
+        settlement_price: None,
+        status: MarketStatus::Disabled,
+        created_at: now,
+        updated_at: now,
+    });
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "ADA-USD".to_string(),
+        display_name: "Cardano".to_string(),
+        base_asset: "ADA".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: Some(2),
+        settlement_price: Some(3),
+        status: MarketStatus::Settled,
+        created_at: now,
+        updated_at: now,
+    });
+
+    let invalid_symbol = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "not a symbol".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_symbol.status(), StatusCode::BAD_REQUEST);
+    let invalid_symbol_error: exchange::rest::ApiError = json_body(invalid_symbol).await;
+    assert_eq!(invalid_symbol_error.error, "invalid market symbol");
+
+    let not_configured = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "XRP-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(not_configured.status(), StatusCode::NOT_FOUND);
+    let not_configured_error: exchange::rest::ApiError = json_body(not_configured).await;
+    assert_eq!(not_configured_error.error, "market is not configured");
+
+    let disabled = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "DOGE-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 1,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(disabled.status(), StatusCode::CONFLICT);
+    let disabled_error: exchange::rest::ApiError = json_body(disabled).await;
+    assert_eq!(disabled_error.error, "market is disabled");
+
+    let settled = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "ADA-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 3,
+                quantity: 1,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(settled.status(), StatusCode::CONFLICT);
+    let settled_error: exchange::rest::ApiError = json_body(settled).await;
+    assert_eq!(settled_error.error, "market has already been settled");
+
+    let zero_price = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOL-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 0,
+                quantity: 10,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(zero_price.status(), StatusCode::BAD_REQUEST);
+    let zero_price_error: exchange::rest::ApiError = json_body(zero_price).await;
+    assert_eq!(zero_price_error.error, "price must be greater than zero");
+
+    let tick_violation = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOL-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 26,
+                quantity: 10,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(tick_violation.status(), StatusCode::BAD_REQUEST);
+    let tick_violation_error: exchange::rest::ApiError = json_body(tick_violation).await;
+    assert_eq!(
+        tick_violation_error.error,
+        "price must align to tick size 5"
+    );
+
+    let minimum_quantity = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOL-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 25,
+                quantity: 9,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(minimum_quantity.status(), StatusCode::BAD_REQUEST);
+    let minimum_quantity_error: exchange::rest::ApiError = json_body(minimum_quantity).await;
+    assert_eq!(minimum_quantity_error.error, "quantity must be at least 10");
+
+    let zero_quantity = app
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOL-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 25,
+                quantity: 0,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(zero_quantity.status(), StatusCode::BAD_REQUEST);
+    let zero_quantity_error: exchange::rest::ApiError = json_body(zero_quantity).await;
+    assert_eq!(
+        zero_quantity_error.error,
+        "quantity must be greater than zero"
+    );
+}
+
+#[tokio::test]
+async fn rest_market_orders_require_liquidity_and_fill_at_available_prices() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "rest-market-maker");
+    let taker = provision_user(&state, "rest-market-taker");
+
+    let no_liquidity = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &taker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Market,
+                price: 0,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(no_liquidity.status(), StatusCode::BAD_REQUEST);
+    let no_liquidity_error: exchange::rest::ApiError = json_body(no_liquidity).await;
+    assert_eq!(
+        no_liquidity_error.error,
+        "market order could not be filled because no opposite-side liquidity is available"
+    );
+
+    let maker_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(maker_submit.status(), StatusCode::CREATED);
+
+    let taker_submit = app
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &taker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Market,
+                price: 0,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(taker_submit.status(), StatusCode::CREATED);
+    let submitted: SubmitOrderResponse = json_body(taker_submit).await;
+    assert!(!submitted.resting);
+    assert_eq!(submitted.order.remaining, 0);
+    assert_eq!(submitted.order.price, 100);
+    assert_eq!(submitted.fills.len(), 1);
+    assert_eq!(submitted.fills[0].price, 100);
+    assert_eq!(submitted.fills[0].quantity, 2);
+}
+
+#[tokio::test]
+async fn amend_order_rejects_zero_and_increasing_remaining_values() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "amend-constraint-user");
+
+    let submit_response = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 5,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(submit_response.status(), StatusCode::CREATED);
+    let submitted: SubmitOrderResponse = json_body(submit_response).await;
+
+    let zero_remaining = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::PATCH,
+            format!("/api/v1/orders/{}", submitted.order.id),
+            &trader.profile.api_key,
+            &AmendOrderRequest { remaining: 0 },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(zero_remaining.status(), StatusCode::BAD_REQUEST);
+    let zero_remaining_error: exchange::rest::ApiError = json_body(zero_remaining).await;
+    assert_eq!(
+        zero_remaining_error.error,
+        "remaining quantity must be greater than zero"
+    );
+
+    let increase_remaining = app
+        .oneshot(api_key_json_request(
+            Method::PATCH,
+            format!("/api/v1/orders/{}", submitted.order.id),
+            &trader.profile.api_key,
+            &AmendOrderRequest { remaining: 6 },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(increase_remaining.status(), StatusCode::BAD_REQUEST);
+    let increase_remaining_error: exchange::rest::ApiError = json_body(increase_remaining).await;
+    assert_eq!(
+        increase_remaining_error.error,
+        "cannot increase remaining quantity"
+    );
 }
 
 #[tokio::test]

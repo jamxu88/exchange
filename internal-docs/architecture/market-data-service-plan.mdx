@@ -1,0 +1,206 @@
+---
+title: "Market Data Service Plan"
+description: "Target architecture and rollout plan for splitting browser book updates from a true competitor L3 feed."
+---
+
+## Goal
+
+Split market data out of the exchange core so we can serve two different products from one canonical event stream:
+
+- a browser-friendly aggregated feed that updates on a coarse cadence, around `100ms`
+- a high-fidelity competitor feed with true public L3 order events
+
+The exchange core should remain authoritative for matching, risk, and persistence. Market-data shaping, replay, snapshots, and fanout should move to a separate market-data service.
+
+## Why we are doing this
+
+The current exchange is optimized around one browser-oriented feed:
+
+- the public market channel is still named `l3`, but it is actually an aggregated price-level book
+- the current browser client benefits from batching and slower visible updates
+- advanced competitors want exact order-level state so they can build their own book models, queue-position heuristics, and execution strategies
+
+Trying to make one feed satisfy both audiences is the wrong design:
+
+- browser clients should not be asked to process raw per-order traffic
+- a true L3 feed should not be constrained by browser rendering limits
+- the exchange core should not own direct fanout to every client type
+
+## Target topology
+
+### Exchange core
+
+The core owns:
+
+- order validation
+- matching
+- market risk and exposure checks
+- durable state writes
+- one canonical ordered market-event stream per market
+
+The core does **not** own:
+
+- browser-specific aggregation windows
+- raw feed fanout policy
+- replay and snapshot service for market data clients
+
+### Market-data service
+
+The market-data service consumes the canonical market-event stream and maintains its own in-memory derived books.
+
+It exposes two feed products:
+
+1. Browser book feed
+
+- aggregated by price level
+- targeted for UI stability, not minimum latency
+- flushed on a coarse cadence, currently planned around `100ms`
+- should eventually move off the `l3` name and onto a distinct browser/book channel such as `book` or `l2`
+
+2. Competitor raw L3 feed
+
+- true per-order add, update, remove, and trade events
+- replay/snapshot aware
+- intended for native clients, bots, and serious competitor infrastructure
+- should own the `l3` name once it exists
+
+## Canonical market event stream
+
+The split starts with one internal event stream emitted by the exchange core.
+
+The canonical event model should describe exact market state transitions, not aggregated book levels.
+
+Required event families:
+
+- `order_added`
+- `order_updated`
+- `order_removed`
+- `trade`
+
+Required fields:
+
+- market
+- per-market sequence
+- recorded timestamp
+- public order id
+- side
+- price
+- visible remaining quantity where applicable
+
+Important constraint:
+
+- do **not** expose trader ids on the public raw feed
+
+The exchange core may still carry trader ownership internally for settlement and user events, but the canonical market-data contract should be shaped so that it can become public without leaking account identity.
+
+## Feed semantics
+
+### Browser feed
+
+Browser clients should receive:
+
+- aggregated price-level snapshots
+- aggregated price-level deltas
+- slower cadence, about `100ms`
+- fewer messages with stronger UI stability
+
+This feed is for rendering and interaction, not for microstructure research.
+
+### Raw L3 feed
+
+Competitors should receive:
+
+- exact per-order add/update/remove messages
+- trade messages with maker order id and taker side
+- strict per-market sequencing
+- snapshot plus incremental replay or snapshot plus live resume
+
+This is the feed that enables creative competitor solutions.
+
+## Recovery model
+
+The market-data service should own:
+
+- short replay buffers per market
+- snapshot generation per market
+- replay-aware subscription flow using `last_sequence`
+- explicit resync when replay is unavailable
+
+The exchange core should not be responsible for reconstructing market-data state for client sessions.
+
+## Transport direction
+
+Browser transport can stay:
+
+- WebSocket
+- JSON
+
+Raw L3 should target:
+
+- a separate transport path from the browser feed
+- binary framing when scale matters
+- native clients first
+
+We should not design the raw L3 feed around browser constraints.
+
+## Rollout plan
+
+### Phase 1: canonical events inside the exchange core
+
+Add an internal per-market event stream with exact order-level events while keeping the existing aggregated browser feed untouched.
+
+This phase creates the seam the market-data service will consume later.
+
+### Phase 2: in-process derived feed service
+
+Consume canonical events in-process and derive:
+
+- the current aggregated browser feed
+- an internal raw L3 feed prototype
+
+This lets us validate event semantics before introducing a second process.
+
+### Phase 3: external market-data service
+
+Move the derived feed logic into a separate process that consumes the canonical event stream from the exchange core over a local reliable transport.
+
+Current status:
+
+- implemented as a local Unix domain socket bridge
+- the exchange core can publish canonical market events to the external service
+- the external service derives aggregated browser-book deltas and snapshot responses
+- the core WebSocket API can consume those snapshots and deltas while keeping the public socket contract unchanged
+
+Likely first transport:
+
+- Unix domain socket or local TCP stream
+
+Not the first target:
+
+- Kafka
+- UDP unicast
+
+### Phase 4: public channel cleanup
+
+Once real raw L3 exists:
+
+- reserve `l3` for the true per-order feed
+- rename the browser-facing aggregated feed to a book-specific name
+- update public docs and clients accordingly
+
+## Non-goals for the current external split
+
+- shipping the external market-data process immediately
+- replacing the current browser feed immediately
+- adding public replay APIs immediately
+- solving every user-event fanout bottleneck in the same change
+
+## Immediate implementation target
+
+The first code change should be:
+
+- add a canonical market-event stream to the exchange core
+- emit exact order-level events from submit, amend, cancel, and trade paths
+- keep the existing aggregated feed in place
+
+That gives us a stable internal contract to build the separate market-data service against.

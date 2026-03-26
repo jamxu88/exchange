@@ -49,6 +49,7 @@ Even though `channel` is `l3`, `bids` and `asks` are aggregated price levels, no
   "type": "delta",
   "channel": "l3",
   "market": "BTC-USD",
+  "start_sequence": 1,
   "sequence": 1,
   "events": [
     {
@@ -66,7 +67,11 @@ Even though `channel` is `l3`, `bids` and `asks` are aggregated price levels, no
 }
 ```
 
+`start_sequence` is the sequence number of the first event in the batch, and `sequence` is the last applied sequence in that same batch.
+
 `level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book. These are price-level updates, not per-order add, amend, or remove events.
+
+The exchange derives browser-facing market data from the canonical order-event stream, batches contiguous market-data events per market, and flushes them roughly every `100ms`, so a single `delta` can contain multiple ordered events.
 
 ## `fill`
 
@@ -153,6 +158,7 @@ Use [Recovery and resync](/reference/recovery-and-resync) for the recommended cl
 
 - `heartbeat` means the connection is still alive.
 - `snapshot` and `delta` are the market-data source of truth while the subscription is healthy.
+- For `delta`, verify that `start_sequence` is exactly one greater than your last applied market sequence, then apply all `events` in order and store `sequence` as the new last applied value.
 - `fill` and `order_state` are the user-scoped state feed after authentication.
 - `admin_message` can change the practical trading environment even before you refresh REST state.
 - `resync_required` means your local state is no longer trustworthy and must be rebuilt.

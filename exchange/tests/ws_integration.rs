@@ -37,6 +37,10 @@ fn test_state_with_rate_limit(per_user_requests_per_second: u64) -> AppState {
         database_url: "postgres://test".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 64,
+        ws_market_delta_batch_interval_ms: 10,
+        ws_market_broadcast_workers: 1,
+        market_data_service_socket: None,
+        market_data_service_retry_backoff_ms: 250,
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
@@ -196,6 +200,47 @@ async fn websocket_authenticate_and_subscribe_round_trip() {
 }
 
 #[tokio::test]
+async fn websocket_reports_invalid_messages_and_recovers_for_valid_authentication() {
+    let state = test_state();
+    let trader = provision_user(&state, "recovering-socket-user");
+    let (url, server) = spawn_server(state).await;
+    let mut socket = connect_socket(&url).await;
+
+    socket
+        .send(Message::Text(r#"{"op":"submit_order""#.to_string().into()))
+        .await
+        .expect("send malformed text");
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Error {
+            code: "invalid_message".to_string(),
+            message: "invalid websocket message".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "authenticate",
+            "api_key": "invalid",
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Error {
+            code: "invalid_api_key".to_string(),
+            message: "invalid websocket api key".to_string(),
+        }
+    );
+
+    authenticate(&mut socket, &trader.profile.api_key).await;
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn websocket_submit_amend_cancel_flow_is_end_to_end() {
     let state = test_state();
     let trader = provision_user(&state, "edit-user");
@@ -285,6 +330,306 @@ async fn websocket_submit_amend_cancel_flow_is_end_to_end() {
         }
         other => panic!("unexpected cancel state: {other:?}"),
     }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_rejects_invalid_payloads_and_market_state_conflicts() {
+    let state = test_state();
+    let trader = provision_user(&state, "invalid-ws-order-user");
+    let now = Utc::now();
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "SOL-USD".to_string(),
+        display_name: "Solana".to_string(),
+        base_asset: "SOL".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 5,
+        min_order_quantity: 10,
+        reference_price: Some(25),
+        settlement_price: None,
+        status: MarketStatus::Enabled,
+        created_at: now,
+        updated_at: now,
+    });
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "DOGE-USD".to_string(),
+        display_name: "Dogecoin".to_string(),
+        base_asset: "DOGE".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: Some(1),
+        settlement_price: None,
+        status: MarketStatus::Disabled,
+        created_at: now,
+        updated_at: now,
+    });
+    state.storage.upsert_market(MarketDefinition {
+        market_id: "ADA-USD".to_string(),
+        display_name: "Cardano".to_string(),
+        base_asset: "ADA".to_string(),
+        quote_asset: "USD".to_string(),
+        tick_size: 1,
+        min_order_quantity: 1,
+        reference_price: Some(2),
+        settlement_price: Some(3),
+        status: MarketStatus::Settled,
+        created_at: now,
+        updated_at: now,
+    });
+
+    let (url, server) = spawn_server(state).await;
+    let mut socket = connect_socket(&url).await;
+    authenticate(&mut socket, &trader.profile.api_key).await;
+
+    socket
+        .send(Message::Text(
+            r#"{"op":"submit_order","request_id":"bad-type","market":"BTC-USD","side":"BUY","order_type":"stop","price":100,"quantity":1}"#
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("send invalid order_type");
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Error {
+            code: "invalid_message".to_string(),
+            message: "invalid websocket message".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "bad-symbol",
+            "market": "not a symbol",
+            "side": "BUY",
+            "price": 100,
+            "quantity": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("bad-symbol".to_string()),
+            code: "invalid_market".to_string(),
+            message: "invalid market symbol".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "not-configured",
+            "market": "XRP-USD",
+            "side": "BUY",
+            "price": 100,
+            "quantity": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("not-configured".to_string()),
+            code: "market_not_configured".to_string(),
+            message: "market is not configured".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "disabled-market",
+            "market": "DOGE-USD",
+            "side": "BUY",
+            "price": 1,
+            "quantity": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("disabled-market".to_string()),
+            code: "market_disabled".to_string(),
+            message: "market is disabled".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "settled-market",
+            "market": "ADA-USD",
+            "side": "BUY",
+            "price": 3,
+            "quantity": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("settled-market".to_string()),
+            code: "market_settled".to_string(),
+            message: "market has already been settled".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "zero-quantity",
+            "market": "SOL-USD",
+            "side": "BUY",
+            "price": 25,
+            "quantity": 0,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("zero-quantity".to_string()),
+            code: "invalid_quantity".to_string(),
+            message: "quantity must be greater than zero".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "tick-violation",
+            "market": "SOL-USD",
+            "side": "BUY",
+            "price": 26,
+            "quantity": 10,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("tick-violation".to_string()),
+            code: "tick_size_violation".to_string(),
+            message: "price must align to tick size 5".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "below-minimum",
+            "market": "SOL-USD",
+            "side": "BUY",
+            "price": 25,
+            "quantity": 9,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("below-minimum".to_string()),
+            code: "quantity_below_minimum".to_string(),
+            message: "quantity must be at least 10".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "submit_order",
+            "request_id": "no-liquidity",
+            "market": "BTC-USD",
+            "side": "BUY",
+            "order_type": "market",
+            "price": 0,
+            "quantity": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "submit_order".to_string(),
+            request_id: Some("no-liquidity".to_string()),
+            code: "no_liquidity".to_string(),
+            message:
+                "market order could not be filled because no opposite-side liquidity is available"
+                    .to_string(),
+        }
+    );
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_amend_and_cancel_reject_missing_orders() {
+    let state = test_state();
+    let trader = provision_user(&state, "missing-order-user");
+    let (url, server) = spawn_server(state).await;
+    let mut socket = connect_socket(&url).await;
+    authenticate(&mut socket, &trader.profile.api_key).await;
+    let missing_order_id = uuid::Uuid::new_v4();
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "amend_order",
+            "request_id": "missing-amend",
+            "order_id": missing_order_id,
+            "remaining": 1,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "amend_order".to_string(),
+            request_id: Some("missing-amend".to_string()),
+            code: "order_not_found".to_string(),
+            message: "order not found".to_string(),
+        }
+    );
+
+    send_json(
+        &mut socket,
+        json!({
+            "op": "cancel_order",
+            "request_id": "missing-cancel",
+            "order_id": missing_order_id,
+        }),
+    )
+    .await;
+    assert_eq!(
+        next_server_message(&mut socket).await,
+        ServerMessage::Reject {
+            op: "cancel_order".to_string(),
+            request_id: Some("missing-cancel".to_string()),
+            code: "order_not_found".to_string(),
+            message: "order not found".to_string(),
+        }
+    );
 
     server.abort();
     let _ = server.await;

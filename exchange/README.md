@@ -22,6 +22,10 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Matching engine + in-memory orderbook skeleton
 - PostgreSQL-oriented repository abstraction for user/position/order/fill state
 - Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
+- Canonical per-market order-event stream inside the exchange core
+- Derived browser market-data feed built from that canonical stream
+- Optional external market-data service over a local Unix socket, with the core WebSocket API bridged onto it
+- Dedicated market-data broadcast worker threads with per-market delta batching and fanout separate from the main exchange path
 - OpenAPI docs + Swagger UI at `/docs`
 - REST endpoints for trader visibility:
   - `GET /api/v1/markets`
@@ -53,7 +57,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - market-data flow:
     - send `{"op":"subscribe","channel":"l3","market":"BTC-USD"}`
     - receive one snapshot
-    - then receive live sequenced deltas only
+    - then receive live sequenced delta batches with `start_sequence` and `sequence`
     - if the server detects a gap or receiver lag, it sends `resync_required`
     - client should resubscribe to get a fresh snapshot; no replay endpoint is provided
   - authenticated socket flow:
@@ -152,6 +156,14 @@ Current note: GitHub access on the EC2 host is temporarily configured with a sto
 cargo run
 ```
 
+To run the first split-process setup locally:
+
+```bash
+export MARKET_DATA_SERVICE_SOCKET=/tmp/exchange-marketdata.sock
+cargo run --bin market-data-service &
+cargo run
+```
+
 Then open:
 
 - `http://localhost:8080/health`
@@ -162,6 +174,12 @@ Key environment variables:
 - `ADMIN_API_TOKEN`
 - `STORAGE_BACKEND=in_memory|postgres`
 - `DATABASE_URL`
+- `MARKET_DATA_SERVICE_SOCKET`
+  Optional Unix socket path for the external market-data service bridge. If unset, the exchange keeps using the in-process derived feed.
+- `MARKET_DATA_SERVICE_RETRY_BACKOFF_MS`
+- `WS_MARKET_DELTA_BATCH_INTERVAL_MS`
+  Browser-market-data flush interval in milliseconds. Defaults to `100`.
+- `WS_MARKET_BROADCAST_WORKERS`
 - `POSTGRES_WRITE_BATCH_SIZE`
 - `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
 - `POSTGRES_WRITE_QUEUE_CAPACITY`

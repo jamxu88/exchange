@@ -1,5 +1,5 @@
 use crate::admin::{MarketDefinition, MarketStatus};
-use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
+use crate::marketdata::{MarketEvent, MarketEventRemoveReason, OrderStateStatus, ServerMessage};
 use crate::matching::{MatchExecution, MatchingEngine};
 use crate::orderbook::{BookLevel, Fill, Order, OrderBook, Side};
 use crate::settlement::{SettlementError, apply_fill_to_position, should_persist_position};
@@ -575,6 +575,9 @@ fn validate_submit_market(
             });
         }
     }
+    if request.quantity == 0 {
+        return Err(TradingError::InvalidQuantity);
+    }
     if request.quantity > MAX_PERSISTABLE_U64 {
         return Err(TradingError::QuantityTooLarge {
             maximum: MAX_PERSISTABLE_U64,
@@ -656,30 +659,73 @@ fn sync_position(state: &AppState, trader_id: Uuid, market: &str, position: Opti
     }
 }
 
-fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
-    state.dispatch_market_delta(market, event);
-}
-
-fn publish_level_update(
-    state: &AppState,
-    orderbook: &OrderBook,
-    market: &str,
-    side: Side,
-    price: u64,
-) {
-    publish_market_delta(
-        state,
-        market,
-        BookDelta::LevelUpdated {
-            side,
-            price,
-            quantity: orderbook.level_quantity(side, price),
-        },
-    );
+fn publish_market_event(state: &AppState, market: &str, event: MarketEvent) {
+    state.dispatch_market_event(market, event);
 }
 
 fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage) {
     state.dispatch_user_event(trader_id, message);
+}
+
+fn publish_order_added(state: &AppState, order: &Order) {
+    publish_market_event(
+        state,
+        &order.market,
+        MarketEvent::OrderAdded {
+            order_id: order.id,
+            side: order.side,
+            price: order.price,
+            remaining: order.remaining,
+            created_at: order.created_at,
+        },
+    );
+}
+
+fn publish_order_updated(state: &AppState, order: &Order) {
+    publish_market_event(
+        state,
+        &order.market,
+        MarketEvent::OrderUpdated {
+            order_id: order.id,
+            side: order.side,
+            price: order.price,
+            remaining: order.remaining,
+        },
+    );
+}
+
+fn publish_order_removed(
+    state: &AppState,
+    market: &str,
+    order_id: Uuid,
+    side: Side,
+    price: u64,
+    reason: MarketEventRemoveReason,
+) {
+    publish_market_event(
+        state,
+        market,
+        MarketEvent::OrderRemoved {
+            order_id,
+            side,
+            price,
+            reason,
+        },
+    );
+}
+
+fn publish_trade_event(state: &AppState, fill: &Fill, taker_side: Side) {
+    publish_market_event(
+        state,
+        &fill.market,
+        MarketEvent::Trade {
+            maker_order_id: fill.maker_order_id,
+            taker_order_id: fill.taker_order_id,
+            taker_side,
+            price: fill.price,
+            quantity: fill.quantity,
+        },
+    );
 }
 
 fn publish_user_order_state(
@@ -892,21 +938,23 @@ fn process_submit_order(
                 ServerMessage::Fill { fill: fill.clone() },
             );
 
-            publish_level_update(
-                state,
-                orderbook,
-                &order.market,
-                execution.maker_side,
-                execution.maker_limit_price,
-            );
-            publish_market_delta(
-                state,
-                &order.market,
-                BookDelta::Trade {
-                    price: fill.price,
-                    quantity: fill.quantity,
-                },
-            );
+            let maker_resting_state = maker_orders
+                .get(&execution.maker_order_id)
+                .cloned()
+                .flatten();
+            if let Some(maker_resting_state) = maker_resting_state.as_ref() {
+                publish_order_updated(state, maker_resting_state);
+            } else {
+                publish_order_removed(
+                    state,
+                    &order.market,
+                    execution.maker_order_id,
+                    execution.maker_side,
+                    execution.maker_limit_price,
+                    MarketEventRemoveReason::Filled,
+                );
+            }
+            publish_trade_event(state, fill, order.side);
         }
 
         for execution in &executions {
@@ -943,13 +991,7 @@ fn process_submit_order(
                 resting_order.side,
                 resting_order.remaining,
             );
-            publish_level_update(
-                state,
-                orderbook,
-                &order.market,
-                resting_order.side,
-                resting_order.price,
-            );
+            publish_order_added(state, resting_order);
         }
         let completed_order = resting_order.clone().unwrap_or(Order {
             remaining: 0,
@@ -1031,12 +1073,13 @@ fn process_cancel_order(
             removed.clone(),
             OrderStateStatus::Canceled,
         );
-        publish_level_update(
+        publish_order_removed(
             state,
-            orderbook,
             &removed.market,
+            removed.id,
             removed.side,
             removed.price,
+            MarketEventRemoveReason::Canceled,
         );
 
         Ok(CancelOrderResponse { order: removed })
@@ -1086,7 +1129,7 @@ fn process_amend_order(
         exposure_book.remove_pending(trader_id, before.side, before.remaining - after.remaining)?;
         sync_open_order(state, trader_id, order_id, Some(after.clone()), None);
         publish_user_order_state(state, trader_id, after.clone(), OrderStateStatus::Open);
-        publish_level_update(state, orderbook, &after.market, after.side, after.price);
+        publish_order_updated(state, &after);
 
         Ok(AmendOrderResponse { order: after })
     })();
@@ -1105,7 +1148,7 @@ mod tests {
     use super::*;
     use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
-    use crate::marketdata::BookDelta;
+    use crate::marketdata::{BookDelta, MarketEvent, MarketEventRemoveReason};
     use crate::state::Position;
     use chrono::Utc;
 
@@ -1115,6 +1158,10 @@ mod tests {
             database_url: "postgres://test".to_string(),
             storage_backend: crate::storage::StorageBackendKind::InMemory,
             ws_broadcast_buffer: 64,
+            ws_market_delta_batch_interval_ms: 10,
+            ws_market_broadcast_workers: 1,
+            market_data_service_socket: None,
+            market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
             persistence_dispatch_queue_capacity: 4_096,
@@ -1362,6 +1409,10 @@ mod tests {
                 database_url: "postgres://test".to_string(),
                 storage_backend: crate::storage::StorageBackendKind::InMemory,
                 ws_broadcast_buffer: 64,
+                ws_market_delta_batch_interval_ms: 10,
+                ws_market_broadcast_workers: 1,
+                market_data_service_socket: None,
+                market_data_service_retry_backoff_ms: 250,
                 runtime_dispatch_queue_capacity: 4_096,
                 account_dispatch_queue_capacity: 4_096,
                 persistence_dispatch_queue_capacity: 4_096,
@@ -1587,16 +1638,18 @@ mod tests {
         .expect("submit should succeed");
         let add_event = rx.recv().await.expect("add event");
         assert_eq!(add_event.market, "BTC-USD");
+        assert_eq!(add_event.start_sequence, 1);
         assert_eq!(add_event.sequence, 1);
-        match add_event.event {
+        assert_eq!(add_event.events.len(), 1);
+        match &add_event.events[0] {
             BookDelta::LevelUpdated {
                 side,
                 price,
                 quantity,
             } => {
-                assert_eq!(side, Side::Buy);
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 5);
+                assert_eq!(*side, Side::Buy);
+                assert_eq!(*price, 100);
+                assert_eq!(*quantity, 5);
             }
             other => panic!("unexpected add event: {other:?}"),
         }
@@ -1610,16 +1663,18 @@ mod tests {
         .await
         .expect("amend should succeed");
         let update_event = rx.recv().await.expect("update event");
+        assert_eq!(update_event.start_sequence, 2);
         assert_eq!(update_event.sequence, 2);
-        match update_event.event {
+        assert_eq!(update_event.events.len(), 1);
+        match &update_event.events[0] {
             BookDelta::LevelUpdated {
                 side,
                 price,
                 quantity,
             } => {
-                assert_eq!(side, Side::Buy);
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 2);
+                assert_eq!(*side, Side::Buy);
+                assert_eq!(*price, 100);
+                assert_eq!(*quantity, 2);
             }
             other => panic!("unexpected update event: {other:?}"),
         }
@@ -1628,18 +1683,198 @@ mod tests {
             .await
             .expect("cancel should succeed");
         let remove_event = rx.recv().await.expect("remove event");
+        assert_eq!(remove_event.start_sequence, 3);
         assert_eq!(remove_event.sequence, 3);
-        match remove_event.event {
+        assert_eq!(remove_event.events.len(), 1);
+        match &remove_event.events[0] {
             BookDelta::LevelUpdated {
                 side,
                 price,
                 quantity,
             } => {
-                assert_eq!(side, Side::Buy);
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 0);
+                assert_eq!(*side, Side::Buy);
+                assert_eq!(*price, 100);
+                assert_eq!(*quantity, 0);
             }
             other => panic!("unexpected remove event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_amend_cancel_publish_canonical_market_events_in_sequence() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        let mut rx = state.market_event_tx.subscribe();
+
+        let submitted = TradingService::submit_limit_order(
+            &state,
+            trader_id,
+            SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 5,
+            },
+        )
+        .await
+        .expect("submit should succeed");
+
+        let add_event = rx.recv().await.expect("add event");
+        assert_eq!(add_event.market, "BTC-USD");
+        assert_eq!(add_event.sequence, 1);
+        match add_event.event {
+            MarketEvent::OrderAdded {
+                order_id,
+                side,
+                price,
+                remaining,
+                ..
+            } => {
+                assert_eq!(order_id, submitted.order.id);
+                assert_eq!(side, Side::Buy);
+                assert_eq!(price, 100);
+                assert_eq!(remaining, 5);
+            }
+            other => panic!("unexpected add market event: {other:?}"),
+        }
+
+        TradingService::amend_order(
+            &state,
+            trader_id,
+            submitted.order.id,
+            AmendOrderRequest { remaining: 2 },
+        )
+        .await
+        .expect("amend should succeed");
+
+        let update_event = rx.recv().await.expect("update event");
+        assert_eq!(update_event.sequence, 2);
+        match update_event.event {
+            MarketEvent::OrderUpdated {
+                order_id,
+                side,
+                price,
+                remaining,
+            } => {
+                assert_eq!(order_id, submitted.order.id);
+                assert_eq!(side, Side::Buy);
+                assert_eq!(price, 100);
+                assert_eq!(remaining, 2);
+            }
+            other => panic!("unexpected update market event: {other:?}"),
+        }
+
+        TradingService::cancel_order(&state, trader_id, submitted.order.id)
+            .await
+            .expect("cancel should succeed");
+
+        let remove_event = rx.recv().await.expect("remove event");
+        assert_eq!(remove_event.sequence, 3);
+        match remove_event.event {
+            MarketEvent::OrderRemoved {
+                order_id,
+                side,
+                price,
+                reason,
+            } => {
+                assert_eq!(order_id, submitted.order.id);
+                assert_eq!(side, Side::Buy);
+                assert_eq!(price, 100);
+                assert_eq!(reason, MarketEventRemoveReason::Canceled);
+            }
+            other => panic!("unexpected remove market event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_match_publishes_order_update_then_trade_market_events() {
+        let state = test_state();
+        let maker_id = Uuid::new_v4();
+        let taker_id = Uuid::new_v4();
+        let mut rx = state.market_event_tx.subscribe();
+
+        let maker_submit = TradingService::submit_limit_order(
+            &state,
+            maker_id,
+            SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 5,
+            },
+        )
+        .await
+        .expect("maker submit should succeed");
+
+        let maker_add_event = rx.recv().await.expect("maker add event");
+        assert_eq!(maker_add_event.sequence, 1);
+        match maker_add_event.event {
+            MarketEvent::OrderAdded {
+                order_id,
+                side,
+                price,
+                remaining,
+                ..
+            } => {
+                assert_eq!(order_id, maker_submit.order.id);
+                assert_eq!(side, Side::Sell);
+                assert_eq!(price, 100);
+                assert_eq!(remaining, 5);
+            }
+            other => panic!("unexpected maker add market event: {other:?}"),
+        }
+
+        let taker_submit = TradingService::submit_limit_order(
+            &state,
+            taker_id,
+            SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 101,
+                quantity: 2,
+            },
+        )
+        .await
+        .expect("taker submit should succeed");
+        assert!(!taker_submit.resting);
+
+        let maker_update_event = rx.recv().await.expect("maker update event");
+        assert_eq!(maker_update_event.sequence, 2);
+        match maker_update_event.event {
+            MarketEvent::OrderUpdated {
+                order_id,
+                side,
+                price,
+                remaining,
+            } => {
+                assert_eq!(order_id, maker_submit.order.id);
+                assert_eq!(side, Side::Sell);
+                assert_eq!(price, 100);
+                assert_eq!(remaining, 3);
+            }
+            other => panic!("unexpected maker update market event: {other:?}"),
+        }
+
+        let trade_event = rx.recv().await.expect("trade event");
+        assert_eq!(trade_event.sequence, 3);
+        match trade_event.event {
+            MarketEvent::Trade {
+                maker_order_id,
+                taker_order_id,
+                taker_side,
+                price,
+                quantity,
+            } => {
+                assert_eq!(maker_order_id, maker_submit.order.id);
+                assert_eq!(taker_order_id, taker_submit.order.id);
+                assert_eq!(taker_side, Side::Buy);
+                assert_eq!(price, 100);
+                assert_eq!(quantity, 2);
+            }
+            other => panic!("unexpected trade market event: {other:?}"),
         }
     }
 
@@ -1681,26 +1916,25 @@ mod tests {
         assert!(!taker_submit.resting);
 
         let remove_event = rx.recv().await.expect("remove event");
-        assert_eq!(remove_event.sequence, 2);
-        match remove_event.event {
+        assert_eq!(remove_event.start_sequence, 2);
+        assert_eq!(remove_event.sequence, 3);
+        assert_eq!(remove_event.events.len(), 2);
+        match &remove_event.events[0] {
             BookDelta::LevelUpdated {
                 side,
                 price,
                 quantity,
             } => {
-                assert_eq!(side, Side::Sell);
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 0);
+                assert_eq!(*side, Side::Sell);
+                assert_eq!(*price, 100);
+                assert_eq!(*quantity, 0);
             }
             other => panic!("unexpected remove event: {other:?}"),
         }
-
-        let trade_event = rx.recv().await.expect("trade event");
-        assert_eq!(trade_event.sequence, 3);
-        match trade_event.event {
+        match &remove_event.events[1] {
             BookDelta::Trade { price, quantity } => {
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 2);
+                assert_eq!(*price, 100);
+                assert_eq!(*quantity, 2);
             }
             other => panic!("unexpected trade event: {other:?}"),
         }

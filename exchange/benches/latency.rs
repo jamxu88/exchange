@@ -103,6 +103,8 @@ fn rest_router_latency(c: &mut Criterion) {
         database_url: "postgres://bench".to_string(),
         storage_backend: exchange::storage::StorageBackendKind::InMemory,
         ws_broadcast_buffer: 256,
+        ws_market_delta_batch_interval_ms: 10,
+        ws_market_broadcast_workers: 1,
         per_user_requests_per_second: u64::MAX,
         admin_api_token: "test-admin-token".to_string(),
     });

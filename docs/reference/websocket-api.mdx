@@ -7,6 +7,8 @@ Use WebSocket for live aggregated market data, user-scoped trade events, and low
 
 The market-data channel is named `l3`, but the current `snapshot` and `delta` payloads are aggregated by price level. Treat that feed as an L2-style book view, and use `order_state` for your own exact resting-order detail.
 
+The exchange derives browser-facing market data from the canonical order-event stream, batches contiguous market-data deltas per market, and flushes them roughly every `100ms`. One `delta` message can therefore carry multiple ordered events.
+
 ```text
 wss://exchange.jamesxu.dev/ws
 ```
@@ -27,6 +29,7 @@ wss://exchange.jamesxu.dev/ws
 
 - the server sends `heartbeat` messages
 - market data is sequenced per market
+- market-data `delta` messages can cover a contiguous sequence range with `start_sequence` through `sequence`
 - the current implementation supports one market-data subscription per connection, on the `l3` channel
 - market-data snapshots and deltas on that channel are aggregated by price level, not raw resting orders
 - after authentication, the same socket can carry market data, order actions, and user-specific events
@@ -37,7 +40,8 @@ wss://exchange.jamesxu.dev/ws
 - Keep REST available for bootstrap and recovery even if WebSocket is your primary trading path.
 - Use one socket per market if you need multiple books at the same time.
 - Treat `fill`, `order_state`, `admin_message`, and `resync_required` as required message types, not optional extras.
-- Build live book state from `snapshot` plus `delta` messages, and use `order_state` for your own exact resting-order detail.
+- Build live book state from `snapshot` plus `delta` messages, verify the next expected sequence against `start_sequence`, then advance your local sequence to `sequence`.
+- Use `order_state` for your own exact resting-order detail.
 
 ## Typical message flow
 

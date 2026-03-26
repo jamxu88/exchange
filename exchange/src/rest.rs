@@ -252,7 +252,7 @@ pub async fn get_balance(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
 ) -> impl IntoResponse {
-    Json(state.storage.list_positions(auth.trader_id))
+    Json(state.storage.list_balances(auth.trader_id))
 }
 
 #[utoipa::path(
