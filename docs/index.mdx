@@ -1,6 +1,6 @@
 ---
 title: "Exchange API"
-description: "Competitor-facing REST and WebSocket documentation for connecting to the Exchange during the trading competition."
+description: "Welcome to the Quant@Illinois Trading Competition! This year, we have added an API to our exchange. This should open up a lot of possibilities and hopefully make the experience more fun and competitive. Make sure to read through all of the docs to fully understand what you can do with this API!"
 ---
 
 The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, consume aggregated price-level market data, and recover cleanly when the operator disables or settles a market.
@@ -9,12 +9,15 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
   <Card title="Competition Guide" href="/reference/competition-guide">
     Event-day flow, trading rules, recovery expectations, and settlement behavior.
   </Card>
+
   <Card title="Authentication" href="/reference/authentication">
     REST and WebSocket auth, rate limits, and the first calls every competitor should make.
   </Card>
+
   <Card title="REST API" href="/reference/rest-api">
     Bootstrap state, pull account data, and manage orders over HTTP.
   </Card>
+
   <Card title="WebSocket API" href="/reference/websocket-api">
     Subscribe to price-level market data, submit order actions, and handle user-scoped events.
   </Card>
@@ -48,20 +51,16 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
   <Card title="Market Lifecycle" href="/reference/market-lifecycle">
     Market states, trading halts, and settlement transitions.
   </Card>
+
   <Card title="Recovery And Resync" href="/reference/recovery-and-resync">
     The required client response to sequence gaps and lag.
   </Card>
+
   <Card title="Error Codes" href="/reference/error-codes">
     REST status mapping and WebSocket reject and error codes.
   </Card>
+
   <Card title="Server Messages" href="/websocket/server-messages">
     All WebSocket message types a competitor should handle.
   </Card>
 </Columns>
-
-## Preview locally
-
-```bash
-cd docs
-npx mintlify dev
-```
