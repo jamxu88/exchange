@@ -11,9 +11,9 @@ const previewRuntime: TradeRuntimeConfig = {
   apiKey: "preview-key",
   reconnectDelayMs: 1_000,
   markets: [
-    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD" },
-    { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD" },
-    { id: "SOL-USD", name: "SOL-USD", baseAsset: "SOL", quoteAsset: "USD" },
+    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD", status: "enabled" },
+    { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD", status: "disabled" },
+    { id: "SOL-USD", name: "SOL-USD", baseAsset: "SOL", quoteAsset: "USD", status: "settled" },
   ],
 };
 

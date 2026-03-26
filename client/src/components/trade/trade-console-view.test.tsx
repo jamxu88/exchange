@@ -14,7 +14,7 @@ const runtime: TradeRuntimeConfig = {
   apiKey: "secret",
   reconnectDelayMs: 1000,
   markets: [
-    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD" },
+    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD", status: "enabled" },
   ],
 };
 
@@ -350,11 +350,150 @@ describe("TradeConsoleView", () => {
     expect(screen.queryByTestId("candlestick-view")).not.toBeInTheDocument();
   });
 
+  it("distinguishes disabled markets and blocks ticket submission for them", () => {
+    const state = createInitialTradeState([
+      { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD", status: "enabled" },
+      { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD", status: "disabled" },
+    ]);
+    state.connectionStatus = "connected";
+    state.selectedMarketId = "ETH-USD";
+
+    render(
+      <TradeConsoleView
+        controller={{
+          runtime: {
+            ...runtime,
+            markets: state.availableMarkets,
+          },
+          state,
+          derived: {
+            summary: {
+              bids: [{ price: 100, liquidity: 1, total: 100 }],
+              asks: [{ price: 101, liquidity: 1, total: 101 }],
+              bestBid: 100,
+              bestAsk: 101,
+              buyQuote: 101,
+              sellQuote: 100,
+              lastPrice: 101,
+              midPrice: 100.5,
+              spread: 1,
+            },
+            estimated: {
+              shares: 20,
+              derivedPrice: 101,
+              estimatedCost: 2020,
+            },
+          },
+          actions: {
+            selectMarket: vi.fn(),
+            setSide: vi.fn(),
+            setPositionFilter: vi.fn(),
+            setOrderType: vi.fn(),
+            setLimitPrice: vi.fn(),
+            setShares: vi.fn(),
+            adjustShares: vi.fn(),
+            cancelPendingOrder: vi.fn(),
+            submitOrder: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /ETH-USD.*Disabled/i })).toBeInTheDocument();
+    expect(screen.getByText("This market is disabled. New orders are unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Market Disabled/i })).toBeDisabled();
+  });
+
   it("supports trade ticket keybinds", async () => {
+    const marketRuntime: TradeRuntimeConfig = {
+      ...runtime,
+      markets: [
+        { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD", status: "enabled" },
+        { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD", status: "enabled" },
+        { id: "SOL-USD", name: "SOL-USD", baseAsset: "SOL", quoteAsset: "USD", status: "enabled" },
+      ],
+    };
+    const state = createInitialTradeState(marketRuntime.markets);
+    state.connectionStatus = "connected";
+    const setSide = vi.fn();
+    const setOrderType = vi.fn();
+    const submitOrder = vi.fn();
+    const selectMarket = vi.fn();
+
+    render(
+      <TradeConsoleView
+        controller={{
+          runtime: marketRuntime,
+          state,
+          derived: {
+            summary: {
+              bids: [{ price: 100, liquidity: 1, total: 100 }],
+              asks: [{ price: 101, liquidity: 1, total: 101 }],
+              bestBid: 100,
+              bestAsk: 101,
+              buyQuote: 101,
+              sellQuote: 100,
+              lastPrice: 101,
+              midPrice: 100.5,
+              spread: 1,
+            },
+            estimated: {
+              shares: 20,
+              derivedPrice: 101,
+              estimatedCost: 2020,
+            },
+          },
+          actions: {
+            selectMarket,
+            setSide,
+            setPositionFilter: vi.fn(),
+            setOrderType,
+            setLimitPrice: vi.fn(),
+            setShares: vi.fn(),
+            adjustShares: vi.fn(),
+            cancelPendingOrder: vi.fn(),
+            submitOrder,
+          },
+        }}
+      />,
+    );
+
+    const user = userEvent.setup();
+
+    await user.keyboard("s");
+    await user.keyboard("m");
+    await user.keyboard("l");
+    await user.keyboard("]");
+    await user.keyboard("{[}");
+    await user.keyboard("q");
+    expect(screen.getByLabelText("Shares")).toHaveFocus();
+    screen.getByLabelText("Shares").blur();
+    await user.keyboard("p");
+    expect(screen.getByLabelText("Limit Price")).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(setSide).toHaveBeenCalledWith("sell");
+    expect(setOrderType).toHaveBeenCalledWith("market");
+    expect(setOrderType).toHaveBeenCalledWith("limit");
+    expect(selectMarket).toHaveBeenCalledWith("ETH-USD");
+    expect(selectMarket).toHaveBeenCalledWith("SOL-USD");
+    expect(submitOrder).toHaveBeenCalled();
+    expect(screen.getByText("(B)")).toBeInTheDocument();
+    expect(screen.getByText("(S)")).toBeInTheDocument();
+    expect(screen.getByText("Prev", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Next", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("([)")).toBeInTheDocument();
+    expect(screen.getByText("(])")).toBeInTheDocument();
+    expect(screen.getByText("(Q)")).toBeInTheDocument();
+    expect(screen.getByText("(P)")).toBeInTheDocument();
+  });
+
+  it("keeps ticket keybinds active while editing price and shares", async () => {
     const state = createInitialTradeState(runtime.markets);
     state.connectionStatus = "connected";
     const setSide = vi.fn();
     const setOrderType = vi.fn();
+    const setShares = vi.fn();
     const submitOrder = vi.fn();
 
     render(
@@ -386,7 +525,7 @@ describe("TradeConsoleView", () => {
             setPositionFilter: vi.fn(),
             setOrderType,
             setLimitPrice: vi.fn(),
-            setShares: vi.fn(),
+            setShares,
             adjustShares: vi.fn(),
             cancelPendingOrder: vi.fn(),
             submitOrder,
@@ -397,24 +536,16 @@ describe("TradeConsoleView", () => {
 
     const user = userEvent.setup();
 
+    await user.click(screen.getByLabelText("Shares"));
+    await user.keyboard("9");
     await user.keyboard("s");
     await user.keyboard("m");
-    await user.keyboard("l");
-    await user.keyboard("q");
-    expect(screen.getByLabelText("Shares")).toHaveFocus();
-    screen.getByLabelText("Shares").blur();
-    await user.keyboard("p");
-    expect(screen.getByLabelText("Limit Price")).toHaveFocus();
     await user.keyboard("{Enter}");
 
+    expect(setShares).toHaveBeenCalled();
     expect(setSide).toHaveBeenCalledWith("sell");
     expect(setOrderType).toHaveBeenCalledWith("market");
-    expect(setOrderType).toHaveBeenCalledWith("limit");
     expect(submitOrder).toHaveBeenCalled();
-    expect(screen.getByText("(B)")).toBeInTheDocument();
-    expect(screen.getByText("(S)")).toBeInTheDocument();
-    expect(screen.getByText("(Q)")).toBeInTheDocument();
-    expect(screen.getByText("(P)")).toBeInTheDocument();
   });
 
   it("renders asks with the best ask closest to the spread", () => {

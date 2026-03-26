@@ -11,6 +11,10 @@ import {
 import { TradeRestClient } from "@/components/trade/trade-rest-client";
 import { createTradeRuntimeConfig, type TradeRuntimeConfig } from "@/components/trade/trade-runtime";
 import {
+  loadTradeMessageHistory,
+  saveTradeMessageHistory,
+} from "@/components/trade/trade-message-history";
+import {
   createInitialTradeState,
   parseNumberInput,
   parseSharesInput,
@@ -72,6 +76,8 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
   const socketRef = useRef<TradeWsClient | null>(null);
   const accountSyncRef = useRef({ inFlight: false, queued: false });
   const disposedRef = useRef(false);
+  const hasHydratedMessageHistoryRef = useRef(false);
+  const skipNextMessageHistorySaveRef = useRef(true);
 
   const restClient = useMemo(
     () =>
@@ -226,6 +232,31 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
   );
 
   useEffect(() => {
+    if (hasHydratedMessageHistoryRef.current) {
+      return;
+    }
+
+    hasHydratedMessageHistoryRef.current = true;
+    const messages = loadTradeMessageHistory();
+    if (messages.length === 0) {
+      return;
+    }
+
+    startTransition(() => {
+      dispatch({ type: "hydrate-messages", messages });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (skipNextMessageHistorySaveRef.current) {
+      skipNextMessageHistorySaveRef.current = false;
+      return;
+    }
+
+    saveTradeMessageHistory(state.messages);
+  }, [state.messages]);
+
+  useEffect(() => {
     let cancelled = false;
     disposedRef.current = false;
     accountSyncRef.current = { inFlight: false, queued: false };
@@ -314,6 +345,19 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       dispatch({
         type: "submit-error",
         error: "No market selected.",
+        ...createStamp(),
+      });
+      return;
+    }
+
+    const selectedMarketStatus = selectedMarket.status ?? "enabled";
+    if (selectedMarketStatus !== "enabled") {
+      dispatch({
+        type: "submit-error",
+        error:
+          selectedMarketStatus === "settled"
+            ? "Rejected order: market is settled."
+            : "Rejected order: market is disabled.",
         ...createStamp(),
       });
       return;

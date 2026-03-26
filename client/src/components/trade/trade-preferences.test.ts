@@ -24,6 +24,7 @@ describe("trade preferences", () => {
       keybinds: {
         ...DEFAULT_TRADE_KEYBINDS,
         buy: "X",
+        marketNext: "N",
       },
       executionSound: {
         name: "fill.wav",
@@ -36,11 +37,36 @@ describe("trade preferences", () => {
       keybinds: {
         ...DEFAULT_TRADE_KEYBINDS,
         buy: "X",
+        marketNext: "N",
       },
       executionSound: {
         name: "fill.wav",
         dataUrl: "data:audio/wav;base64,AAAA",
       },
+    });
+  });
+
+  it("fills in defaults for newly added keybinds from older saved preferences", () => {
+    window.localStorage.setItem(
+      TRADE_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        keybinds: {
+          buy: "X",
+          sell: "C",
+          limit: "L",
+          market: "M",
+          price: "P",
+          shares: "Q",
+          submit: "Enter",
+        },
+        executionSound: null,
+      }),
+    );
+
+    expect(loadTradePreferences().keybinds).toEqual({
+      ...DEFAULT_TRADE_KEYBINDS,
+      buy: "X",
+      sell: "C",
     });
   });
 

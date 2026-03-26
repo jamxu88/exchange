@@ -7,6 +7,8 @@ export type TradeKeybindAction =
   | "sell"
   | "limit"
   | "market"
+  | "marketPrev"
+  | "marketNext"
   | "price"
   | "shares"
   | "submit";
@@ -28,6 +30,8 @@ export const DEFAULT_TRADE_KEYBINDS: TradeKeybinds = {
   sell: "S",
   limit: "L",
   market: "M",
+  marketPrev: "[",
+  marketNext: "]",
   price: "P",
   shares: "Q",
   submit: "Enter",
@@ -49,15 +53,20 @@ const SPECIAL_KEYS = new Set([
   "ArrowRight",
 ]);
 
-function isTradeKeybinds(value: unknown): value is TradeKeybinds {
+function normalizeStoredTradeKeybinds(value: unknown): TradeKeybinds {
   if (!value || typeof value !== "object") {
-    return false;
+    return DEFAULT_TRADE_KEYBINDS;
   }
 
-  return Object.keys(DEFAULT_TRADE_KEYBINDS).every((key) => {
-    const keybind = (value as Record<string, unknown>)[key];
-    return typeof keybind === "string" && keybind.length > 0;
-  });
+  return Object.entries(DEFAULT_TRADE_KEYBINDS).reduce<TradeKeybinds>(
+    (next, [action, defaultBinding]) => {
+      const keybind = (value as Record<string, unknown>)[action];
+      next[action as TradeKeybindAction] =
+        typeof keybind === "string" && keybind.length > 0 ? keybind : defaultBinding;
+      return next;
+    },
+    {} as TradeKeybinds,
+  );
 }
 
 function isExecutionSoundPreference(value: unknown): value is ExecutionSoundPreference {
@@ -96,10 +105,9 @@ export function loadTradePreferences() {
 
   try {
     const parsed = JSON.parse(raw) as Partial<TradePreferences>;
+    const keybinds = normalizeStoredTradeKeybinds(parsed.keybinds);
     return {
-      keybinds: isTradeKeybinds(parsed.keybinds)
-        ? parsed.keybinds
-        : DEFAULT_TRADE_KEYBINDS,
+      keybinds: keybindsHaveConflicts(keybinds) ? DEFAULT_TRADE_KEYBINDS : keybinds,
       executionSound: isExecutionSoundPreference(parsed.executionSound)
         ? parsed.executionSound
         : null,

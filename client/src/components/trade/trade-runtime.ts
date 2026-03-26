@@ -35,6 +35,7 @@ function toMarketDefinition(entry: string): MarketDefinition {
     name: rawLabel?.trim() || id,
     baseAsset,
     quoteAsset,
+    status: "enabled",
   };
 }
 

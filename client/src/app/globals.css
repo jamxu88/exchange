@@ -14,6 +14,7 @@
   --red: #ff7a7a;
   --red-soft: rgba(255, 122, 122, 0.14);
   --cyan: #40d9ff;
+  --ui-radius: 2px;
 }
 
 @theme inline {
@@ -42,6 +43,53 @@ body {
   letter-spacing: 0.01em;
 }
 
+@keyframes ui-fade-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ui-scale-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes ui-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ui-status-pulse {
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.16);
+  }
+}
+
 a,
 button {
   transition:
@@ -56,6 +104,54 @@ button {
   cursor: pointer;
 }
 
+.motion-fade-up {
+  animation: ui-fade-up 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.motion-fade-up-fast {
+  animation-duration: 260ms;
+}
+
+.motion-delay-1 {
+  animation-delay: 50ms;
+}
+
+.motion-delay-2 {
+  animation-delay: 100ms;
+}
+
+.motion-delay-3 {
+  animation-delay: 150ms;
+}
+
+.motion-delay-4 {
+  animation-delay: 200ms;
+}
+
+.motion-scale-in {
+  animation: ui-scale-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top right;
+  will-change: transform, opacity;
+}
+
+.motion-backdrop-in {
+  animation: ui-backdrop-in 180ms ease both;
+}
+
+.motion-status-pulse {
+  animation: ui-status-pulse 2.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.motion-hover-soft {
+  will-change: transform;
+}
+
+.motion-hover-soft:hover {
+  transform: translateY(-1px);
+}
+
 ::selection {
   background: rgba(66, 204, 78, 0.28);
   color: #ffffff;
@@ -66,7 +162,7 @@ button {
   background:
     linear-gradient(180deg, rgba(24, 24, 28, 0.96), rgba(18, 18, 20, 0.94)),
     var(--surface);
-  border-radius: 1.5rem;
+  border-radius: var(--ui-radius);
   box-shadow:
     0 18px 42px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.02);
@@ -76,7 +172,7 @@ button {
 .surface-panel-soft {
   border: 1px solid rgba(45, 45, 50, 0.9);
   background: rgba(15, 15, 17, 0.86);
-  border-radius: 1.25rem;
+  border-radius: var(--ui-radius);
 }
 
 .surface-title {
@@ -89,7 +185,7 @@ button {
 .ops-panel {
   border: 1px solid #26272b;
   background: #121317;
-  border-radius: 0.875rem;
+  border-radius: var(--ui-radius);
   box-shadow:
     0 10px 22px rgba(0, 0, 0, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.015);
@@ -98,7 +194,7 @@ button {
 .ops-panel-soft {
   border: 1px solid #2b2d32;
   background: #0f1013;
-  border-radius: 0.625rem;
+  border-radius: var(--ui-radius);
 }
 
 .ops-section-title {
@@ -123,7 +219,7 @@ button {
   width: 100%;
   border: 1px solid #2b2d32;
   background: #0d0f12;
-  border-radius: 0.625rem;
+  border-radius: var(--ui-radius);
   color: #ffffff;
   padding: 0.75rem 0.9rem;
   font-size: 1rem;
@@ -152,7 +248,7 @@ button {
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 0.625rem;
+  border-radius: var(--ui-radius);
   padding: 0.72rem 1rem;
   font-size: 0.82rem;
   font-weight: 700;
@@ -192,7 +288,7 @@ button {
   display: inline-flex;
   align-items: center;
   border: 1px solid #31343a;
-  border-radius: 999px;
+  border-radius: var(--ui-radius);
   padding: 0.32rem 0.7rem;
   font-size: 0.68rem;
   font-weight: 700;
@@ -206,7 +302,7 @@ button {
 }
 
 .ops-note {
-  border-radius: 0.625rem;
+  border-radius: var(--ui-radius);
   border: 1px solid #2b2d32;
   background: #0f1012;
 }
@@ -217,7 +313,7 @@ button {
 
 .card-link {
   border: 1px solid var(--surface-stroke);
-  border-radius: 1.5rem;
+  border-radius: var(--ui-radius);
   background:
     linear-gradient(180deg, rgba(26, 26, 29, 0.96), rgba(17, 17, 20, 0.94)),
     var(--surface);
@@ -233,4 +329,35 @@ button {
     0 16px 32px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(66, 204, 78, 0.12);
   transform: translateY(-1px);
+}
+
+[class*="rounded"] {
+  border-radius: var(--ui-radius) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+
+  a,
+  button {
+    transition-duration: 0ms;
+  }
+
+  .motion-fade-up,
+  .motion-fade-up-fast,
+  .motion-scale-in,
+  .motion-backdrop-in,
+  .motion-status-pulse {
+    animation: none !important;
+  }
+
+  .motion-hover-soft:hover,
+  .ops-button:hover,
+  .card-link:hover {
+    transform: none;
+  }
 }

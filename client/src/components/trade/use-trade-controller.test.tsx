@@ -1,4 +1,5 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { TRADE_MESSAGE_HISTORY_STORAGE_KEY } from "@/components/trade/trade-message-history";
 import { useTradeController } from "@/components/trade/use-trade-controller";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
 
@@ -8,12 +9,16 @@ const runtime: TradeRuntimeConfig = {
   apiKey: "secret",
   reconnectDelayMs: 1000,
   markets: [
-    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD" },
-    { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD" },
+    { id: "BTC-USD", name: "BTC-USD", baseAsset: "BTC", quoteAsset: "USD", status: "enabled" },
+    { id: "ETH-USD", name: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD", status: "enabled" },
   ],
 };
 
 describe("useTradeController", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("bootstraps state and updates websocket subscriptions on market changes", async () => {
     const bootstrapAccountData = vi.fn().mockResolvedValue({
       markets: runtime.markets,
@@ -222,6 +227,137 @@ describe("useTradeController", () => {
         effectivePrice: 1,
       }),
     );
+  });
+
+  it("rejects submit locally when the selected market is disabled", async () => {
+    const submitOrder = vi.fn();
+    const disabledRuntime: TradeRuntimeConfig = {
+      ...runtime,
+      markets: [
+        {
+          id: "BTC-USD",
+          name: "BTC-USD",
+          baseAsset: "BTC",
+          quoteAsset: "USD",
+          status: "disabled",
+        },
+      ],
+    };
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData: vi.fn().mockResolvedValue({
+          markets: disabledRuntime.markets,
+          user: null,
+          positions: [],
+          openOrders: [],
+          fills: [],
+          warnings: [],
+          loaded: {
+            markets: true,
+            user: true,
+            positions: true,
+            openOrders: true,
+            fills: true,
+          },
+        }),
+        submitOrder,
+        cancelOrder: vi.fn(),
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime: disabledRuntime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+    });
+
+    await act(async () => {
+      await result.current.actions.submitOrder();
+    });
+
+    expect(submitOrder).not.toHaveBeenCalled();
+    expect(result.current.state.messages.at(-1)?.text).toBe("Rejected order: market is disabled.");
+  });
+
+  it("hydrates and persists trade messages in local storage", async () => {
+    window.localStorage.setItem(
+      TRADE_MESSAGE_HISTORY_STORAGE_KEY,
+      JSON.stringify({
+        messages: [
+          {
+            id: 1,
+            time: "09:29:59",
+            tone: "neutral",
+            text: "Previous session message.",
+          },
+        ],
+      }),
+    );
+
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData: vi.fn().mockResolvedValue({
+          markets: runtime.markets,
+          user: null,
+          positions: [],
+          openOrders: [],
+          fills: [],
+          warnings: [],
+          loaded: {
+            markets: true,
+            user: true,
+            positions: true,
+            openOrders: true,
+            fills: true,
+          },
+        }),
+        submitOrder: vi.fn(),
+        cancelOrder: vi.fn(),
+      }) as never;
+    const wsClientFactory = () =>
+      ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      }) as never;
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.messages.some((message) => message.text === "Previous session message.")).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+    });
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(TRADE_MESSAGE_HISTORY_STORAGE_KEY) ?? "{}",
+    ) as { messages?: Array<{ text: string }> };
+
+    expect(stored.messages?.some((message) => message.text === "Previous session message.")).toBe(
+      true,
+    );
+    expect(
+      stored.messages?.some((message) => message.text.includes("Loaded account state") || message.text.includes("Connected in public market-data mode.")),
+    ).toBe(true);
   });
 
   it("surfaces a bootstrap failure without retrying on every render", async () => {

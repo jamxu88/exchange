@@ -26,13 +26,29 @@ import {
   selectPnlMetrics,
   selectSelectedMarket,
 } from "@/components/trade/trade-store";
-import type { AggregatedBookLevel, MessageTone, PnlMetric } from "@/components/trade/trade-types";
+import type {
+  AggregatedBookLevel,
+  MarketStatus,
+  MessageTone,
+  PnlMetric,
+} from "@/components/trade/trade-types";
 
 const contentColumns = "minmax(0, 373fr) minmax(0, 722fr) minmax(0, 298fr)";
 const leftColumnRows = "minmax(0, 500fr) minmax(0, 360fr)";
 const rightColumnRows = "minmax(0, 430fr) minmax(0, 430fr)";
 const panelBaseClass = "rounded-[10px] border border-[#26272b] bg-[#141416]";
 const quickAdjustments = [-100, -10, 10, 100];
+const ticketInputEditingKeys = new Set([
+  "Backspace",
+  "Delete",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "Tab",
+]);
 const keybindFieldDefinitions: Array<{
   action: TradeKeybindAction;
   label: string;
@@ -42,14 +58,28 @@ const keybindFieldDefinitions: Array<{
   { action: "sell", label: "Sell", helper: "Select the sell side" },
   { action: "limit", label: "Limit", helper: "Switch the ticket to limit orders" },
   { action: "market", label: "Market", helper: "Switch the ticket to market orders" },
+  { action: "marketPrev", label: "Prev Market", helper: "Select the market to the left" },
+  { action: "marketNext", label: "Next Market", helper: "Select the market to the right" },
   { action: "price", label: "Price", helper: "Focus the price field" },
   { action: "shares", label: "Shares", helper: "Focus the share count field" },
   { action: "submit", label: "Submit", helper: "Send the current order" },
 ];
 
-function ShortcutHint({ keys }: { keys: string }) {
+function ShortcutHint({
+  keys,
+  tone = "default",
+}: {
+  keys: string;
+  tone?: "default" | "button";
+}) {
   return (
-    <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#b6b6bc]">
+    <span
+      className={
+        tone === "button"
+          ? "text-[10px] font-semibold uppercase tracking-[0.08em] text-[rgba(255,255,255,0.92)] drop-shadow-[0_1px_1px_rgba(0,0,0,0.24)]"
+          : "text-[10px] font-medium uppercase tracking-[0.08em] text-[#b6b6bc]"
+      }
+    >
       ({keys})
     </span>
   );
@@ -110,11 +140,11 @@ function TradeSettingsPanel({
 }: TradeSettingsPanelProps) {
   return (
     <div
-      className="fixed inset-0 z-40 bg-[rgba(0,0,0,0.52)] backdrop-blur-[2px]"
+      className="fixed inset-0 z-40 bg-[rgba(0,0,0,0.52)] backdrop-blur-[2px] motion-backdrop-in"
       onClick={onClose}
     >
       <div
-        className="absolute right-[clamp(18px,2.6vw,40px)] top-[94px] w-[min(460px,calc(100vw-36px))] rounded-[10px] border border-[#2b2d31] bg-[#141416] shadow-[0_24px_64px_rgba(0,0,0,0.45)]"
+        className="absolute right-[clamp(18px,2.6vw,40px)] top-[94px] flex max-h-[calc(100vh-112px)] w-[min(460px,calc(100vw-36px))] flex-col overflow-hidden rounded-[10px] border border-[#2b2d31] bg-[#141416] shadow-[0_24px_64px_rgba(0,0,0,0.45)] motion-scale-in"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-[#2c2d31] px-[18px] py-[14px]">
@@ -126,7 +156,7 @@ function TradeSettingsPanel({
           </div>
           <button
             aria-label="Close settings"
-            className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
+            className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white motion-hover-soft"
             onClick={onClose}
             type="button"
           >
@@ -134,14 +164,15 @@ function TradeSettingsPanel({
           </button>
         </div>
 
-        <div className="grid gap-[18px] px-[18px] py-[16px]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[18px] py-[16px]">
+          <div className="grid gap-[18px]">
           <section className="grid gap-[10px]">
             <div className="flex items-center justify-between">
               <p className="text-[14px] font-semibold uppercase tracking-[0.14em] text-[#8f9098]">
                 Keybinds
               </p>
               <button
-                className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
+                className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white motion-hover-soft"
                 onClick={onResetDefaults}
                 type="button"
               >
@@ -199,7 +230,7 @@ function TradeSettingsPanel({
                 {draftExecutionSound ? draftExecutionSound.name : "No sound selected"}
               </p>
               <div className="mt-[10px] flex flex-wrap gap-[8px]">
-                <label className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white">
+                <label className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white motion-hover-soft">
                   <span>{isUploadingSound ? "Loading..." : "Choose file"}</span>
                   <input
                     accept="audio/*"
@@ -211,7 +242,7 @@ function TradeSettingsPanel({
                   />
                 </label>
                 <button
-                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76]"
+                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76] motion-hover-soft"
                   disabled={!draftExecutionSound}
                   onClick={onPreviewSound}
                   type="button"
@@ -219,7 +250,7 @@ function TradeSettingsPanel({
                   Test sound
                 </button>
                 <button
-                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76]"
+                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76] motion-hover-soft"
                   disabled={!draftExecutionSound}
                   onClick={onClearSound}
                   type="button"
@@ -235,23 +266,24 @@ function TradeSettingsPanel({
               {errorMessage}
             </p>
           ) : null}
-
-          <div className="flex items-center justify-end gap-[8px]">
-            <button
-              className="rounded-[6px] border border-[#32333a] px-[12px] py-[9px] text-[12px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
-              onClick={onClose}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              className="rounded-[6px] bg-[#42cc4e] px-[12px] py-[9px] text-[12px] font-bold uppercase tracking-[0.08em] text-[#081108]"
-              onClick={onSave}
-              type="button"
-            >
-              Save settings
-            </button>
           </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-[8px] border-t border-[#2c2d31] px-[18px] py-[14px]">
+          <button
+            className="rounded-[6px] border border-[#32333a] px-[12px] py-[9px] text-[12px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white motion-hover-soft"
+            onClick={onClose}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="rounded-[6px] bg-[#42cc4e] px-[12px] py-[9px] text-[12px] font-bold uppercase tracking-[0.08em] text-[#081108] motion-hover-soft"
+            onClick={onSave}
+            type="button"
+          >
+            Save settings
+          </button>
         </div>
       </div>
     </div>
@@ -296,6 +328,56 @@ function messageCardToneClass(tone: MessageTone) {
   }
 
   return "border-[#222327] bg-[#111114]";
+}
+
+function resolveMarketStatus(status?: MarketStatus): MarketStatus {
+  return status ?? "enabled";
+}
+
+function marketStatusLabel(status?: MarketStatus) {
+  const resolvedStatus = resolveMarketStatus(status);
+  if (resolvedStatus === "disabled") {
+    return "Disabled";
+  }
+
+  if (resolvedStatus === "settled") {
+    return "Settled";
+  }
+
+  return "Enabled";
+}
+
+function marketStatusBadgeClass(status?: MarketStatus) {
+  const resolvedStatus = resolveMarketStatus(status);
+  if (resolvedStatus === "disabled") {
+    return "border border-[rgba(242,170,102,0.32)] bg-[rgba(107,71,39,0.22)] text-[#f3c89d]";
+  }
+
+  if (resolvedStatus === "settled") {
+    return "border border-[rgba(145,151,172,0.26)] bg-[rgba(71,75,90,0.24)] text-[#d7dbe6]";
+  }
+
+  return "border border-[rgba(66,204,78,0.28)] bg-[rgba(66,204,78,0.12)] text-[#c8f5cc]";
+}
+
+function marketTabClass(status: MarketStatus | undefined, isSelected: boolean) {
+  const resolvedStatus = resolveMarketStatus(status);
+
+  if (resolvedStatus === "enabled") {
+    return isSelected
+      ? "inline-flex items-center gap-[7px] rounded-[6px] bg-white px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-black motion-hover-soft"
+      : "inline-flex items-center gap-[7px] rounded-[6px] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:bg-[rgba(255,255,255,0.04)] hover:text-white motion-hover-soft";
+  }
+
+  if (resolvedStatus === "disabled") {
+    return isSelected
+      ? "inline-flex items-center gap-[7px] rounded-[6px] border border-[rgba(242,170,102,0.32)] bg-[rgba(107,71,39,0.18)] px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-[#f3c89d] motion-hover-soft"
+      : "inline-flex items-center gap-[7px] rounded-[6px] bg-[rgba(107,71,39,0.12)] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[#d5ac83] hover:bg-[rgba(107,71,39,0.18)] hover:text-[#f3c89d] motion-hover-soft";
+  }
+
+  return isSelected
+    ? "inline-flex items-center gap-[7px] rounded-[6px] border border-[rgba(145,151,172,0.26)] bg-[rgba(71,75,90,0.24)] px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-[#d7dbe6] motion-hover-soft"
+    : "inline-flex items-center gap-[7px] rounded-[6px] bg-[rgba(71,75,90,0.15)] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[#adb2c0] hover:bg-[rgba(71,75,90,0.2)] hover:text-[#d7dbe6] motion-hover-soft";
 }
 
 function OrderBookRow({
@@ -366,6 +448,22 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+function isTicketInputTarget(
+  target: EventTarget | null,
+  priceInput: HTMLInputElement | null,
+  sharesInput: HTMLInputElement | null,
+) {
+  return target === priceInput || target === sharesInput;
+}
+
+function shouldReserveTicketInputKeyForEditing(key: string) {
+  if (/^[0-9]$/.test(key)) {
+    return true;
+  }
+
+  return ticketInputEditingKeys.has(key);
+}
+
 type TradeConsoleViewProps = {
   controller: ReturnType<typeof useTradeController>;
 };
@@ -400,6 +498,8 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const profileName = state.user?.username ?? "Competition User";
   const profileTeam = teamLabelForUser(state.user?.traderId);
   const latestFillId = state.fills[state.fills.length - 1]?.fillId ?? null;
+  const selectedMarketStatus = resolveMarketStatus(selectedMarket?.status);
+  const selectedMarketCanTrade = selectedMarketStatus === "enabled";
 
   useEffect(() => {
     const loadedPreferences = loadTradePreferences();
@@ -426,6 +526,25 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   }, [latestFillId, tradePreferences.executionSound]);
 
   useEffect(() => {
+    function selectRelativeMarket(step: -1 | 1) {
+      if (state.availableMarkets.length <= 1) {
+        return;
+      }
+
+      const currentIndex = state.availableMarkets.findIndex(
+        (market) => market.id === state.selectedMarketId,
+      );
+      const startIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextIndex =
+        (startIndex + step + state.availableMarkets.length) % state.availableMarkets.length;
+      const nextMarket = state.availableMarkets[nextIndex];
+      if (!nextMarket) {
+        return;
+      }
+
+      actions.selectMarket(nextMarket.id);
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (isSettingsPanelOpen) {
         return;
@@ -436,16 +555,24 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
       }
 
       const targetIsEditable = isEditableTarget(event.target);
+      const targetIsTicketInput = isTicketInputTarget(
+        event.target,
+        priceInputRef.current,
+        sharesInputRef.current,
+      );
+      const allowTradeKeybindWhileEditing =
+        targetIsTicketInput && !shouldReserveTicketInputKeyForEditing(event.key);
+
       if (
         isTradeKeybindMatch(event.key, tradePreferences.keybinds.submit) &&
-        (!targetIsEditable || event.key === "Enter")
+        (!targetIsEditable || allowTradeKeybindWhileEditing || event.key === "Enter")
       ) {
         event.preventDefault();
         void actions.submitOrder();
         return;
       }
 
-      if (targetIsEditable) {
+      if (targetIsEditable && !allowTradeKeybindWhileEditing) {
         return;
       }
 
@@ -475,6 +602,18 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
         return;
       }
 
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.marketPrev)) {
+        event.preventDefault();
+        selectRelativeMarket(-1);
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.marketNext)) {
+        event.preventDefault();
+        selectRelativeMarket(1);
+        return;
+      }
+
       if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.price)) {
         event.preventDefault();
         if (state.orderType === "market") {
@@ -500,7 +639,14 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [actions, isSettingsPanelOpen, state.orderType, tradePreferences.keybinds]);
+  }, [
+    actions,
+    isSettingsPanelOpen,
+    state.availableMarkets,
+    state.orderType,
+    state.selectedMarketId,
+    tradePreferences.keybinds,
+  ]);
 
   async function handleCancelPendingOrder(orderId: string) {
     if (cancelingOrderIds.includes(orderId)) {
@@ -602,10 +748,10 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
         data-testid="trade-console-shell"
       >
         <header
-          className="h-[88px] bg-black px-[clamp(18px,2.6vw,40px)] pt-[10px]"
+          className="relative z-[60] h-[88px] bg-black px-[clamp(18px,2.6vw,40px)] pt-[10px]"
           data-testid="trade-console-header"
         >
-          <div className="surface-panel-soft rounded-[10px] grid h-[68px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[14px] px-[14px]">
+          <div className="surface-panel-soft motion-fade-up rounded-[10px] grid h-[68px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[14px] px-[14px]">
             <div className="flex min-w-0 items-center gap-[12px]">
               <div className="flex h-[44px] items-center rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
                 <Image alt="Quant" height={32} src="/quant.png" width={124} />
@@ -621,33 +767,47 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
             </div>
 
             <nav aria-label="Markets" className="min-w-0 px-[4px]">
-              <div className="flex max-w-full items-center justify-center overflow-x-auto">
+              <div className="flex max-w-full items-center justify-center gap-[10px] overflow-x-auto">
+                {state.availableMarkets.length > 1 ? (
+                  <span className="shrink-0 text-[11px] font-medium leading-none text-[#8f929b]">
+                    Prev <ShortcutHint keys={tradePreferences.keybinds.marketPrev} />
+                  </span>
+                ) : null}
                 <div className="flex items-center gap-[8px] rounded-[10px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] p-[4px]">
                   {state.availableMarkets.map((market) => {
                     const isSelected = state.selectedMarketId === market.id;
+                    const marketStatus = resolveMarketStatus(market.status);
 
                     return (
                       <button
-                        className={
-                          isSelected
-                            ? "rounded-[6px] bg-white px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-black"
-                            : "rounded-[6px] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:bg-[rgba(255,255,255,0.04)] hover:text-white"
-                        }
+                        className={marketTabClass(market.status, isSelected)}
                         key={market.id}
                         onClick={() => actions.selectMarket(market.id)}
                         type="button"
                       >
-                        {market.name}
+                        <span>{market.name}</span>
+                        {marketStatus !== "enabled" ? (
+                          <span
+                            className={`rounded-[999px] px-[6px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] ${marketStatusBadgeClass(marketStatus)}`}
+                          >
+                            {marketStatusLabel(marketStatus)}
+                          </span>
+                        ) : null}
                       </button>
                     );
                   })}
                 </div>
+                {state.availableMarkets.length > 1 ? (
+                  <span className="shrink-0 text-[11px] font-medium leading-none text-[#8f929b]">
+                    Next <ShortcutHint keys={tradePreferences.keybinds.marketNext} />
+                  </span>
+                ) : null}
               </div>
             </nav>
 
             <div className="flex items-center justify-end gap-[10px]">
               <a
-                className="inline-flex items-center rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] py-[10px] text-[13px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white"
+                className="inline-flex items-center rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] py-[10px] text-[13px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white motion-hover-soft"
                 href="https://jamesxu.mintlify.app/"
                 rel="noreferrer"
                 target="_blank"
@@ -656,7 +816,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               </a>
               <div className="inline-flex items-center gap-[8px] rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-medium leading-none whitespace-nowrap text-white">
                 <span
-                  className={`h-[8px] w-[8px] rounded-full shadow-[0_0_14px_rgba(255,255,255,0.18)] ${connection.dotClass}`}
+                  className={`motion-status-pulse h-[8px] w-[8px] rounded-full shadow-[0_0_14px_rgba(255,255,255,0.18)] ${connection.dotClass}`}
                 />
                 <span>{connection.label}</span>
               </div>
@@ -665,7 +825,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   aria-expanded={isProfileMenuOpen}
                   aria-label="Open profile menu"
                   aria-haspopup="menu"
-                  className="flex h-[44px] items-center gap-[8px] rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] py-[6px] pl-[6px] pr-[10px] hover:border-[rgba(66,204,78,0.42)]"
+                  className="flex h-[44px] items-center gap-[8px] rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] py-[6px] pl-[6px] pr-[10px] hover:border-[rgba(66,204,78,0.42)] motion-hover-soft"
                   onClick={() => setIsProfileMenuOpen((current) => !current)}
                   title={`${profileName} · ${profileTeam}`}
                   type="button"
@@ -677,7 +837,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                 </button>
 
                 {isProfileMenuOpen ? (
-                  <div className="surface-panel absolute right-0 top-[calc(100%+10px)] z-20 w-[240px] rounded-[10px] p-[8px]">
+                  <div className="surface-panel motion-scale-in absolute right-0 top-[calc(100%+10px)] z-[80] w-[240px] rounded-[10px] p-[8px]">
                     <div className="surface-panel-soft rounded-[8px] px-[12px] py-[10px]">
                       <p className="text-[15px] font-semibold leading-none text-white">{profileName}</p>
                       <p className="mt-[8px] text-[13px] font-medium leading-none text-[var(--muted)]">
@@ -685,7 +845,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                       </p>
                     </div>
                     <button
-                      className="mt-[8px] w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white"
+                      className="mt-[8px] w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white motion-hover-soft"
                       onClick={openSettingsPanel}
                       type="button"
                     >
@@ -693,7 +853,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     </button>
                     <form action="/api/auth/logout" className="mt-[8px]" method="post">
                       <button
-                        className="w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white"
+                        className="w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white motion-hover-soft"
                         type="submit"
                       >
                         Log out
@@ -724,7 +884,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               }}
             >
               <section
-                className={`${panelBaseClass} grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
+                className={`${panelBaseClass} motion-fade-up motion-delay-1 grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
                 data-testid="positions-panel"
               >
                 <div className="flex items-center justify-between border-b border-[#2c2d31] px-[20px] pt-[10px]">
@@ -842,7 +1002,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                 </div>
               </section>
 
-              <section className={`${panelBaseClass} grid min-h-0 grid-rows-[46px_1fr] overflow-hidden`}>
+              <section className={`${panelBaseClass} motion-fade-up motion-delay-2 grid min-h-0 grid-rows-[46px_1fr] overflow-hidden`}>
                 <div className="flex items-center border-b border-[#2c2d31] px-[20px]">
                   <h2 className="text-[21px] font-bold leading-none text-white">Statistics</h2>
                 </div>
@@ -874,7 +1034,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
             </div>
 
             <section
-              className={`${panelBaseClass} grid h-full min-h-0 grid-rows-[52px_1fr_63px] overflow-hidden`}
+              className={`${panelBaseClass} motion-fade-up motion-delay-2 grid h-full min-h-0 grid-rows-[52px_1fr_63px] overflow-hidden`}
               data-testid="orderbook-panel"
             >
               <div className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-[#26272b] px-[66px] pt-[14px] text-[16px] font-bold leading-none text-[#aaa]">
@@ -945,17 +1105,26 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               }}
             >
               <section
-                className="grid h-full min-h-0 grid-rows-[44px_1fr] overflow-hidden rounded-[6px] border-[0.595px] border-[#26272b] bg-[rgba(24,24,27,0.82)]"
+                className="motion-fade-up motion-delay-3 grid h-full min-h-0 grid-rows-[44px_1fr] overflow-hidden rounded-[6px] border-[0.595px] border-[#26272b] bg-[rgba(24,24,27,0.82)]"
                 data-testid="ticket-panel"
               >
                 <div className="flex items-center justify-between border-b border-[#2c2d31] px-[13px] py-[10px]">
-                  <p className="max-w-[180px] text-[15.477px] font-bold leading-none text-white">
-                    {selectedMarket?.name ?? "--"}
-                  </p>
+                  <div className="flex min-w-0 items-center gap-[8px]">
+                    <p className="max-w-[180px] truncate text-[15.477px] font-bold leading-none text-white">
+                      {selectedMarket?.name ?? "--"}
+                    </p>
+                    {selectedMarketStatus !== "enabled" ? (
+                      <span
+                        className={`rounded-[999px] px-[6px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] ${marketStatusBadgeClass(selectedMarketStatus)}`}
+                      >
+                        {marketStatusLabel(selectedMarketStatus)}
+                      </span>
+                    ) : null}
+                  </div>
 
                   <div className="relative">
                     <button
-                      className="flex items-center gap-[5px] text-[15.477px] font-medium leading-none text-white"
+                      className="flex items-center gap-[5px] text-[15.477px] font-medium leading-none text-white motion-hover-soft"
                       onClick={() => setIsOrderTypeMenuOpen((current) => !current)}
                       type="button"
                     >
@@ -971,13 +1140,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     </button>
 
                     {isOrderTypeMenuOpen ? (
-                      <div className="absolute right-0 top-[calc(100%+8px)] z-10 w-[126px] rounded-[7px] border border-[#2c2d31] bg-[#18181b] p-[6px] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
+                      <div className="motion-scale-in absolute right-0 top-[calc(100%+8px)] z-10 w-[126px] rounded-[7px] border border-[#2c2d31] bg-[#18181b] p-[6px] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
                         {(["limit", "market"] as const).map((orderType) => (
                           <button
                             className={
                               state.orderType === orderType
-                                ? "flex w-full items-center justify-between rounded-[5px] bg-[#26272b] px-[10px] py-[8px] text-left text-[15px] font-semibold text-white"
-                                : "flex w-full items-center justify-between rounded-[5px] px-[10px] py-[8px] text-left text-[15px] font-medium text-[#b8b8bc]"
+                                ? "flex w-full items-center justify-between rounded-[5px] bg-[#26272b] px-[10px] py-[8px] text-left text-[15px] font-semibold text-white motion-hover-soft"
+                                : "flex w-full items-center justify-between rounded-[5px] px-[10px] py-[8px] text-left text-[15px] font-medium text-[#b8b8bc] motion-hover-soft"
                             }
                             key={orderType}
                             onClick={() => {
@@ -1006,30 +1175,30 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     <button
                       className={
                         state.ticketSide === "buy"
-                          ? "h-[42px] rounded-[3px] bg-[#42cc4e] text-[16px] font-bold leading-none text-white"
-                          : "h-[42px] rounded-[3px] bg-[#26272b] text-[16px] font-bold leading-none text-white"
+                          ? "h-[42px] rounded-[3px] bg-[#42cc4e] text-[16px] font-bold leading-none text-white motion-hover-soft"
+                          : "h-[42px] rounded-[3px] bg-[#26272b] text-[16px] font-bold leading-none text-white motion-hover-soft"
                       }
                       onClick={() => actions.setSide("buy")}
                       type="button"
                     >
                       <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
                         <span>Buy</span>
-                        <ShortcutHint keys={tradePreferences.keybinds.buy} />
+                        <ShortcutHint keys={tradePreferences.keybinds.buy} tone="button" />
                       </span>{" "}
                       {formatMaybePrice(summary.buyQuote)}
                     </button>
                     <button
                       className={
                         state.ticketSide === "sell"
-                          ? "h-[42px] rounded-[3px] bg-[#d85b5b] text-[16px] font-bold leading-none text-white"
-                          : "h-[42px] rounded-[3px] bg-[#26272b] text-[16px] font-bold leading-none text-white"
+                          ? "h-[42px] rounded-[3px] bg-[#d85b5b] text-[16px] font-bold leading-none text-white motion-hover-soft"
+                          : "h-[42px] rounded-[3px] bg-[#26272b] text-[16px] font-bold leading-none text-white motion-hover-soft"
                       }
                       onClick={() => actions.setSide("sell")}
                       type="button"
                     >
                       <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
                         <span>Sell</span>
-                        <ShortcutHint keys={tradePreferences.keybinds.sell} />
+                        <ShortcutHint keys={tradePreferences.keybinds.sell} tone="button" />
                       </span>{" "}
                       {formatMaybePrice(summary.sellQuote)}
                     </button>
@@ -1067,7 +1236,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     </span>
                     <div className="flex h-[34px] items-center justify-between rounded-[6px] border border-[#666] bg-[#18181b] px-[5px]">
                       <button
-                        className="flex h-[24px] w-[24px] items-center justify-center"
+                        className="flex h-[24px] w-[24px] items-center justify-center motion-hover-soft"
                         onClick={() => actions.adjustShares(-1)}
                         type="button"
                       >
@@ -1082,7 +1251,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                         value={state.sharesInput}
                       />
                       <button
-                        className="flex h-[24px] w-[24px] items-center justify-center"
+                        className="flex h-[24px] w-[24px] items-center justify-center motion-hover-soft"
                         onClick={() => actions.adjustShares(1)}
                         type="button"
                       >
@@ -1094,7 +1263,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   <div className="mt-[8px] flex justify-end gap-[8px]">
                     {quickAdjustments.map((adjustment) => (
                       <button
-                        className="flex h-[22px] min-w-[34px] items-center justify-center rounded-[4px] border border-[#d5d5d5] px-[6px] text-[11px] font-semibold leading-none text-[#d5d5d5]"
+                        className="flex h-[22px] min-w-[34px] items-center justify-center rounded-[4px] border border-[#d5d5d5] px-[6px] text-[11px] font-semibold leading-none text-[#d5d5d5] motion-hover-soft"
                         key={adjustment}
                         onClick={() => actions.adjustShares(adjustment)}
                         type="button"
@@ -1109,13 +1278,21 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     <span>{formatMaybePrice(derived.estimated.estimatedCost)}</span>
                   </div>
 
+                  {!selectedMarketCanTrade ? (
+                    <p className="mt-[12px] text-[12px] font-medium leading-[1.2] text-[#989ba6]">
+                      {selectedMarketStatus === "settled"
+                        ? "This market is settled. New orders are unavailable."
+                        : "This market is disabled. New orders are unavailable."}
+                    </p>
+                  ) : null}
+
                   <button
                     className={
                       state.ticketSide === "buy"
-                        ? "mt-auto h-[44px] w-full rounded-[6px] bg-[#42cc4e] text-[16px] font-bold leading-none text-white disabled:cursor-not-allowed disabled:opacity-60"
-                        : "mt-auto h-[44px] w-full rounded-[6px] bg-[#d85b5b] text-[16px] font-bold leading-none text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        ? "mt-auto h-[44px] w-full rounded-[6px] bg-[#42cc4e] text-[16px] font-bold leading-none text-white disabled:cursor-not-allowed disabled:opacity-60 motion-hover-soft"
+                        : "mt-auto h-[44px] w-full rounded-[6px] bg-[#d85b5b] text-[16px] font-bold leading-none text-white disabled:cursor-not-allowed disabled:opacity-60 motion-hover-soft"
                     }
-                    disabled={state.isSubmitting}
+                    disabled={state.isSubmitting || !selectedMarketCanTrade}
                     onClick={() => {
                       void actions.submitOrder();
                     }}
@@ -1123,14 +1300,16 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   >
                     <span className="inline-flex items-center gap-[6px]">
                       <span>
-                        {state.isSubmitting
+                        {!selectedMarketCanTrade
+                          ? `Market ${marketStatusLabel(selectedMarketStatus)}`
+                          : state.isSubmitting
                           ? "Submitting..."
                           : `${state.orderType === "market" ? "Market" : "Limit"} ${
                               state.ticketSide === "buy" ? "Buy" : "Sell"
                             }`}
                       </span>
-                      {!state.isSubmitting ? (
-                        <ShortcutHint keys={tradePreferences.keybinds.submit} />
+                      {!state.isSubmitting && selectedMarketCanTrade ? (
+                        <ShortcutHint keys={tradePreferences.keybinds.submit} tone="button" />
                       ) : null}
                     </span>
                   </button>
@@ -1138,7 +1317,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               </section>
 
               <section
-                className={`${panelBaseClass} grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
+                className={`${panelBaseClass} motion-fade-up motion-delay-4 grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
                 data-testid="messages-panel"
               >
                 <div className="border-b border-[#2c2d31] px-[20px] pt-[10px]">
@@ -1149,10 +1328,11 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
 
                 <div className="min-h-0 space-y-[10px] overflow-y-auto px-[20px] py-[14px]">
                   {visibleMessages.length > 0 ? (
-                    visibleMessages.map((message) => (
+                    visibleMessages.map((message, index) => (
                       <div
-                        className={`rounded-[5px] border px-[12px] py-[10px] ${messageCardToneClass(message.tone)}`}
+                        className={`motion-fade-up motion-fade-up-fast rounded-[5px] border px-[12px] py-[10px] ${messageCardToneClass(message.tone)}`}
                         key={message.id}
+                        style={{ animationDelay: `${Math.min(index, 4) * 35}ms` }}
                       >
                         <div className="text-[11px] font-medium leading-none text-[#7d7d84]">
                           <span>{message.time}</span>

@@ -9,12 +9,14 @@ export type ConnectionStatus =
   | "reconnecting"
   | "disconnected";
 export type BootstrapStatus = "idle" | "loading" | "ready" | "error";
+export type MarketStatus = "enabled" | "disabled" | "settled";
 
 export type MarketDefinition = {
   id: MarketId;
   name: string;
   baseAsset: string;
   quoteAsset: string;
+  status?: MarketStatus;
 };
 
 export type MarketBookLevel = {

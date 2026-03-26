@@ -102,6 +102,19 @@ describe("tradeReducer", () => {
     expect(next.bootstrapStatus).toBe("ready");
   });
 
+  it("does not add a message when switching markets", () => {
+    const initial = createInitialTradeState(markets);
+    const next = tradeReducer(initial, {
+      type: "select-market",
+      marketId: "ETH-USD",
+      id: 1,
+      time: "09:30:00",
+    });
+
+    expect(next.selectedMarketId).toBe("ETH-USD");
+    expect(next.messages).toEqual([]);
+  });
+
   it("applies snapshots and deltas to the market book", () => {
     let state = createInitialTradeState(markets);
     state = tradeReducer(state, {

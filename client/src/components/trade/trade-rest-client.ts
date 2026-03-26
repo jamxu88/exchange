@@ -1,6 +1,7 @@
 import type {
   AccountPosition,
   MarketDefinition,
+  MarketStatus,
   PendingOrder,
   SubmitOrderIntent,
   SubmitOrderResult,
@@ -64,6 +65,7 @@ type MarketResponse = {
   display_name: string;
   base_asset: string;
   quote_asset: string;
+  status?: MarketStatus;
 };
 
 export class ExchangeApiError extends Error {
@@ -115,6 +117,7 @@ function normalizeMarket(market: MarketResponse): MarketDefinition {
     name: market.display_name,
     baseAsset: market.base_asset,
     quoteAsset: market.quote_asset,
+    status: market.status ?? "enabled",
   };
 }
 

@@ -33,7 +33,7 @@ export default function RootLayout({
           {children}
           <div className="pointer-events-none fixed inset-x-0 bottom-2 z-50 flex justify-center px-4">
             <a
-              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[rgba(183,183,189,0.7)] hover:text-white"
+              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[rgba(183,183,189,0.7)] hover:text-white motion-fade-up motion-fade-up-fast motion-delay-4"
               href="https://github.com/jamxu88/exchange"
               rel="noreferrer"
               target="_blank"

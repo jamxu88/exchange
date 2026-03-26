@@ -26,7 +26,15 @@ describe("TradeRestClient", () => {
 
   it("bootstraps markets alongside account state", async () => {
     const responses = [
-      [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }],
+      [
+        {
+          market_id: "BTC-USD",
+          display_name: "Bitcoin",
+          base_asset: "BTC",
+          quote_asset: "USD",
+          status: "disabled",
+        },
+      ],
       { trader_id: "trader-1", username: "alice" },
       [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }],
       [],
@@ -44,7 +52,13 @@ describe("TradeRestClient", () => {
     const snapshot = await client.bootstrapAccountData();
 
     expect(snapshot.markets).toEqual([
-      { id: "BTC-USD", name: "Bitcoin", baseAsset: "BTC", quoteAsset: "USD" },
+      {
+        id: "BTC-USD",
+        name: "Bitcoin",
+        baseAsset: "BTC",
+        quoteAsset: "USD",
+        status: "disabled",
+      },
     ]);
     expect(snapshot.user?.username).toBe("alice");
     expect(snapshot.loaded).toEqual({

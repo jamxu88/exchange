@@ -44,6 +44,7 @@ export type TradeState = {
 };
 
 export type TradeAction =
+  | { type: "hydrate-messages"; messages: MessageEntry[] }
   | { type: "select-market"; marketId: MarketId; id: number; time: string }
   | { type: "set-side"; side: TradeSide }
   | { type: "set-position-filter"; filter: PositionFilter }
@@ -198,6 +199,31 @@ function pushMessage(messages: MessageEntry[], message: MessageEntry) {
       : Math.max(1, message.id);
 
   return [...messages, { ...message, id: nextId }].slice(-MAX_MESSAGES);
+}
+
+function normalizeMessages(messages: MessageEntry[]) {
+  return messages.slice(-MAX_MESSAGES).map((message, index) => ({
+    ...message,
+    id: index + 1,
+  }));
+}
+
+function mergeMessages(existing: MessageEntry[], incoming: MessageEntry[]) {
+  const merged = [...incoming, ...existing];
+  const deduped: MessageEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const message of merged) {
+    const signature = `${message.time}|${message.tone}|${message.text}`;
+    if (seen.has(signature)) {
+      continue;
+    }
+
+    seen.add(signature);
+    deduped.push(message);
+  }
+
+  return normalizeMessages(deduped);
 }
 
 function positionMapFromSnapshots(
@@ -512,6 +538,11 @@ function applyBootstrapDataToState(
 
 export function tradeReducer(state: TradeState, action: TradeAction): TradeState {
   switch (action.type) {
+    case "hydrate-messages":
+      return action.messages.length > 0
+        ? { ...state, messages: mergeMessages(state.messages, action.messages) }
+        : state;
+
     case "select-market": {
       if (action.marketId === state.selectedMarketId) {
         return state;
@@ -526,12 +557,6 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         ...state,
         selectedMarketId: action.marketId,
         limitPriceInput: maybeLimitInputForMarket(state, action.marketId, state.ticketSide),
-        messages: pushMessage(state.messages, {
-          id: action.id,
-          time: action.time,
-          tone: "neutral",
-          text: `Switched to ${nextMarket.name}.`,
-        }),
       };
     }
 
