@@ -27,9 +27,21 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${darkerGrotesque.variable} ${geistMono.variable} antialiased`}
+        className={`${darkerGrotesque.variable} ${geistMono.variable} relative antialiased`}
       >
-        <KeybindProvider>{children}</KeybindProvider>
+        <KeybindProvider>
+          {children}
+          <div className="pointer-events-none fixed inset-x-0 bottom-2 z-50 flex justify-center px-4">
+            <a
+              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[rgba(183,183,189,0.7)] hover:text-white"
+              href="https://github.com/jamxu88/exchange"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Made with ❤️ by James
+            </a>
+          </div>
+        </KeybindProvider>
       </body>
     </html>
   );

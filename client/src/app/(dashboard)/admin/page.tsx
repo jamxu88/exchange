@@ -358,6 +358,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           <p className="mt-2 text-base text-[var(--muted-strong)]">
             Save a bot config, launch it immediately, then pause or restart it from the roster.
           </p>
+          <p className="mt-3 max-w-4xl text-sm text-[var(--muted)]">
+            Open order cap is the maximum number of resting orders the bot may keep live at once.
+            Offset ticks place each limit order away from the current anchor price. Walk ticks set
+            how far that anchor can drift on each cycle. Fallback price is used only when the book
+            is empty and the market has no usable reference price.
+          </p>
           <form action={saveBotAction} className="mt-4 grid gap-3">
             <div className="grid gap-3 md:grid-cols-2">
               <input
@@ -375,9 +381,13 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <div className="grid gap-3 md:grid-cols-3">
               <select
                 className={selectClass}
-                defaultValue={adminState.markets[0]?.market_id}
+                defaultValue=""
                 name="marketId"
+                required
               >
+                <option disabled value="">
+                  Select market
+                </option>
                 {adminState.markets.map((market) => (
                   <option key={market.market_id} value={market.market_id}>
                     {market.market_id}
@@ -386,18 +396,26 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </select>
               <select
                 className={selectClass}
-                defaultValue="both"
+                defaultValue=""
                 name="sideMode"
+                required
               >
+                <option disabled value="">
+                  Select side mode
+                </option>
                 <option value="both">Both sides</option>
                 <option value="buy">Buy only</option>
                 <option value="sell">Sell only</option>
               </select>
               <select
                 className={selectClass}
-                defaultValue="limit"
+                defaultValue=""
                 name="orderType"
+                required
               >
+                <option disabled value="">
+                  Select order type
+                </option>
                 <option value="limit">Limit</option>
                 <option value="market">Market</option>
               </select>
@@ -405,7 +423,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <div className="grid gap-3 md:grid-cols-3">
               <input
                 className={inputClass}
-                defaultValue="1"
                 min="1"
                 name="minQuantity"
                 placeholder="Min qty"
@@ -414,7 +431,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               />
               <input
                 className={inputClass}
-                defaultValue="5"
                 min="1"
                 name="maxQuantity"
                 placeholder="Max qty"
@@ -423,7 +439,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               />
               <input
                 className={inputClass}
-                defaultValue="500"
                 min="100"
                 name="intervalMs"
                 placeholder="Interval ms"
@@ -434,7 +449,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <div className="grid gap-3 md:grid-cols-4">
               <input
                 className={inputClass}
-                defaultValue="8"
                 min="1"
                 name="maxOpenOrders"
                 placeholder="Open order cap"
@@ -443,7 +457,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               />
               <input
                 className={inputClass}
-                defaultValue="1"
                 min="0"
                 name="priceOffsetTicks"
                 placeholder="Offset ticks"
@@ -452,7 +465,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               />
               <input
                 className={inputClass}
-                defaultValue="2"
                 min="0"
                 name="walkStepTicks"
                 placeholder="Walk ticks"
@@ -468,7 +480,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               />
             </div>
             <label className="flex items-center gap-3 text-sm text-[var(--muted-strong)]">
-              <input className="ops-check" defaultChecked name="startImmediately" type="checkbox" />
+              <input className="ops-check" name="startImmediately" type="checkbox" />
               Start immediately after saving
             </label>
             <button

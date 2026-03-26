@@ -1,6 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TradeConsoleView } from "@/components/trade/trade-console";
+import {
+  DEFAULT_TRADE_KEYBINDS,
+  TRADE_PREFERENCES_STORAGE_KEY,
+} from "@/components/trade/trade-preferences";
 import { createInitialTradeState } from "@/components/trade/trade-store";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
 
@@ -15,6 +19,10 @@ const runtime: TradeRuntimeConfig = {
 };
 
 describe("TradeConsoleView", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("renders live connection, market data, and messages from controller state", async () => {
     const state = createInitialTradeState(runtime.markets);
     state.connectionStatus = "connected";
@@ -119,7 +127,180 @@ describe("TradeConsoleView", () => {
 
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("Team 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  it("lets the user change ticket keybinds from settings", async () => {
+    const state = createInitialTradeState(runtime.markets);
+    state.connectionStatus = "connected";
+    const setSide = vi.fn();
+
+    render(
+      <TradeConsoleView
+        controller={{
+          runtime,
+          state,
+          derived: {
+            summary: {
+              bids: [{ price: 100, liquidity: 1, total: 100 }],
+              asks: [{ price: 101, liquidity: 1, total: 101 }],
+              bestBid: 100,
+              bestAsk: 101,
+              buyQuote: 101,
+              sellQuote: 100,
+              lastPrice: 101,
+              midPrice: 100.5,
+              spread: 1,
+            },
+            estimated: {
+              shares: 20,
+              derivedPrice: 101,
+              estimatedCost: 2020,
+            },
+          },
+          actions: {
+            selectMarket: vi.fn(),
+            setSide,
+            setPositionFilter: vi.fn(),
+            setOrderType: vi.fn(),
+            setLimitPrice: vi.fn(),
+            setShares: vi.fn(),
+            adjustShares: vi.fn(),
+            cancelPendingOrder: vi.fn(),
+            submitOrder: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Open profile menu" }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    const buyKeybindInput = screen.getByLabelText("Buy keybind");
+    buyKeybindInput.focus();
+    await user.keyboard("x");
+    const sellKeybindInput = screen.getByLabelText("Sell keybind");
+    sellKeybindInput.focus();
+    await user.keyboard("c");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(screen.getByText("(X)")).toBeInTheDocument();
+    expect(screen.getByText("(C)")).toBeInTheDocument();
+
+    await user.keyboard("c");
+
+    expect(setSide).toHaveBeenCalledWith("sell");
+    expect(
+      JSON.parse(window.localStorage.getItem(TRADE_PREFERENCES_STORAGE_KEY) ?? "{}").keybinds,
+    ).toMatchObject({
+      ...DEFAULT_TRADE_KEYBINDS,
+      buy: "X",
+      sell: "C",
+    });
+  });
+
+  it("plays the configured execution sound when a new fill arrives", async () => {
+    const play = vi.fn().mockResolvedValue(undefined);
+    class AudioMock {
+      src: string;
+      volume = 1;
+
+      constructor(src: string) {
+        this.src = src;
+      }
+
+      play() {
+        return play();
+      }
+    }
+
+    vi.stubGlobal("Audio", AudioMock);
+    window.localStorage.setItem(
+      TRADE_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        keybinds: {
+          ...DEFAULT_TRADE_KEYBINDS,
+          buy: "X",
+        },
+        executionSound: {
+          name: "fill.wav",
+          dataUrl: "data:audio/wav;base64,AAAA",
+        },
+      }),
+    );
+
+    const state = createInitialTradeState(runtime.markets);
+    state.connectionStatus = "connected";
+    const controller = {
+      runtime,
+      state,
+      derived: {
+        summary: {
+          bids: [{ price: 100, liquidity: 1, total: 100 }],
+          asks: [{ price: 101, liquidity: 1, total: 101 }],
+          bestBid: 100,
+          bestAsk: 101,
+          buyQuote: 101,
+          sellQuote: 100,
+          lastPrice: 101,
+          midPrice: 100.5,
+          spread: 1,
+        },
+        estimated: {
+          shares: 20,
+          derivedPrice: 101,
+          estimatedCost: 2020,
+        },
+      },
+      actions: {
+        selectMarket: vi.fn(),
+        setSide: vi.fn(),
+        setPositionFilter: vi.fn(),
+        setOrderType: vi.fn(),
+        setLimitPrice: vi.fn(),
+        setShares: vi.fn(),
+        adjustShares: vi.fn(),
+        cancelPendingOrder: vi.fn(),
+        submitOrder: vi.fn(),
+      },
+    };
+
+    const { rerender } = render(<TradeConsoleView controller={controller} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("(X)")).toBeInTheDocument();
+    });
+
+    rerender(
+      <TradeConsoleView
+        controller={{
+          ...controller,
+          state: {
+            ...state,
+            fills: [
+              {
+                fillId: "fill-1",
+                market: "BTC-USD",
+                makerOrderId: "maker-1",
+                takerOrderId: "taker-1",
+                price: 101,
+                quantity: 1,
+                occurredAt: "2026-03-25T10:00:00Z",
+              },
+            ],
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    vi.unstubAllGlobals();
   });
 
   it("keeps the market depth panel in orderbook mode only", () => {

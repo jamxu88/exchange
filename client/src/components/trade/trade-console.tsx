@@ -2,6 +2,18 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_TRADE_KEYBINDS,
+  DEFAULT_TRADE_PREFERENCES,
+  isTradeKeybindMatch,
+  keybindsHaveConflicts,
+  loadTradePreferences,
+  normalizeTradeKeybindKey,
+  saveTradePreferences,
+  type ExecutionSoundPreference,
+  type TradeKeybindAction,
+  type TradeKeybinds,
+} from "@/components/trade/trade-preferences";
 import { useTradeController } from "@/components/trade/use-trade-controller";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
 import {
@@ -21,12 +33,228 @@ const leftColumnRows = "minmax(0, 500fr) minmax(0, 360fr)";
 const rightColumnRows = "minmax(0, 430fr) minmax(0, 430fr)";
 const panelBaseClass = "rounded-[10px] border border-[#26272b] bg-[#141416]";
 const quickAdjustments = [-100, -10, 10, 100];
+const keybindFieldDefinitions: Array<{
+  action: TradeKeybindAction;
+  label: string;
+  helper: string;
+}> = [
+  { action: "buy", label: "Buy", helper: "Select the buy side" },
+  { action: "sell", label: "Sell", helper: "Select the sell side" },
+  { action: "limit", label: "Limit", helper: "Switch the ticket to limit orders" },
+  { action: "market", label: "Market", helper: "Switch the ticket to market orders" },
+  { action: "price", label: "Price", helper: "Focus the price field" },
+  { action: "shares", label: "Shares", helper: "Focus the share count field" },
+  { action: "submit", label: "Submit", helper: "Send the current order" },
+];
 
 function ShortcutHint({ keys }: { keys: string }) {
   return (
-    <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#9a9aa2]">
+    <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#b6b6bc]">
       ({keys})
     </span>
+  );
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read the selected audio file."));
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Unable to read the selected audio file."));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function playLocalExecutionSound(dataUrl: string) {
+  if (typeof Audio === "undefined") {
+    return;
+  }
+
+  const audio = new Audio(dataUrl);
+  audio.volume = 1;
+  void audio.play().catch(() => {});
+}
+
+type TradeSettingsPanelProps = {
+  draftKeybinds: TradeKeybinds;
+  draftExecutionSound: ExecutionSoundPreference | null;
+  errorMessage: string | null;
+  isUploadingSound: boolean;
+  onClose: () => void;
+  onClearSound: () => void;
+  onKeybindChange: (action: TradeKeybindAction, binding: string) => void;
+  onPreviewSound: () => void;
+  onResetDefaults: () => void;
+  onSave: () => void;
+  onSoundSelected: (file: File | null) => void;
+};
+
+function TradeSettingsPanel({
+  draftKeybinds,
+  draftExecutionSound,
+  errorMessage,
+  isUploadingSound,
+  onClose,
+  onClearSound,
+  onKeybindChange,
+  onPreviewSound,
+  onResetDefaults,
+  onSave,
+  onSoundSelected,
+}: TradeSettingsPanelProps) {
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-[rgba(0,0,0,0.52)] backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        className="absolute right-[clamp(18px,2.6vw,40px)] top-[94px] w-[min(460px,calc(100vw-36px))] rounded-[10px] border border-[#2b2d31] bg-[#141416] shadow-[0_24px_64px_rgba(0,0,0,0.45)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between border-b border-[#2c2d31] px-[18px] py-[14px]">
+          <div>
+            <p className="text-[19px] font-bold leading-none text-white">Trade settings</p>
+            <p className="mt-[8px] text-[13px] leading-[1.2] text-[#9d9da4]">
+              These preferences are stored only in this browser.
+            </p>
+          </div>
+          <button
+            aria-label="Close settings"
+            className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
+            onClick={onClose}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="grid gap-[18px] px-[18px] py-[16px]">
+          <section className="grid gap-[10px]">
+            <div className="flex items-center justify-between">
+              <p className="text-[14px] font-semibold uppercase tracking-[0.14em] text-[#8f9098]">
+                Keybinds
+              </p>
+              <button
+                className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
+                onClick={onResetDefaults}
+                type="button"
+              >
+                Reset defaults
+              </button>
+            </div>
+            <p className="text-[13px] leading-[1.2] text-[#7f8289]">
+              Focus a field, then press the key you want to assign.
+            </p>
+            <div className="grid gap-[10px] sm:grid-cols-2">
+              {keybindFieldDefinitions.map((field) => (
+                <label className="grid gap-[6px]" key={field.action}>
+                  <span className="text-[13px] font-semibold leading-none text-white">
+                    {field.label}
+                  </span>
+                  <input
+                    aria-label={`${field.label} keybind`}
+                    className="rounded-[6px] border border-[#2b2d32] bg-[#0d0f12] px-[12px] py-[10px] text-[14px] font-semibold text-white outline-none focus:border-[rgba(64,217,255,0.5)] focus:shadow-[0_0_0_1px_rgba(64,217,255,0.14)]"
+                    onKeyDown={(event) => {
+                      event.preventDefault();
+                      if (event.metaKey || event.ctrlKey || event.altKey) {
+                        return;
+                      }
+
+                      if (event.key === "Backspace" || event.key === "Delete") {
+                        onKeybindChange(field.action, "");
+                        return;
+                      }
+
+                      const binding = normalizeTradeKeybindKey(event.key);
+                      if (binding) {
+                        onKeybindChange(field.action, binding);
+                      }
+                    }}
+                    readOnly
+                    value={draftKeybinds[field.action]}
+                  />
+                  <span className="text-[12px] leading-[1.2] text-[#7f8289]">
+                    {field.helper}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="grid gap-[10px]">
+            <p className="text-[14px] font-semibold uppercase tracking-[0.14em] text-[#8f9098]">
+              Execution sound
+            </p>
+            <p className="text-[13px] leading-[1.2] text-[#7f8289]">
+              Pick a local audio file. It stays in this browser and plays when a new fill arrives.
+            </p>
+            <div className="rounded-[8px] border border-[#2b2d32] bg-[#0f1013] px-[12px] py-[12px]">
+              <p className="text-[13px] leading-none text-white">
+                {draftExecutionSound ? draftExecutionSound.name : "No sound selected"}
+              </p>
+              <div className="mt-[10px] flex flex-wrap gap-[8px]">
+                <label className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white">
+                  <span>{isUploadingSound ? "Loading..." : "Choose file"}</span>
+                  <input
+                    accept="audio/*"
+                    aria-label="Execution sound file"
+                    className="hidden"
+                    disabled={isUploadingSound}
+                    onChange={(event) => onSoundSelected(event.target.files?.[0] ?? null)}
+                    type="file"
+                  />
+                </label>
+                <button
+                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76]"
+                  disabled={!draftExecutionSound}
+                  onClick={onPreviewSound}
+                  type="button"
+                >
+                  Test sound
+                </button>
+                <button
+                  className="rounded-[6px] border border-[#32333a] px-[10px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white disabled:cursor-not-allowed disabled:border-[#26272b] disabled:text-[#6f6f76]"
+                  disabled={!draftExecutionSound}
+                  onClick={onClearSound}
+                  type="button"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {errorMessage ? (
+            <p className="rounded-[8px] border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-[12px] py-[10px] text-[13px] leading-[1.2] text-[#ffb2b2]">
+              {errorMessage}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-[8px]">
+            <button
+              className="rounded-[6px] border border-[#32333a] px-[12px] py-[9px] text-[12px] font-semibold uppercase tracking-[0.08em] text-[#d9d9dc] hover:border-[#50515a] hover:text-white"
+              onClick={onClose}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="rounded-[6px] bg-[#42cc4e] px-[12px] py-[9px] text-[12px] font-bold uppercase tracking-[0.08em] text-[#081108]"
+              onClick={onSave}
+              type="button"
+            >
+              Save settings
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -145,9 +373,18 @@ type TradeConsoleViewProps = {
 export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const [isOrderTypeMenuOpen, setIsOrderTypeMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
   const [cancelingOrderIds, setCancelingOrderIds] = useState<string[]>([]);
+  const [tradePreferences, setTradePreferences] = useState(DEFAULT_TRADE_PREFERENCES);
+  const [draftKeybinds, setDraftKeybinds] = useState(DEFAULT_TRADE_KEYBINDS);
+  const [draftExecutionSound, setDraftExecutionSound] =
+    useState<ExecutionSoundPreference | null>(null);
+  const [settingsErrorMessage, setSettingsErrorMessage] = useState<string | null>(null);
+  const [isUploadingSound, setIsUploadingSound] = useState(false);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const sharesInputRef = useRef<HTMLInputElement | null>(null);
+  const hasInitializedExecutionSoundRef = useRef(false);
+  const lastExecutionFillIdRef = useRef<string | null>(null);
   const { state, derived, actions } = controller;
   const selectedMarket = selectSelectedMarket(state);
   const activeRows = selectActiveRows(state);
@@ -162,17 +399,47 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const initials = initialsForUser(state.user);
   const profileName = state.user?.username ?? "Competition User";
   const profileTeam = teamLabelForUser(state.user?.traderId);
+  const latestFillId = state.fills[state.fills.length - 1]?.fillId ?? null;
+
+  useEffect(() => {
+    const loadedPreferences = loadTradePreferences();
+    setTradePreferences(loadedPreferences);
+    setDraftKeybinds(loadedPreferences.keybinds);
+    setDraftExecutionSound(loadedPreferences.executionSound);
+  }, []);
+
+  useEffect(() => {
+    if (!hasInitializedExecutionSoundRef.current) {
+      hasInitializedExecutionSoundRef.current = true;
+      lastExecutionFillIdRef.current = latestFillId;
+      return;
+    }
+
+    if (!latestFillId || lastExecutionFillIdRef.current === latestFillId) {
+      return;
+    }
+
+    lastExecutionFillIdRef.current = latestFillId;
+    if (tradePreferences.executionSound) {
+      playLocalExecutionSound(tradePreferences.executionSound.dataUrl);
+    }
+  }, [latestFillId, tradePreferences.executionSound]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isSettingsPanelOpen) {
+        return;
+      }
+
       if (event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
 
       const targetIsEditable = isEditableTarget(event.target);
-      const key = event.key.toLowerCase();
-
-      if (event.key === "Enter") {
+      if (
+        isTradeKeybindMatch(event.key, tradePreferences.keybinds.submit) &&
+        (!targetIsEditable || event.key === "Enter")
+      ) {
         event.preventDefault();
         void actions.submitOrder();
         return;
@@ -182,50 +449,58 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
         return;
       }
 
-      switch (key) {
-        case "b":
-          event.preventDefault();
-          actions.setSide("buy");
-          break;
-        case "s":
-          event.preventDefault();
-          actions.setSide("sell");
-          break;
-        case "l":
-          event.preventDefault();
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.buy)) {
+        event.preventDefault();
+        actions.setSide("buy");
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.sell)) {
+        event.preventDefault();
+        actions.setSide("sell");
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.limit)) {
+        event.preventDefault();
+        actions.setOrderType("limit");
+        setIsOrderTypeMenuOpen(false);
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.market)) {
+        event.preventDefault();
+        actions.setOrderType("market");
+        setIsOrderTypeMenuOpen(false);
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.price)) {
+        event.preventDefault();
+        if (state.orderType === "market") {
           actions.setOrderType("limit");
           setIsOrderTypeMenuOpen(false);
-          break;
-        case "m":
-          event.preventDefault();
-          actions.setOrderType("market");
-          setIsOrderTypeMenuOpen(false);
-          break;
-        case "p":
-          event.preventDefault();
-          if (state.orderType === "market") {
-            actions.setOrderType("limit");
-            setIsOrderTypeMenuOpen(false);
-            requestAnimationFrame(() => {
-              priceInputRef.current?.focus();
-              priceInputRef.current?.select();
-            });
-          } else {
+          requestAnimationFrame(() => {
             priceInputRef.current?.focus();
             priceInputRef.current?.select();
-          }
-          break;
-        case "q":
-          event.preventDefault();
-          sharesInputRef.current?.focus();
-          sharesInputRef.current?.select();
-          break;
+          });
+        } else {
+          priceInputRef.current?.focus();
+          priceInputRef.current?.select();
+        }
+        return;
+      }
+
+      if (isTradeKeybindMatch(event.key, tradePreferences.keybinds.shares)) {
+        event.preventDefault();
+        sharesInputRef.current?.focus();
+        sharesInputRef.current?.select();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [actions, state.orderType]);
+  }, [actions, isSettingsPanelOpen, state.orderType, tradePreferences.keybinds]);
 
   async function handleCancelPendingOrder(orderId: string) {
     if (cancelingOrderIds.includes(orderId)) {
@@ -237,6 +512,83 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
       await actions.cancelPendingOrder(orderId);
     } finally {
       setCancelingOrderIds((current) => current.filter((currentOrderId) => currentOrderId !== orderId));
+    }
+  }
+
+  function openSettingsPanel() {
+    setDraftKeybinds(tradePreferences.keybinds);
+    setDraftExecutionSound(tradePreferences.executionSound);
+    setSettingsErrorMessage(null);
+    setIsProfileMenuOpen(false);
+    setIsSettingsPanelOpen(true);
+  }
+
+  function closeSettingsPanel() {
+    setIsSettingsPanelOpen(false);
+    setSettingsErrorMessage(null);
+  }
+
+  function handleDraftKeybindChange(action: TradeKeybindAction, binding: string) {
+    setDraftKeybinds((current) => ({
+      ...current,
+      [action]: binding,
+    }));
+  }
+
+  function handleResetKeybindDefaults() {
+    setDraftKeybinds(DEFAULT_TRADE_KEYBINDS);
+    setSettingsErrorMessage(null);
+  }
+
+  async function handleSoundFileSelected(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingSound(true);
+    setSettingsErrorMessage(null);
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setDraftExecutionSound({
+        name: file.name,
+        dataUrl,
+      });
+    } catch (error) {
+      setSettingsErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to read the selected audio file.",
+      );
+    } finally {
+      setIsUploadingSound(false);
+    }
+  }
+
+  function handleSaveSettings() {
+    if (Object.values(draftKeybinds).some((binding) => binding.length === 0)) {
+      setSettingsErrorMessage("Every trade action needs a keybind.");
+      return;
+    }
+
+    if (keybindsHaveConflicts(draftKeybinds)) {
+      setSettingsErrorMessage("Each trade action needs a unique keybind.");
+      return;
+    }
+
+    const nextPreferences = {
+      keybinds: draftKeybinds,
+      executionSound: draftExecutionSound,
+    };
+
+    try {
+      saveTradePreferences(nextPreferences);
+      setTradePreferences(nextPreferences);
+      setSettingsErrorMessage(null);
+      setIsSettingsPanelOpen(false);
+    } catch {
+      setSettingsErrorMessage(
+        "Unable to save settings locally. Try a smaller sound file.",
+      );
     }
   }
 
@@ -332,6 +684,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                         {profileTeam}
                       </p>
                     </div>
+                    <button
+                      className="mt-[8px] w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white"
+                      onClick={openSettingsPanel}
+                      type="button"
+                    >
+                      Settings
+                    </button>
                     <form action="/api/auth/logout" className="mt-[8px]" method="post">
                       <button
                         className="w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white"
@@ -601,7 +960,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                       type="button"
                     >
                       <span>{state.orderType === "limit" ? "Limit" : "Market"}</span>
-                      <ShortcutHint keys={state.orderType === "limit" ? "L" : "M"} />
+                      <ShortcutHint
+                        keys={
+                          state.orderType === "limit"
+                            ? tradePreferences.keybinds.limit
+                            : tradePreferences.keybinds.market
+                        }
+                      />
                       <Image alt="" height={14} src="/chevron.svg" width={14} />
                     </button>
 
@@ -622,7 +987,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                             type="button"
                           >
                             <span>{orderType === "limit" ? "Limit" : "Market"}</span>
-                            <ShortcutHint keys={orderType === "limit" ? "L" : "M"} />
+                            <ShortcutHint
+                              keys={
+                                orderType === "limit"
+                                  ? tradePreferences.keybinds.limit
+                                  : tradePreferences.keybinds.market
+                              }
+                            />
                           </button>
                         ))}
                       </div>
@@ -643,7 +1014,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     >
                       <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
                         <span>Buy</span>
-                        <ShortcutHint keys="B" />
+                        <ShortcutHint keys={tradePreferences.keybinds.buy} />
                       </span>{" "}
                       {formatMaybePrice(summary.buyQuote)}
                     </button>
@@ -658,7 +1029,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     >
                       <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
                         <span>Sell</span>
-                        <ShortcutHint keys="S" />
+                        <ShortcutHint keys={tradePreferences.keybinds.sell} />
                       </span>{" "}
                       {formatMaybePrice(summary.sellQuote)}
                     </button>
@@ -667,7 +1038,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   <div className="mt-[20px] grid grid-cols-[1fr_148px] items-center">
                     <span className="inline-flex items-center gap-[6px] text-[16px] font-medium leading-none text-white">
                       <span>{state.orderType === "market" ? "Market Price" : "Limit Price"}</span>
-                      <ShortcutHint keys="P" />
+                      <ShortcutHint keys={tradePreferences.keybinds.price} />
                     </span>
                     <label className="flex h-[34px] items-center justify-center rounded-[6px] border border-[#666] bg-[#18181b] text-[16px] font-bold leading-none text-white">
                       <input
@@ -692,7 +1063,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   <div className="mt-[16px] grid grid-cols-[1fr_148px] items-center">
                     <span className="inline-flex items-center gap-[6px] text-[16px] font-medium leading-none text-white">
                       <span>Shares</span>
-                      <ShortcutHint keys="Q" />
+                      <ShortcutHint keys={tradePreferences.keybinds.shares} />
                     </span>
                     <div className="flex h-[34px] items-center justify-between rounded-[6px] border border-[#666] bg-[#18181b] px-[5px]">
                       <button
@@ -758,7 +1129,9 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                               state.ticketSide === "buy" ? "Buy" : "Sell"
                             }`}
                       </span>
-                      {!state.isSubmitting ? <ShortcutHint keys="Enter" /> : null}
+                      {!state.isSubmitting ? (
+                        <ShortcutHint keys={tradePreferences.keybinds.submit} />
+                      ) : null}
                     </span>
                   </button>
                 </div>
@@ -799,6 +1172,25 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
             </div>
           </div>
       </div>
+      {isSettingsPanelOpen ? (
+        <TradeSettingsPanel
+          draftExecutionSound={draftExecutionSound}
+          draftKeybinds={draftKeybinds}
+          errorMessage={settingsErrorMessage}
+          isUploadingSound={isUploadingSound}
+          onClearSound={() => setDraftExecutionSound(null)}
+          onClose={closeSettingsPanel}
+          onKeybindChange={handleDraftKeybindChange}
+          onPreviewSound={() => {
+            if (draftExecutionSound) {
+              playLocalExecutionSound(draftExecutionSound.dataUrl);
+            }
+          }}
+          onResetDefaults={handleResetKeybindDefaults}
+          onSave={handleSaveSettings}
+          onSoundSelected={handleSoundFileSelected}
+        />
+      ) : null}
     </div>
   );
 }
