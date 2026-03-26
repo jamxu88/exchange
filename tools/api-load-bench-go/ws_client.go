@@ -18,14 +18,23 @@ type pendingRequest struct {
 }
 
 type wsServerMessage struct {
-	Type      string        `json:"type"`
-	Op        string        `json:"op"`
-	RequestID *string       `json:"request_id"`
-	Code      string        `json:"code"`
-	Message   string        `json:"message"`
-	Status    string        `json:"status"`
-	Fill      *fill         `json:"fill"`
-	Order     *wsOrderState `json:"order"`
+	Type             string            `json:"type"`
+	Op               string            `json:"op"`
+	RequestID        *string           `json:"request_id"`
+	Code             string            `json:"code"`
+	Message          string            `json:"message"`
+	Status           string            `json:"status"`
+	Channel          string            `json:"channel"`
+	Market           string            `json:"market"`
+	Sequence         uint64            `json:"sequence"`
+	StartSequence    uint64            `json:"start_sequence"`
+	ExpectedSequence *uint64           `json:"expected_sequence"`
+	CurrentSequence  *uint64           `json:"current_sequence"`
+	Bids             []json.RawMessage `json:"bids"`
+	Asks             []json.RawMessage `json:"asks"`
+	Events           []json.RawMessage `json:"events"`
+	Fill             *fill             `json:"fill"`
+	Order            *wsOrderState     `json:"order"`
 }
 
 type wsOrderState struct {

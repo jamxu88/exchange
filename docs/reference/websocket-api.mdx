@@ -1,13 +1,16 @@
 ---
 title: "WebSocket API"
-description: "Competitor-facing WebSocket overview for aggregated market data, order entry, and user event delivery."
+description: "Competitor-facing WebSocket overview for aggregated L2 data, raw L3 data, order entry, and user event delivery."
 ---
 
-Use WebSocket for live aggregated market data, user-scoped trade events, and low-latency order actions on a single connection.
+Use WebSocket for live market data, user-scoped trade events, and low-latency order actions on a single connection.
 
-The market-data channel is named `l3`, but the current `snapshot` and `delta` payloads are aggregated by price level. Treat that feed as an L2-style book view, and use `order_state` for your own exact resting-order detail.
+The exchange exposes two market-data channels:
 
-The exchange derives browser-facing market data from the canonical order-event stream, batches contiguous market-data deltas per market, and flushes them roughly every `100ms`. One `delta` message can therefore carry multiple ordered events.
+- `l2` for aggregated price-level book data, derived from the canonical order-event stream and flushed in short batches around every `100ms`
+- `l3` for authenticated API users who need a true per-order public feed built from canonical order events
+
+API clients can choose either feed on the same `/ws` endpoint: use batched public `l2` for compact book depth, or authenticated `l3` when you need exact public order lifecycle data.
 
 ```text
 wss://exchange.jamesxu.dev/ws
@@ -15,10 +18,10 @@ wss://exchange.jamesxu.dev/ws
 
 <Columns cols={3}>
   <Card title="Connection" href="/websocket/authenticate">
-    Authenticate once per socket if you want order entry or user-scoped events.
+    Authenticate once per socket if you want `l3`, order entry, or user-scoped events.
   </Card>
-  <Card title="Market Data" href="/websocket/subscribe-l3">
-    Subscribe to one market-data stream per connection and process snapshots plus sequenced deltas.
+  <Card title="Market Data" href="/websocket/subscribe-l2">
+    Subscribe to one `l2` or `l3` market-data stream per connection and process snapshots plus sequenced deltas.
   </Card>
   <Card title="Server Messages" href="/websocket/server-messages">
     Handle heartbeats, fills, order updates, admin messages, and resync requests.
@@ -29,31 +32,35 @@ wss://exchange.jamesxu.dev/ws
 
 - the server sends `heartbeat` messages
 - market data is sequenced per market
-- market-data `delta` messages can cover a contiguous sequence range with `start_sequence` through `sequence`
-- the current implementation supports one market-data subscription per connection, on the `l3` channel
-- market-data snapshots and deltas on that channel are aggregated by price level, not raw resting orders
+- `l2` `delta` messages can cover a contiguous sequence range with `start_sequence` through `sequence`
+- the current implementation supports one market-data subscription per connection
+- `l2` subscriptions are public; `l3` subscriptions require prior socket authentication
+- `l2` snapshots and deltas are aggregated by price level, not raw resting orders
+- `l3` snapshots and deltas are true public per-order events and require prior socket authentication
 - after authentication, the same socket can carry market data, order actions, and user-specific events
-- authenticated trading messages on the socket share the same `100 ops/sec` per-user budget as authenticated REST trading/account calls
+- authenticated trading messages on the socket share the same per-user bucket of `500 ops per 10s` as authenticated REST trading/account calls
 
 ## Recommended usage
 
 - Keep REST available for bootstrap and recovery even if WebSocket is your primary trading path.
 - Use one socket per market if you need multiple books at the same time.
+- Use `l2` when you want compact book depth for browser-style dashboards; use `l3` when your strategy needs exact public order lifecycle data.
 - Treat `fill`, `order_state`, `admin_message`, and `resync_required` as required message types, not optional extras.
-- Build live book state from `snapshot` plus `delta` messages, verify the next expected sequence against `start_sequence`, then advance your local sequence to `sequence`.
+- Build live `l2` book state from `snapshot` plus `delta` messages, verify the next expected sequence against `start_sequence`, then advance your local sequence to `sequence`.
+- Build live `l3` order state from `l3_snapshot` plus `l3_delta` messages, verifying contiguous sequences on every event batch.
 - Use `order_state` for your own exact resting-order detail.
 
 ## Typical message flow
 
 1. Connect to `wss://exchange.jamesxu.dev/ws`.
 2. [Authenticate](/websocket/authenticate) if you want trading or user events.
-3. [Subscribe](/websocket/subscribe-l3) to the market you want.
+3. [Subscribe to L2](/websocket/subscribe-l2) for aggregated book data or [Subscribe to L3](/websocket/subscribe-l3) for authenticated raw order events.
 4. Use [Submit Order](/websocket/submit-order), [Amend Order](/websocket/amend-order), and [Cancel Order](/websocket/cancel-order) as needed.
-5. Handle [Server Messages](/websocket/server-messages), especially `snapshot`, `delta`, `fill`, `order_state`, and `resync_required`.
+5. Handle [Server Messages](/websocket/server-messages), especially `snapshot`, `delta`, `l3_snapshot`, `l3_delta`, `fill`, `order_state`, and `resync_required`.
 
 ## Current limitations
 
 - one market subscription per connection
 - no replay endpoint
 - no persisted user-event sequence numbers
-- no market-data channel beyond `l3`
+- no historical gap-fill endpoint for `l2` or `l3`

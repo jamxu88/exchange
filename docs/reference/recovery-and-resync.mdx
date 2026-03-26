@@ -5,13 +5,14 @@ description: "How a competitor client should react to sequence gaps, lag, and ex
 
 ## Market-data sequencing
 
-Every market delta carries a per-market sequence range.
+Every market-data delta carries a per-market sequence range.
 
 Here’s how the flow works:
 
 - A fresh `subscribe` sends a snapshot.
-- That snapshot rebuilds your price-level book state for the `l3` channel; it is not a per-order replay.
-- Each `delta` includes `start_sequence` for the first event in the batch and `sequence` for the last event in the batch.
+- `l2` snapshots rebuild your aggregated price-level book state.
+- `l3_snapshot` rebuilds your raw per-order public book state.
+- Each `delta` or `l3_delta` includes `start_sequence` for the first event in the batch and `sequence` for the last event in the batch.
 - Deltas arrive in contiguous sequence order, even when the server batches several events into one frame.
 - The server emits `resync_required` whenever it detects a gap.
 - The same message fires when your broadcast receiver lags behind.
@@ -23,7 +24,7 @@ When this message hits you:
 ```json
 {
   "type": "resync_required",
-  "channel": "l3",
+  "channel": "l2",
   "market": "BTC-USD",
   "expected_sequence": 5,
   "current_sequence": 9,
@@ -36,7 +37,7 @@ Do this:
 1. treat `start_sequence` as the first sequence number you expect for the next batch
 2. if `start_sequence` is not exactly your expected next sequence, discard your local book for that market
 3. send a new `subscribe`
-4. replace local state with the returned snapshot
+4. replace local state with the returned `snapshot` or `l3_snapshot`
 5. resume processing deltas from the new snapshot sequence
 
 ## User-event lag
@@ -68,7 +69,7 @@ After a backend restart:
 
 - Open orders are restored into the in-memory books from storage.
 - Persisted positions remain queryable.
-- Market-data sequences restart at `0`.
+- Market-data sequences restart from the rebuilt derived state for each market.
 - No historical replay is available.
 
 Treat a reconnect after restart as a fresh session and re-bootstrap account state over REST before trusting cached data.

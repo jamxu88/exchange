@@ -103,6 +103,8 @@
             "group": "Connection",
             "pages": [
               "websocket/authenticate",
+              "websocket/subscribe-l2",
+              "websocket/unsubscribe-l2",
               "websocket/subscribe-l3",
               "websocket/unsubscribe-l3"
             ]

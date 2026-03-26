@@ -44,7 +44,8 @@ fn test_state() -> AppState {
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
-        per_user_requests_per_second: 100,
+        per_user_rate_limit_burst_capacity: 500,
+        per_user_rate_limit_burst_window_seconds: 10,
         admin_api_token: "test-admin-token".to_string(),
         postgres_write_batch_size: 128,
         postgres_write_flush_interval_ms: 25,
@@ -56,7 +57,7 @@ fn test_state() -> AppState {
     state
 }
 
-fn rate_limited_state(per_user_requests_per_second: u64) -> AppState {
+fn rate_limited_state(per_user_burst_capacity: u64) -> AppState {
     let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
@@ -69,7 +70,8 @@ fn rate_limited_state(per_user_requests_per_second: u64) -> AppState {
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
-        per_user_requests_per_second,
+        per_user_rate_limit_burst_capacity: per_user_burst_capacity,
+        per_user_rate_limit_burst_window_seconds: 1,
         admin_api_token: "test-admin-token".to_string(),
         postgres_write_batch_size: 128,
         postgres_write_flush_interval_ms: 25,

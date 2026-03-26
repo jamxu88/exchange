@@ -1,11 +1,13 @@
 ---
-title: "Subscribe"
-description: "Subscribe to one sequenced market-data stream on the socket."
+title: "Subscribe L3"
+description: "Subscribe to one authenticated raw per-order market-data stream on the socket."
 ---
 
-Use `subscribe` to receive a fresh aggregated snapshot and then sequenced price-level deltas for one market.
+Use `subscribe` with channel `l3` to receive a fresh raw per-order snapshot and then sequenced public order-event deltas for one market.
 
-The channel name is `l3`, but the payload is aggregated price-level book data, not a public per-order L3 feed.
+You must authenticate the socket before subscribing to `l3`.
+
+This is the API-user alternative to batched `l2`: use `l3` when your strategy needs the exact public order lifecycle instead of aggregated price levels.
 
 <RequestExample>
 
@@ -19,17 +21,25 @@ The channel name is `l3`, but the payload is aggregated price-level book data, n
 
 ```json First Response
 {
-  "type": "snapshot",
+  "type": "l3_snapshot",
   "channel": "l3",
   "market": "BTC-USD",
-  "sequence": 0,
+  "sequence": 12,
   "bids": [
-    { "price": 100, "quantity": 12 },
-    { "price": 99, "quantity": 8 }
+    {
+      "order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
+      "price": 100,
+      "remaining": 2,
+      "created_at": "2026-03-18T15:28:01.342510Z"
+    }
   ],
   "asks": [
-    { "price": 101, "quantity": 6 },
-    { "price": 102, "quantity": 10 }
+    {
+      "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+      "price": 101,
+      "remaining": 1,
+      "created_at": "2026-03-18T15:28:04.132958Z"
+    }
   ]
 }
 ```
@@ -40,25 +50,24 @@ The channel name is `l3`, but the payload is aggregated price-level book data, n
 
 - `op` must be `subscribe`.
 - `channel` must be `l3`.
-- `l3` is the current market-data channel name, even though the book payload is aggregated by price level.
 - `market` is the market you want to subscribe to.
 - `last_sequence` is part of the message shape, but the supported recovery flow still expects a fresh resubscribe after a gap.
 
 ## What happens next
 
-- The server first sends a `snapshot`.
-- `bids` and `asks` in that snapshot are aggregated price levels, not raw order rows.
-- After the snapshot, the server sends `delta` messages with contiguous `start_sequence` to `sequence` ranges.
-- The exchange currently derives browser-facing market data from the canonical order-event stream, batches those price-level updates per market, and flushes them roughly every `100ms`, so one `delta` can carry several ordered events.
-- A `level_updated` delta sets the total visible quantity for one side and one price.
-- Those deltas are price-level updates, not per-order add, amend, or remove events.
-- `quantity: 0` means that price level should be removed from your local book.
-- `trade` deltas carry executed price and quantity only.
+- The server first sends an `l3_snapshot`.
+- `bids` and `asks` in that snapshot are raw public orders, sorted by price-time priority.
+- After the snapshot, the server sends `l3_delta` messages with contiguous `start_sequence` to `sequence` ranges.
+- `l3_delta` events are raw canonical market events:
+  - `order_added`
+  - `order_updated`
+  - `order_removed`
+  - `trade`
 - If the backend detects a gap or a lagged receiver, it sends `resync_required`.
 
 ## Notes
 
-- The current implementation supports one `l3` market subscription per connection.
+- The current implementation supports one market-data subscription per connection.
 - If you need multiple markets, open multiple sockets.
-- Use `start_sequence` to validate the first event in a batched `delta`, then store `sequence` as your new last applied market sequence.
-- Use `order_state` messages for your own exact resting-order state. The `l3` market-data stream is intentionally aggregated.
+- Use `start_sequence` to validate the first event in each `l3_delta`, then store `sequence` as your new last applied market sequence.
+- `l3` is a public order feed. It does not include private trader identity.

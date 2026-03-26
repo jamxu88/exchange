@@ -32,13 +32,13 @@ Used for:
 
 ## Rate limit
 
-Authenticated competitor operations are limited to `100 ops/sec` per API key.
+Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`.
 
 If you exceed that per-user limit, the server responds with:
 
 ```json
 {
-  "error": "per-user rate limit exceeded: max 100 ops/sec"
+  "error": "per-user rate limit exceeded: max 500 ops per 10s"
 }
 ```
 
@@ -76,5 +76,5 @@ Successful response:
 - No passwords, JWTs, or OAuth flows are involved—just the API key you were given.
 - Expect `role = "trader"` in your `/api/v1/user` response; if it looks wrong, pause and ping ops.
 - You can watch public market data before authenticating, but only a successful `authenticate` gives you order entry and user events.
-- That `100 ops/sec` limit only hits authenticated competitor actions, so public endpoints like `/api/v1/markets` stay unlimited.
+- That `500 ops per 10s` bucket only hits authenticated competitor actions, so public endpoints like `/api/v1/markets` stay unlimited.
 - This guide skips admin-only APIs; focus on the competitor surface area listed above.

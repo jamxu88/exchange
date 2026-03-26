@@ -35,6 +35,8 @@ type config struct {
 	ProvisionRole        string
 	Market               string
 	Traders              int
+	ObserveL2Clients     int
+	ObserveL3Clients     int
 	DurationSeconds      int
 	StartOpsPerSecond    int
 	StepOpsPerSecond     int
@@ -56,6 +58,8 @@ type config struct {
 	MaxRejectRate        float64
 	MaxP95Latency        time.Duration
 	MinAchievedRatio     float64
+	RequireFeedAccuracy  bool
+	ObserverSettleDelay  time.Duration
 	ResetBeforeSuite     bool
 	ResetBetweenTrials   bool
 	Prefix               string
@@ -164,8 +168,14 @@ type trialResult struct {
 	rejectRate      float64
 	achievedRatio   float64
 	positionSummary string
+	feedSummary     string
 	passed          bool
 	reasons         []string
+}
+
+type feedValidationResult struct {
+	summary string
+	reasons []string
 }
 
 func newStats() *stats {
@@ -283,6 +293,7 @@ func parseConfig() (config, error) {
 	var requestTimeoutMS int
 	var progressIntervalMS int
 	var maxP95MS int
+	var observerSettleMS int
 	var mode string
 
 	flag.StringVar(&cfg.BaseURL, "base-url", "http://localhost:8080", "Exchange HTTP base URL")
@@ -291,6 +302,8 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.ProvisionRole, "provision-role", "trader", "Role to provision for benchmark users: trader or admin")
 	flag.StringVar(&cfg.Market, "market", "BTC-USD", "Market symbol to trade")
 	flag.IntVar(&cfg.Traders, "traders", 50, "Number of simulated traders to provision")
+	flag.IntVar(&cfg.ObserveL2Clients, "observe-l2-clients", 1, "Number of observer sockets that validate the aggregated l2 feed")
+	flag.IntVar(&cfg.ObserveL3Clients, "observe-l3-clients", 1, "Number of observer sockets that validate the authenticated l3 feed")
 	flag.IntVar(&cfg.DurationSeconds, "duration-seconds", 20, "Per-trial duration in seconds")
 	flag.IntVar(&cfg.StartOpsPerSecond, "start-ops-per-second", 100, "Initial global target order rate in ops/sec")
 	flag.IntVar(&cfg.StepOpsPerSecond, "step-ops-per-second", 100, "Increment for each global target ops/sec trial")
@@ -312,6 +325,8 @@ func parseConfig() (config, error) {
 	flag.Float64Var(&cfg.MaxRejectRate, "max-reject-rate", 0.01, "Maximum reject ratio allowed for a passing trial")
 	flag.IntVar(&maxP95MS, "max-p95-ms", 250, "Maximum p95 latency in milliseconds for a passing trial")
 	flag.Float64Var(&cfg.MinAchievedRatio, "min-achieved-ratio", 0.95, "Minimum completion ratio required for a passing trial")
+	flag.BoolVar(&cfg.RequireFeedAccuracy, "require-feed-accuracy", true, "Fail a trial when observer feeds gap, resync, or diverge from a fresh snapshot")
+	flag.IntVar(&observerSettleMS, "observer-settle-ms", 300, "How long to wait after load completes before validating observer feed state")
 	flag.BoolVar(&cfg.ResetBeforeSuite, "reset-before-suite", false, "Call the admin reset endpoint before running benchmarks")
 	flag.BoolVar(&cfg.ResetBetweenTrials, "reset-between-trials", false, "Call the admin reset endpoint between trials")
 	flag.StringVar(&cfg.Prefix, "prefix", fmt.Sprintf("api-bench-%d", time.Now().Unix()), "Username prefix for provisioned accounts")
@@ -320,6 +335,7 @@ func parseConfig() (config, error) {
 	cfg.RequestTimeout = time.Duration(requestTimeoutMS) * time.Millisecond
 	cfg.ProgressInterval = time.Duration(progressIntervalMS) * time.Millisecond
 	cfg.MaxP95Latency = time.Duration(maxP95MS) * time.Millisecond
+	cfg.ObserverSettleDelay = time.Duration(observerSettleMS) * time.Millisecond
 	cfg.Mode = transportMode(strings.ToLower(strings.TrimSpace(mode)))
 
 	switch cfg.Mode {
@@ -335,6 +351,9 @@ func parseConfig() (config, error) {
 	}
 	if cfg.Traders <= 0 {
 		return cfg, errors.New("--traders must be positive")
+	}
+	if cfg.ObserveL2Clients < 0 || cfg.ObserveL3Clients < 0 {
+		return cfg, errors.New("--observe-l2-clients and --observe-l3-clients must be non-negative")
 	}
 	if cfg.Traders%2 != 0 {
 		return cfg, errors.New("--traders must be even so traders can be paired")
@@ -389,6 +408,9 @@ func parseConfig() (config, error) {
 	}
 	if cfg.RequestTimeout <= 0 || cfg.ProgressInterval <= 0 || cfg.MaxP95Latency <= 0 {
 		return cfg, errors.New("timing parameters must be positive")
+	}
+	if cfg.ObserverSettleDelay <= 0 {
+		return cfg, errors.New("--observer-settle-ms must be positive")
 	}
 	if _, err := url.Parse(cfg.BaseURL); err != nil {
 		return cfg, fmt.Errorf("invalid --base-url: %w", err)
@@ -565,6 +587,23 @@ func runTrial(
 	}
 	fmt.Printf("Provisioned %d %s accounts.\n", len(users), cfg.ProvisionRole)
 
+	var observerManager *feedObserverManager
+	if cfg.ObserveL2Clients > 0 || cfg.ObserveL3Clients > 0 {
+		l3Observers, err := provisionUsersWithCount(
+			client,
+			cfg,
+			fmt.Sprintf("%s-observer", trialPrefix),
+			cfg.ObserveL3Clients,
+		)
+		if err != nil {
+			return trialResult{}, err
+		}
+		observerManager, err = newFeedObserverManager(cfg, market.MarketID, l3Observers)
+		if err != nil {
+			return trialResult{}, err
+		}
+	}
+
 	pairs := buildPairs(users, prices)
 	stats := newStats()
 	expectedOrders := int64(cfg.DurationSeconds * targetOps)
@@ -623,13 +662,32 @@ func runTrial(
 		_ = wsManager.Close()
 	}
 
+	feedValidation := feedValidationResult{summary: "observers disabled"}
+	if observerManager != nil {
+		time.Sleep(cfg.ObserverSettleDelay)
+		feedValidation, err = observerManager.Validate()
+		observerManager.Close()
+		if err != nil {
+			return trialResult{}, err
+		}
+	}
+
 	elapsed := time.Since(loadStart)
 	positionSummary, err := aggregatePositions(client, cfg, users)
 	if err != nil {
 		positionSummary = fmt.Sprintf("position summary unavailable: %v", err)
 	}
 
-	result := buildTrialResult(mode, targetOps, elapsed, stats, expectedOrders, positionSummary, cfg)
+	result := buildTrialResult(
+		mode,
+		targetOps,
+		elapsed,
+		stats,
+		expectedOrders,
+		positionSummary,
+		feedValidation,
+		cfg,
+	)
 	return result, nil
 }
 
@@ -654,6 +712,7 @@ func buildTrialResult(
 	stats *stats,
 	expectedOrders int64,
 	positionSummary string,
+	feedValidation feedValidationResult,
 	cfg config,
 ) trialResult {
 	latenciesNS := stats.latencySnapshot()
@@ -686,6 +745,7 @@ func buildTrialResult(
 		rejectRate:      rejectRate,
 		achievedRatio:   achievedRatio,
 		positionSummary: positionSummary,
+		feedSummary:     feedValidation.summary,
 	}
 
 	if rejectRate > cfg.MaxRejectRate {
@@ -697,6 +757,7 @@ func buildTrialResult(
 	if achievedRatio < cfg.MinAchievedRatio {
 		result.reasons = append(result.reasons, fmt.Sprintf("completion ratio %.1f%% < %.1f%%", achievedRatio*100, cfg.MinAchievedRatio*100))
 	}
+	result.reasons = append(result.reasons, feedValidation.reasons...)
 	result.passed = len(result.reasons) == 0
 	return result
 }
@@ -720,6 +781,7 @@ func printTrial(result trialResult) {
 	fmt.Printf("  Completion ratio: %.1f%%\n", result.achievedRatio*100)
 	fmt.Printf("  Reject summary: %s\n", result.stats.rejectSummary())
 	fmt.Printf("  Aggregate end positions: %s\n", result.positionSummary)
+	fmt.Printf("  Feed validation: %s\n", result.feedSummary)
 	if result.passed {
 		fmt.Println("  Verdict: PASS")
 	} else {
@@ -762,19 +824,27 @@ func resetUsers(client *http.Client, cfg config) error {
 }
 
 func provisionUsers(client *http.Client, cfg config, prefix string) ([]userProfile, error) {
+	return provisionUsersWithCount(client, cfg, prefix, cfg.Traders)
+}
+
+func provisionUsersWithCount(client *http.Client, cfg config, prefix string, count int) ([]userProfile, error) {
 	type result struct {
 		Index int
 		User  userProfile
 		Err   error
 	}
 
-	results := make(chan result, cfg.Traders)
+	if count == 0 {
+		return nil, nil
+	}
+
+	results := make(chan result, count)
 	work := make(chan int)
 	var wg sync.WaitGroup
 
 	workerCount := cfg.ProvisionConcurrency
-	if workerCount > cfg.Traders {
-		workerCount = cfg.Traders
+	if workerCount > count {
+		workerCount = count
 	}
 
 	for worker := 0; worker < workerCount; worker++ {
@@ -793,7 +863,7 @@ func provisionUsers(client *http.Client, cfg config, prefix string) ([]userProfi
 	}
 
 	go func() {
-		for index := 0; index < cfg.Traders; index++ {
+		for index := 0; index < count; index++ {
 			work <- index
 		}
 		close(work)
@@ -801,7 +871,7 @@ func provisionUsers(client *http.Client, cfg config, prefix string) ([]userProfi
 		close(results)
 	}()
 
-	users := make([]userProfile, cfg.Traders)
+	users := make([]userProfile, count)
 	var firstErr error
 	for item := range results {
 		if item.Err != nil && firstErr == nil {

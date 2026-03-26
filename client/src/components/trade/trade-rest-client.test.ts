@@ -75,7 +75,7 @@ describe("TradeRestClient", () => {
       { ok: true, payload: [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }] },
       { ok: true, payload: { trader_id: "trader-1", username: "alice" } },
       { ok: true, payload: [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }] },
-      { ok: false, status: 429, payload: { error: "per-user rate limit exceeded: max 100 ops/sec" } },
+      { ok: false, status: 429, payload: { error: "per-user rate limit exceeded: max 500 ops per 10s" } },
       { ok: true, payload: [] },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => {
@@ -96,7 +96,7 @@ describe("TradeRestClient", () => {
     expect(snapshot.openOrders).toEqual([]);
     expect(snapshot.loaded.openOrders).toBe(false);
     expect(snapshot.warnings).toContain(
-      "Open order bootstrap failed. per-user rate limit exceeded: max 100 ops/sec",
+      "Open order bootstrap failed. per-user rate limit exceeded: max 500 ops per 10s",
     );
   });
 

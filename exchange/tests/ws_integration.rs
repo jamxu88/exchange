@@ -10,12 +10,13 @@ use exchange::{
     auth::{AuthService, AuthenticatedAdmin, ProvisionUserRequest, ProvisionUserResponse},
     build_app,
     config::Config,
-    marketdata::{OrderStateStatus, ServerMessage},
+    marketdata::{BookDelta, MarketEvent, MarketL3Order, OrderStateStatus, ServerMessage},
     state::AppState,
     trading::OrderType,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -31,7 +32,7 @@ fn test_state() -> AppState {
     test_state_with_rate_limit(100)
 }
 
-fn test_state_with_rate_limit(per_user_requests_per_second: u64) -> AppState {
+fn test_state_with_rate_limit(per_user_burst_capacity: u64) -> AppState {
     let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
         database_url: "postgres://test".to_string(),
@@ -44,7 +45,8 @@ fn test_state_with_rate_limit(per_user_requests_per_second: u64) -> AppState {
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
         persistence_dispatch_queue_capacity: 4_096,
-        per_user_requests_per_second,
+        per_user_rate_limit_burst_capacity: per_user_burst_capacity,
+        per_user_rate_limit_burst_window_seconds: 1,
         admin_api_token: "test-admin-token".to_string(),
         postgres_write_batch_size: 128,
         postgres_write_flush_interval_ms: 25,
@@ -147,8 +149,234 @@ async fn authenticate(socket: &mut WsStream, api_key: &str) {
     }
 }
 
+#[derive(Default, Debug, PartialEq, Eq)]
+struct ObservedL2Book {
+    sequence: u64,
+    bids: BTreeMap<u64, u64>,
+    asks: BTreeMap<u64, u64>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ObservedL3Order {
+    side: exchange::orderbook::Side,
+    price: u64,
+    remaining: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+struct ObservedL3Book {
+    sequence: u64,
+    orders: HashMap<uuid::Uuid, ObservedL3Order>,
+}
+
+fn replace_l2_snapshot(
+    book: &mut ObservedL2Book,
+    sequence: u64,
+    bids: &[exchange::orderbook::BookLevel],
+    asks: &[exchange::orderbook::BookLevel],
+) {
+    book.sequence = sequence;
+    book.bids = bids
+        .iter()
+        .map(|level| (level.price, level.quantity))
+        .collect();
+    book.asks = asks
+        .iter()
+        .map(|level| (level.price, level.quantity))
+        .collect();
+}
+
+fn apply_l2_delta(
+    book: &mut ObservedL2Book,
+    start_sequence: u64,
+    sequence: u64,
+    events: &[BookDelta],
+) {
+    assert_eq!(start_sequence, book.sequence.saturating_add(1));
+    for event in events {
+        match event {
+            BookDelta::LevelUpdated {
+                side,
+                price,
+                quantity,
+            } => {
+                let levels = match side {
+                    exchange::orderbook::Side::Buy => &mut book.bids,
+                    exchange::orderbook::Side::Sell => &mut book.asks,
+                };
+                if *quantity == 0 {
+                    levels.remove(price);
+                } else {
+                    levels.insert(*price, *quantity);
+                }
+            }
+            BookDelta::Trade { .. } => {}
+        }
+    }
+    book.sequence = sequence;
+}
+
+fn replace_l3_snapshot(
+    book: &mut ObservedL3Book,
+    sequence: u64,
+    bids: &[MarketL3Order],
+    asks: &[MarketL3Order],
+) {
+    book.sequence = sequence;
+    book.orders.clear();
+    for order in bids {
+        book.orders.insert(
+            order.order_id,
+            ObservedL3Order {
+                side: exchange::orderbook::Side::Buy,
+                price: order.price,
+                remaining: order.remaining,
+            },
+        );
+    }
+    for order in asks {
+        book.orders.insert(
+            order.order_id,
+            ObservedL3Order {
+                side: exchange::orderbook::Side::Sell,
+                price: order.price,
+                remaining: order.remaining,
+            },
+        );
+    }
+}
+
+fn apply_l3_delta(
+    book: &mut ObservedL3Book,
+    start_sequence: u64,
+    sequence: u64,
+    events: &[MarketEvent],
+) {
+    assert_eq!(start_sequence, book.sequence.saturating_add(1));
+    for event in events {
+        match event {
+            MarketEvent::OrderAdded {
+                order_id,
+                side,
+                price,
+                remaining,
+                ..
+            }
+            | MarketEvent::OrderUpdated {
+                order_id,
+                side,
+                price,
+                remaining,
+            } => {
+                book.orders.insert(
+                    *order_id,
+                    ObservedL3Order {
+                        side: *side,
+                        price: *price,
+                        remaining: *remaining,
+                    },
+                );
+            }
+            MarketEvent::OrderRemoved { order_id, .. } => {
+                book.orders.remove(order_id);
+            }
+            MarketEvent::Trade { .. } => {}
+        }
+    }
+    book.sequence = sequence;
+}
+
+fn aggregate_l3_book(book: &ObservedL3Book) -> ObservedL2Book {
+    let mut aggregate = ObservedL2Book {
+        sequence: book.sequence,
+        ..ObservedL2Book::default()
+    };
+    for order in book.orders.values() {
+        let levels = match order.side {
+            exchange::orderbook::Side::Buy => &mut aggregate.bids,
+            exchange::orderbook::Side::Sell => &mut aggregate.asks,
+        };
+        *levels.entry(order.price).or_insert(0) += order.remaining;
+    }
+    aggregate
+}
+
+async fn maybe_next_server_message(socket: &mut WsStream, wait: Duration) -> Option<ServerMessage> {
+    loop {
+        let frame = timeout(wait, socket.next()).await.ok()??.ok()?;
+        match frame {
+            Message::Text(text) => {
+                let message: ServerMessage =
+                    serde_json::from_str(&text).expect("server json message");
+                if matches!(message, ServerMessage::Heartbeat) {
+                    continue;
+                }
+                return Some(message);
+            }
+            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => continue,
+            Message::Close(frame) => panic!("unexpected websocket close: {frame:?}"),
+            _ => continue,
+        }
+    }
+}
+
+async fn fetch_fresh_l2_snapshot(url: &str, market: &str) -> ObservedL2Book {
+    let mut socket = connect_socket(url).await;
+    send_json(
+        &mut socket,
+        json!({
+            "op": "subscribe",
+            "channel": "l2",
+            "market": market,
+        }),
+    )
+    .await;
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::Snapshot {
+            sequence,
+            bids,
+            asks,
+            ..
+        } => {
+            let mut book = ObservedL2Book::default();
+            replace_l2_snapshot(&mut book, sequence, &bids, &asks);
+            book
+        }
+        other => panic!("unexpected fresh l2 snapshot: {other:?}"),
+    }
+}
+
+async fn fetch_fresh_l3_snapshot(url: &str, api_key: &str, market: &str) -> ObservedL3Book {
+    let mut socket = connect_socket(url).await;
+    authenticate(&mut socket, api_key).await;
+    send_json(
+        &mut socket,
+        json!({
+            "op": "subscribe",
+            "channel": "l3",
+            "market": market,
+        }),
+    )
+    .await;
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::L3Snapshot {
+            sequence,
+            bids,
+            asks,
+            ..
+        } => {
+            let mut book = ObservedL3Book::default();
+            replace_l3_snapshot(&mut book, sequence, &bids, &asks);
+            book
+        }
+        other => panic!("unexpected fresh l3 snapshot: {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn websocket_authenticate_and_subscribe_round_trip() {
+async fn websocket_authenticate_and_subscribe_l2_round_trip() {
     let state = test_state();
     let trader = provision_user(&state, "socket-user");
     exchange::trading::TradingService::submit_limit_order(
@@ -173,7 +401,7 @@ async fn websocket_authenticate_and_subscribe_round_trip() {
         &mut socket,
         json!({
             "op": "subscribe",
-            "channel": "l3",
+            "channel": "l2",
             "market": "BTC-USD",
         }),
     )
@@ -187,13 +415,343 @@ async fn websocket_authenticate_and_subscribe_round_trip() {
             asks,
             ..
         } => {
-            assert_eq!(channel, "l3");
+            assert_eq!(channel, "l2");
             assert_eq!(market, "BTC-USD");
             assert_eq!(bids.len(), 1);
             assert!(asks.is_empty());
         }
         other => panic!("unexpected snapshot reply: {other:?}"),
     }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_authenticated_l3_subscribe_streams_raw_order_events() {
+    let state = test_state();
+    let viewer = provision_user(&state, "l3-viewer");
+    let maker = provision_user(&state, "l3-maker");
+    let taker = provision_user(&state, "l3-taker");
+
+    let (url, server) = spawn_server(state.clone()).await;
+    let mut l3_socket = connect_socket(&url).await;
+    authenticate(&mut l3_socket, &viewer.profile.api_key).await;
+
+    send_json(
+        &mut l3_socket,
+        json!({
+            "op": "subscribe",
+            "channel": "l3",
+            "market": "BTC-USD",
+        }),
+    )
+    .await;
+
+    match next_server_message(&mut l3_socket).await {
+        ServerMessage::L3Snapshot {
+            channel,
+            market,
+            sequence,
+            bids,
+            asks,
+        } => {
+            assert_eq!(channel, "l3");
+            assert_eq!(market, "BTC-USD");
+            assert_eq!(sequence, 0);
+            assert!(bids.is_empty());
+            assert!(asks.is_empty());
+        }
+        other => panic!("unexpected l3 snapshot reply: {other:?}"),
+    }
+
+    exchange::trading::TradingService::submit_limit_order(
+        &state,
+        maker.profile.trader_id,
+        exchange::trading::SubmitOrderRequest {
+            market: "BTC-USD".to_string(),
+            side: exchange::orderbook::Side::Sell,
+            order_type: OrderType::Limit,
+            price: 100,
+            quantity: 2,
+        },
+    )
+    .await
+    .expect("maker order");
+
+    match next_server_message(&mut l3_socket).await {
+        ServerMessage::L3Delta {
+            channel,
+            market,
+            start_sequence,
+            sequence,
+            events,
+        } => {
+            assert_eq!(channel, "l3");
+            assert_eq!(market, "BTC-USD");
+            assert_eq!(start_sequence, sequence);
+            assert!(matches!(
+                events.as_slice(),
+                [exchange::marketdata::MarketEvent::OrderAdded {
+                    price: 100,
+                    remaining: 2,
+                    ..
+                }]
+            ));
+        }
+        other => panic!("unexpected l3 add delta: {other:?}"),
+    }
+
+    exchange::trading::TradingService::submit_limit_order(
+        &state,
+        taker.profile.trader_id,
+        exchange::trading::SubmitOrderRequest {
+            market: "BTC-USD".to_string(),
+            side: exchange::orderbook::Side::Buy,
+            order_type: OrderType::Limit,
+            price: 100,
+            quantity: 2,
+        },
+    )
+    .await
+    .expect("taker order");
+
+    let first_trade_delta = next_server_message(&mut l3_socket).await;
+    let second_trade_delta = next_server_message(&mut l3_socket).await;
+    let mut saw_trade = false;
+    let mut saw_remove = false;
+    for message in [first_trade_delta, second_trade_delta] {
+        match message {
+            ServerMessage::L3Delta {
+                channel,
+                market,
+                events,
+                ..
+            } => {
+                assert_eq!(channel, "l3");
+                assert_eq!(market, "BTC-USD");
+                match events.as_slice() {
+                    [
+                        exchange::marketdata::MarketEvent::Trade {
+                            price: 100,
+                            quantity: 2,
+                            ..
+                        },
+                    ] => {
+                        saw_trade = true;
+                    }
+                    [exchange::marketdata::MarketEvent::OrderRemoved { reason, .. }] => {
+                        assert_eq!(
+                            *reason,
+                            exchange::marketdata::MarketEventRemoveReason::Filled
+                        );
+                        saw_remove = true;
+                    }
+                    other => panic!("unexpected l3 trade batch: {other:?}"),
+                }
+            }
+            other => panic!("unexpected post-trade l3 message: {other:?}"),
+        }
+    }
+    assert!(saw_trade);
+    assert!(saw_remove);
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_l2_and_l3_match_fresh_snapshots_after_burst_load() {
+    let state = test_state();
+    let l3_viewer = provision_user(&state, "l3-volume-viewer");
+    let traders = [
+        provision_user(&state, "burst-a"),
+        provision_user(&state, "burst-b"),
+        provision_user(&state, "burst-c"),
+        provision_user(&state, "burst-d"),
+    ];
+
+    let (url, server) = spawn_server(state.clone()).await;
+    let mut l2_socket = connect_socket(&url).await;
+    let mut l3_socket = connect_socket(&url).await;
+    authenticate(&mut l3_socket, &l3_viewer.profile.api_key).await;
+
+    send_json(
+        &mut l2_socket,
+        json!({
+            "op": "subscribe",
+            "channel": "l2",
+            "market": "BTC-USD",
+        }),
+    )
+    .await;
+    send_json(
+        &mut l3_socket,
+        json!({
+            "op": "subscribe",
+            "channel": "l3",
+            "market": "BTC-USD",
+        }),
+    )
+    .await;
+
+    let mut observed_l2 = match next_server_message(&mut l2_socket).await {
+        ServerMessage::Snapshot {
+            sequence,
+            bids,
+            asks,
+            ..
+        } => {
+            let mut book = ObservedL2Book::default();
+            replace_l2_snapshot(&mut book, sequence, &bids, &asks);
+            book
+        }
+        other => panic!("unexpected initial l2 snapshot: {other:?}"),
+    };
+    let mut observed_l3 = match next_server_message(&mut l3_socket).await {
+        ServerMessage::L3Snapshot {
+            sequence,
+            bids,
+            asks,
+            ..
+        } => {
+            let mut book = ObservedL3Book::default();
+            replace_l3_snapshot(&mut book, sequence, &bids, &asks);
+            book
+        }
+        other => panic!("unexpected initial l3 snapshot: {other:?}"),
+    };
+
+    for round in 0..24_u64 {
+        let maker = &traders[(round as usize) % traders.len()];
+        let taker = &traders[((round as usize) + 1) % traders.len()];
+        let resting_sell_price = 101 + (round % 3);
+        let resting_buy_price = 99 - (round % 3);
+        let crossing_buy_price = 104;
+        let crossing_sell_price = 96;
+        let quantity = 1 + (round % 3);
+
+        exchange::trading::TradingService::submit_limit_order(
+            &state,
+            maker.profile.trader_id,
+            exchange::trading::SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: exchange::orderbook::Side::Sell,
+                order_type: OrderType::Limit,
+                price: resting_sell_price,
+                quantity,
+            },
+        )
+        .await
+        .expect("resting sell");
+        exchange::trading::TradingService::submit_limit_order(
+            &state,
+            maker.profile.trader_id,
+            exchange::trading::SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: exchange::orderbook::Side::Buy,
+                order_type: OrderType::Limit,
+                price: resting_buy_price,
+                quantity,
+            },
+        )
+        .await
+        .expect("resting buy");
+        exchange::trading::TradingService::submit_limit_order(
+            &state,
+            taker.profile.trader_id,
+            exchange::trading::SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: exchange::orderbook::Side::Buy,
+                order_type: OrderType::Limit,
+                price: crossing_buy_price,
+                quantity,
+            },
+        )
+        .await
+        .expect("crossing buy");
+        exchange::trading::TradingService::submit_limit_order(
+            &state,
+            taker.profile.trader_id,
+            exchange::trading::SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: exchange::orderbook::Side::Sell,
+                order_type: OrderType::Limit,
+                price: crossing_sell_price,
+                quantity,
+            },
+        )
+        .await
+        .expect("crossing sell");
+    }
+
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let mut saw_batched_l2_delta = false;
+    loop {
+        let mut progressed = false;
+
+        while let Some(message) =
+            maybe_next_server_message(&mut l2_socket, Duration::from_millis(20)).await
+        {
+            progressed = true;
+            match message {
+                ServerMessage::Delta {
+                    start_sequence,
+                    sequence,
+                    events,
+                    ..
+                } => {
+                    if events.len() > 1 {
+                        saw_batched_l2_delta = true;
+                    }
+                    apply_l2_delta(&mut observed_l2, start_sequence, sequence, &events);
+                }
+                ServerMessage::ResyncRequired { .. } => {
+                    panic!("unexpected l2 resync under burst load")
+                }
+                other => panic!("unexpected l2 message under burst load: {other:?}"),
+            }
+        }
+
+        while let Some(message) =
+            maybe_next_server_message(&mut l3_socket, Duration::from_millis(20)).await
+        {
+            progressed = true;
+            match message {
+                ServerMessage::L3Delta {
+                    start_sequence,
+                    sequence,
+                    events,
+                    ..
+                } => {
+                    apply_l3_delta(&mut observed_l3, start_sequence, sequence, &events);
+                }
+                ServerMessage::ResyncRequired { .. } => {
+                    panic!("unexpected l3 resync under burst load")
+                }
+                other => panic!("unexpected l3 message under burst load: {other:?}"),
+            }
+        }
+
+        if !progressed {
+            break;
+        }
+    }
+
+    assert!(
+        saw_batched_l2_delta,
+        "expected at least one batched l2 delta"
+    );
+
+    let fresh_l2 = fetch_fresh_l2_snapshot(&url, "BTC-USD").await;
+    let fresh_l3 = fetch_fresh_l3_snapshot(&url, &l3_viewer.profile.api_key, "BTC-USD").await;
+
+    assert_eq!(observed_l2, fresh_l2);
+    assert_eq!(observed_l3, fresh_l3);
+    let aggregated_l3 = aggregate_l3_book(&observed_l3);
+    assert_eq!(aggregated_l3.bids, fresh_l2.bids);
+    assert_eq!(aggregated_l3.asks, fresh_l2.asks);
 
     server.abort();
     let _ = server.await;
@@ -876,7 +1434,7 @@ async fn websocket_trading_shares_the_per_user_rate_limit_budget() {
             op: "submit_order".to_string(),
             request_id: Some("submit-rate-limited".to_string()),
             code: "rate_limit_exceeded".to_string(),
-            message: "per-user rate limit exceeded: max 1 ops/sec".to_string(),
+            message: "per-user rate limit exceeded: max 1 ops per 1s".to_string(),
         }
     );
 

@@ -49,13 +49,13 @@ describe("TradeWsClient", () => {
 
     expect(socket.sent).toEqual([
       JSON.stringify({ op: "authenticate", api_key: "secret" }),
-      JSON.stringify({ op: "subscribe", channel: "l3", market: "BTC-USD", last_sequence: null }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD", last_sequence: null }),
     ]);
 
     client.updateMarket("ETH-USD");
     expect(socket.sent.slice(2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "l3", market: "BTC-USD" }),
-      JSON.stringify({ op: "subscribe", channel: "l3", market: "ETH-USD", last_sequence: null }),
+      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "ETH-USD", last_sequence: null }),
     ]);
   });
 
@@ -88,7 +88,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l3",
+        channel: "l2",
         market: "BTC-USD",
         sequence: 4,
         bids: [],
@@ -103,7 +103,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l3",
+        channel: "l2",
         market: "BTC-USD",
         sequence: 5,
         events: [
@@ -257,7 +257,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "resync_required",
-        channel: "l3",
+        channel: "l2",
         market: "BTC-USD",
         reason: "market sequence gap detected",
       }),
@@ -297,12 +297,12 @@ describe("TradeWsClient", () => {
       market: "BTC-USD",
     });
     expect(callbacks.onResyncRequired).toHaveBeenCalledWith({
-      channel: "l3",
+      channel: "l2",
       marketId: "BTC-USD",
       reason: "market sequence gap detected",
     });
     expect(socket.sent.at(-1)).toBe(
-      JSON.stringify({ op: "subscribe", channel: "l3", market: "BTC-USD", last_sequence: null }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD", last_sequence: null }),
     );
   });
 });

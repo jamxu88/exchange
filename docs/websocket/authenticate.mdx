@@ -3,7 +3,7 @@ title: "Authenticate"
 description: "Authenticate a WebSocket session with your assigned API key."
 ---
 
-Authentication is required before you can submit, amend, or cancel orders over WebSocket, and before you receive user-specific `fill` or `order_state` events.
+Authentication is required before you can subscribe to raw `l3` market data, submit, amend, or cancel orders over WebSocket, and receive user-specific `fill` or `order_state` events. Public `l2` market data does not require authentication.
 
 <RequestExample>
 
@@ -39,3 +39,8 @@ Authentication is required before you can submit, amend, or cancel orders over W
 ## Failure behavior
 
 Invalid credentials are returned as a WebSocket `error` message with `code = "invalid_api_key"`.
+
+## Notes
+
+- Authenticate once per socket before subscribing to `l3` or sending trading messages.
+- After authentication, the same socket can carry `l2` or `l3` market data, trading messages, and user-scoped events.

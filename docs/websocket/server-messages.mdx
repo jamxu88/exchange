@@ -26,7 +26,7 @@ These are the main message types a competitor client should expect from the serv
 ```json
 {
   "type": "snapshot",
-  "channel": "l3",
+  "channel": "l2",
   "market": "BTC-USD",
   "sequence": 0,
   "bids": [
@@ -40,14 +40,14 @@ These are the main message types a competitor client should expect from the serv
 }
 ```
 
-Even though `channel` is `l3`, `bids` and `asks` are aggregated price levels, not per-order rows.
+`snapshot` is the aggregated `l2` view. `bids` and `asks` are price levels, not per-order rows.
 
 ## `delta`
 
 ```json
 {
   "type": "delta",
-  "channel": "l3",
+  "channel": "l2",
   "market": "BTC-USD",
   "start_sequence": 1,
   "sequence": 1,
@@ -72,6 +72,66 @@ Even though `channel` is `l3`, `bids` and `asks` are aggregated price levels, no
 `level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book. These are price-level updates, not per-order add, amend, or remove events.
 
 The exchange derives browser-facing market data from the canonical order-event stream, batches contiguous market-data events per market, and flushes them roughly every `100ms`, so a single `delta` can contain multiple ordered events.
+
+## `l3_snapshot`
+
+```json
+{
+  "type": "l3_snapshot",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "sequence": 12,
+  "bids": [
+    {
+      "order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
+      "price": 100,
+      "remaining": 2,
+      "created_at": "2026-03-18T15:28:01.342510Z"
+    }
+  ],
+  "asks": [
+    {
+      "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
+      "price": 101,
+      "remaining": 1,
+      "created_at": "2026-03-18T15:28:04.132958Z"
+    }
+  ]
+}
+```
+
+`l3_snapshot` is the true public per-order view. It is available only after authenticating the socket and subscribing to channel `l3`.
+
+## `l3_delta`
+
+```json
+{
+  "type": "l3_delta",
+  "channel": "l3",
+  "market": "BTC-USD",
+  "start_sequence": 13,
+  "sequence": 13,
+  "events": [
+    {
+      "kind": "order_added",
+      "order_id": "97c1b277-19e6-4d28-8419-4cc26feec495",
+      "side": "BUY",
+      "price": 100,
+      "remaining": 3,
+      "created_at": "2026-03-18T15:29:00.000000Z"
+    }
+  ]
+}
+```
+
+`l3_delta` carries raw public order events:
+
+- `order_added`
+- `order_updated`
+- `order_removed`
+- `trade`
+
+Unlike `delta`, these are not aggregated by price level.
 
 ## `fill`
 
@@ -144,7 +204,7 @@ Competitors should treat this as operator guidance that may affect trading behav
 ```json
 {
   "type": "resync_required",
-  "channel": "l3",
+  "channel": "l2",
   "market": "BTC-USD",
   "expected_sequence": 5,
   "current_sequence": 9,
@@ -157,8 +217,9 @@ Use [Recovery and resync](/reference/recovery-and-resync) for the recommended cl
 ## Required handling
 
 - `heartbeat` means the connection is still alive.
-- `snapshot` and `delta` are the market-data source of truth while the subscription is healthy.
-- For `delta`, verify that `start_sequence` is exactly one greater than your last applied market sequence, then apply all `events` in order and store `sequence` as the new last applied value.
+- `snapshot` and `delta` are the aggregated `l2` market-data source of truth while that subscription is healthy.
+- `l3_snapshot` and `l3_delta` are the raw per-order market-data source of truth while an authenticated `l3` subscription is healthy.
+- For `delta` and `l3_delta`, verify that `start_sequence` is exactly one greater than your last applied market sequence, then apply all `events` in order and store `sequence` as the new last applied value.
 - `fill` and `order_state` are the user-scoped state feed after authentication.
 - `admin_message` can change the practical trading environment even before you refresh REST state.
 - `resync_required` means your local state is no longer trustworthy and must be rebuilt.

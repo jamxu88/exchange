@@ -231,7 +231,7 @@ describe("tradeReducer", () => {
       data: {
         ...bootstrapData(),
         openOrders: [],
-        warnings: ["Open order bootstrap failed. per-user rate limit exceeded: max 100 ops/sec"],
+        warnings: ["Open order bootstrap failed. per-user rate limit exceeded: max 500 ops per 10s"],
         loaded: {
           markets: true,
           user: true,

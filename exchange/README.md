@@ -18,7 +18,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - bulk config load
   - admin messages
   - leaderboard queries
-- Per-user `100 ops/sec` rate limiting on authenticated competitor operations, shared across REST account/trading routes and authenticated WebSocket trading messages
+- Per-user token-bucket rate limiting on authenticated competitor operations, defaulting to `500 ops per 10s` and shared across REST account/trading routes and authenticated WebSocket trading messages
 - Matching engine + in-memory orderbook skeleton
 - PostgreSQL-oriented repository abstraction for user/position/order/fill state
 - Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
@@ -54,10 +54,17 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - `GET /api/v1/admin/leaderboard`
 - WebSocket endpoint for market data and trading events:
   - `GET /ws`
-  - market-data flow:
+  - public market-data flow:
+    - send `{"op":"subscribe","channel":"l2","market":"BTC-USD"}`
+    - receive one aggregated `snapshot`
+    - then receive live sequenced `delta` batches with `start_sequence` and `sequence`, usually flushed around `100ms`
+    - if the server detects a gap or receiver lag, it sends `resync_required`
+    - client should resubscribe to get a fresh snapshot; no replay endpoint is provided
+  - authenticated raw market-data flow:
+    - send `{"op":"authenticate","api_key":"..."}`
     - send `{"op":"subscribe","channel":"l3","market":"BTC-USD"}`
-    - receive one snapshot
-    - then receive live sequenced delta batches with `start_sequence` and `sequence`
+    - receive one raw per-order `l3_snapshot`
+    - then receive live sequenced `l3_delta` messages carrying canonical public order events
     - if the server detects a gap or receiver lag, it sends `resync_required`
     - client should resubscribe to get a fresh snapshot; no replay endpoint is provided
   - authenticated socket flow:
@@ -116,7 +123,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Repo path: `/home/ec2-user/exchange-v2`
 - Exchange binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
 - Exchange env file: `/home/ec2-user/exchange-v2/exchange.env`
-- Service name: `exchange`
+- Service names: `exchange`, `market-data-service`
 - Data store: local PostgreSQL on the same EC2 machine
 - Source of truth for code updates: GitHub `origin/main`
 
@@ -136,8 +143,10 @@ ssh -i "quant-exchange.pem" ec2-user@16.59.150.9 '
   git pull --ff-only &&
   cd exchange &&
   source "$HOME/.cargo/env" &&
-  cargo build --release &&
+  cargo build --release --bin exchange --bin market-data-service &&
+  sudo systemctl restart market-data-service &&
   sudo systemctl restart exchange &&
+  sudo systemctl status market-data-service --no-pager &&
   sudo systemctl status exchange --no-pager
 '
 ```
@@ -153,7 +162,7 @@ Current note: GitHub access on the EC2 host is temporarily configured with a sto
 ## Run locally
 
 ```bash
-cargo run
+cargo run --bin exchange
 ```
 
 To run the first split-process setup locally:
@@ -161,7 +170,7 @@ To run the first split-process setup locally:
 ```bash
 export MARKET_DATA_SERVICE_SOCKET=/tmp/exchange-marketdata.sock
 cargo run --bin market-data-service &
-cargo run
+cargo run --bin exchange
 ```
 
 Then open:
@@ -180,6 +189,8 @@ Key environment variables:
 - `WS_MARKET_DELTA_BATCH_INTERVAL_MS`
   Browser-market-data flush interval in milliseconds. Defaults to `100`.
 - `WS_MARKET_BROADCAST_WORKERS`
+- `PER_USER_RATE_LIMIT_BURST_CAPACITY`
+- `PER_USER_RATE_LIMIT_BURST_WINDOW_SECONDS`
 - `POSTGRES_WRITE_BATCH_SIZE`
 - `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
 - `POSTGRES_WRITE_QUEUE_CAPACITY`

@@ -7,7 +7,7 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
 };
 use exchange::{
-    auth::{AuthService, LoginRequest, ProvisionUserRequest},
+    auth::{AuthService, ProvisionUserRequest},
     build_app,
     config::Config,
     matching::MatchingEngine,
@@ -105,25 +105,19 @@ fn rest_router_latency(c: &mut Criterion) {
         ws_broadcast_buffer: 256,
         ws_market_delta_batch_interval_ms: 10,
         ws_market_broadcast_workers: 1,
-        per_user_requests_per_second: u64::MAX,
+        per_user_rate_limit_burst_capacity: u64::MAX,
+        per_user_rate_limit_burst_window_seconds: 1,
         admin_api_token: "test-admin-token".to_string(),
+        ..Config::from_env()
     });
     let provisioned = AuthService::provision_user(
         &state,
         ProvisionUserRequest {
             username: "bench-user".to_string(),
-            password: "password-123".to_string(),
+            role: None,
         },
     )
     .expect("provision user");
-    let logged_in = AuthService::login(
-        &state,
-        LoginRequest {
-            username: "bench-user".to_string(),
-            password: "password-123".to_string(),
-        },
-    )
-    .expect("login user");
     let trader_id = provisioned.profile.trader_id;
     state.storage.put_balance(
         trader_id,
@@ -159,10 +153,7 @@ fn rest_router_latency(c: &mut Criterion) {
                 .oneshot(
                     Request::builder()
                         .uri("/api/v1/balance")
-                        .header(
-                            "authorization",
-                            format!("Bearer {}", logged_in.session_token),
-                        )
+                        .header("x-api-key", provisioned.profile.api_key.clone())
                         .body(Body::empty())
                         .expect("request"),
                 )

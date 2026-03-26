@@ -1,0 +1,64 @@
+---
+title: "Subscribe L2"
+description: "Subscribe to one aggregated price-level market-data stream on the socket."
+---
+
+Use `subscribe` with channel `l2` to receive a fresh aggregated snapshot and then sequenced price-level deltas for one market.
+
+`l2` is the browser-oriented market-data feed. It is derived from the canonical order-event stream, aggregated by price level, and flushed in short batches around every `100ms`.
+
+API clients can also use `l2` when they want compact, batched depth instead of the raw per-order `l3` feed.
+
+<RequestExample>
+
+```json Client Message
+{"op":"subscribe","channel":"l2","market":"BTC-USD","last_sequence":null}
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json First Response
+{
+  "type": "snapshot",
+  "channel": "l2",
+  "market": "BTC-USD",
+  "sequence": 0,
+  "bids": [
+    { "price": 100, "quantity": 12 },
+    { "price": 99, "quantity": 8 }
+  ],
+  "asks": [
+    { "price": 101, "quantity": 6 },
+    { "price": 102, "quantity": 10 }
+  ]
+}
+```
+
+</ResponseExample>
+
+## Client fields
+
+- `op` must be `subscribe`.
+- `channel` must be `l2`.
+- `market` is the market you want to subscribe to.
+- `last_sequence` is part of the message shape, but the supported recovery flow still expects a fresh resubscribe after a gap.
+
+## What happens next
+
+- The server first sends a `snapshot`.
+- `bids` and `asks` in that snapshot are aggregated price levels, not raw order rows.
+- After the snapshot, the server sends `delta` messages with contiguous `start_sequence` to `sequence` ranges.
+- The exchange batches those price-level updates per market and flushes them roughly every `100ms`, so one `delta` can carry several ordered events.
+- A `level_updated` delta sets the total visible quantity for one side and one price.
+- `quantity: 0` means that price level should be removed from your local book.
+- `trade` deltas carry executed price and quantity only.
+- If the backend detects a gap or a lagged receiver, it sends `resync_required`.
+
+## Notes
+
+- The current implementation supports one market-data subscription per connection.
+- If you need multiple markets, open multiple sockets.
+- Use `start_sequence` to validate the first event in a batched `delta`, then store `sequence` as your new last applied market sequence.
+- Use `order_state` messages for your own exact resting-order state. The `l2` market-data stream is intentionally aggregated.

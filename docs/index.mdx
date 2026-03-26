@@ -3,7 +3,7 @@ title: "Exchange API"
 description: "Welcome to the Quant@Illinois Trading Competition! This year, we have added an API to our exchange. This should open up a lot of possibilities and hopefully make the experience more fun and competitive. Make sure to read through all of the docs to fully understand what you can do with this API!"
 ---
 
-The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, consume aggregated price-level market data, and recover cleanly when the operator disables or settles a market.
+The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, choose between batched aggregated `l2` depth or authenticated raw `l3` market data, and recover cleanly when the operator disables or settles a market.
 
 <Columns cols={2}>
   <Card title="Competition Guide" href="/reference/competition-guide">
@@ -19,7 +19,7 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
   </Card>
 
   <Card title="WebSocket API" href="/reference/websocket-api">
-    Subscribe to price-level market data, submit order actions, and handle user-scoped events.
+    Choose between public `l2` and authenticated `l3`, submit order actions, and handle user-scoped events.
   </Card>
 </Columns>
 
@@ -33,7 +33,7 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
 1. Verify identity with [Get User](/rest/user).
 2. Fetch [Get Markets](/rest/markets) and cache market status, tick size, and minimum quantity.
 3. Bootstrap account state with [Get Portfolio](/rest/portfolio).
-4. Subscribe to WebSocket market data if you need live book updates.
+4. Subscribe to WebSocket `l2` for compact aggregated depth or authenticated `l3` for raw per-order updates.
 5. Handle `fill`, `order_state`, `admin_message`, and `resync_required`.
 6. Refresh state after reconnects, disablement, or settlement.
 
@@ -42,7 +42,8 @@ The Exchange API exposes a compact competitor surface area: bootstrap over REST,
 - Prices and quantities are integer values.
 - `side` is always `BUY` or `SELL`.
 - Standard competitor accounts are capped at `+/-1000` worst-case net position per market.
-- Authenticated competitor operations are limited to `100 ops/sec` per API key, shared across REST account/trading calls and authenticated WebSocket trading messages.
+- `l2` market data is public and aggregated by price level; `l3` is authenticated and exposes the public per-order feed.
+- Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, covering REST account/trading calls and authenticated WebSocket trading messages.
 - After settlement, positions are flattened at the market settlement price and final PnL becomes realized for that market.
 
 ## Quick links

@@ -21,7 +21,7 @@ Handle these statuses explicitly in your error UI:
 | --- | --- |
 | `400` | Bad payload: wrong market, price, tick-size, quantity, amend, or market order liquidity |
 | `401` | Missing or invalid API key |
-| `429` | Authenticated rate limit (100 ops/sec) exceeded |
+| `429` | Authenticated rate limit bucket (`500 ops per 10s` by default) exceeded |
 | `403` | Resource exists but belongs to another competitor |
 | `404` | Order, market, or user not found |
 | `409` | Trade would breach limits, market status blocks trading, or duplicate username |
@@ -43,7 +43,7 @@ Example:
 {
   "type": "error",
   "code": "unsupported_channel",
-  "message": "only the l3 channel is supported"
+  "message": "supported market-data channels are l2 and l3"
 }
 ```
 

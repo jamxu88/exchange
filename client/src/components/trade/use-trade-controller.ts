@@ -212,7 +212,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       startTransition(() => {
         dispatch({ type: "ws-resync-required", ...payload, ...createStamp() });
       });
-      if (payload.channel !== "l3") {
+      if (payload.channel !== "l2") {
         void refreshAccountState();
       }
     },

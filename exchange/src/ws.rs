@@ -1,5 +1,5 @@
 use crate::auth::{AuthService, AuthenticatedUser};
-use crate::marketdata::{ClientMessage, L3_CHANNEL, ServerMessage, UserBroadcastEvent};
+use crate::marketdata::{ClientMessage, L2_CHANNEL, L3_CHANNEL, ServerMessage, UserBroadcastEvent};
 use crate::rate_limit::enforce_authenticated_user_rate_limit;
 use crate::state::AppState;
 use crate::trading::{AmendOrderRequest, SubmitOrderRequest, TradingError, TradingService};
@@ -16,19 +16,27 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
 }
 
 struct ClientConnection {
-    market_stream_id: uuid::Uuid,
+    book_stream_id: uuid::Uuid,
+    l3_stream_id: uuid::Uuid,
     authenticated_user: Option<AuthenticatedUser>,
-    subscription: Option<String>,
+    subscription: Option<MarketSubscription>,
+}
+
+struct MarketSubscription {
+    channel: String,
+    market: String,
 }
 
 async fn client_loop(mut socket: WebSocket, state: AppState) {
     let (market_tx, mut market_rx) = tokio_mpsc::unbounded_channel::<Arc<ServerMessage>>();
-    let market_stream_id = state.register_market_stream(market_tx);
+    let book_stream_id = state.register_book_stream(market_tx.clone());
+    let l3_stream_id = state.register_l3_stream(market_tx);
     let mut user_rx = state.user_events_tx.subscribe();
     let mut system_rx = state.system_events_tx.subscribe();
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
     let mut connection = ClientConnection {
-        market_stream_id,
+        book_stream_id,
+        l3_stream_id,
         authenticated_user: None,
         subscription: None,
     };
@@ -98,7 +106,8 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         let replies = handle_client_text(&state, &mut connection, &text).await;
                         for reply in replies {
                             if send_server_message(&mut socket, &reply).await.is_err() {
-                                state.unregister_market_stream(connection.market_stream_id);
+                                state.unregister_book_stream(connection.book_stream_id);
+                                state.unregister_l3_stream(connection.l3_stream_id);
                                 return;
                             }
                         }
@@ -111,7 +120,8 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
         }
     }
 
-    state.unregister_market_stream(connection.market_stream_id);
+    state.unregister_book_stream(connection.book_stream_id);
+    state.unregister_l3_stream(connection.l3_stream_id);
 }
 
 async fn handle_client_text(
@@ -149,38 +159,67 @@ async fn handle_client_text(
             channel,
             market,
             last_sequence: _,
-        } => {
-            if channel != L3_CHANNEL {
-                return vec![ServerMessage::Error {
-                    code: "unsupported_channel".to_string(),
-                    message: "only the l3 channel is supported".to_string(),
-                }];
+        } => match channel.as_str() {
+            L2_CHANNEL => {
+                let snapshot = build_book_snapshot_message(state, &market).await;
+                let last_sequence = match &snapshot {
+                    ServerMessage::Snapshot { sequence, .. } => Some(*sequence),
+                    _ => None,
+                };
+                connection.subscription = Some(MarketSubscription {
+                    channel: channel.clone(),
+                    market: market.clone(),
+                });
+                state.update_l3_stream_subscription(connection.l3_stream_id, None, None);
+                state.update_book_stream_subscription(
+                    connection.book_stream_id,
+                    Some(market),
+                    last_sequence,
+                );
+                vec![snapshot]
             }
+            L3_CHANNEL => {
+                if connection.authenticated_user.is_none() {
+                    return vec![ServerMessage::Error {
+                        code: "unauthenticated".to_string(),
+                        message: "authenticate before subscribing to l3".to_string(),
+                    }];
+                }
 
-            connection.subscription = Some(market.clone());
-            let snapshot = build_snapshot_message(state, &market).await;
-            let last_sequence = match &snapshot {
-                ServerMessage::Snapshot { sequence, .. } => Some(*sequence),
-                _ => None,
-            };
-            state.update_market_stream_subscription(
-                connection.market_stream_id,
-                Some(market),
-                last_sequence,
-            );
-            vec![snapshot]
-        }
+                let snapshot = build_l3_snapshot_message(state, &market);
+                let last_sequence = match &snapshot {
+                    ServerMessage::L3Snapshot { sequence, .. } => Some(*sequence),
+                    _ => None,
+                };
+                connection.subscription = Some(MarketSubscription {
+                    channel: channel.clone(),
+                    market: market.clone(),
+                });
+                state.update_book_stream_subscription(connection.book_stream_id, None, None);
+                state.update_l3_stream_subscription(
+                    connection.l3_stream_id,
+                    Some(market),
+                    last_sequence,
+                );
+                vec![snapshot]
+            }
+            _ => vec![unsupported_channel_error()],
+        },
         ClientMessage::Unsubscribe { channel, market } => {
-            if channel != L3_CHANNEL {
-                return vec![ServerMessage::Error {
-                    code: "unsupported_channel".to_string(),
-                    message: "only the l3 channel is supported".to_string(),
-                }];
+            if channel != L2_CHANNEL && channel != L3_CHANNEL {
+                return vec![unsupported_channel_error()];
             }
 
-            if connection.subscription.as_deref() == Some(market.as_str()) {
+            if connection
+                .subscription
+                .as_ref()
+                .is_some_and(|subscription| {
+                    subscription.channel == channel && subscription.market == market
+                })
+            {
                 connection.subscription = None;
-                state.update_market_stream_subscription(connection.market_stream_id, None, None);
+                state.update_book_stream_subscription(connection.book_stream_id, None, None);
+                state.update_l3_stream_subscription(connection.l3_stream_id, None, None);
             }
             vec![ServerMessage::Unsubscribed { channel, market }]
         }
@@ -289,6 +328,13 @@ async fn handle_client_text(
     }
 }
 
+fn unsupported_channel_error() -> ServerMessage {
+    ServerMessage::Error {
+        code: "unsupported_channel".to_string(),
+        message: "supported market-data channels are l2 and l3".to_string(),
+    }
+}
+
 fn user_resync_required(connection: &ClientConnection, skipped: u64) -> Option<ServerMessage> {
     connection.authenticated_user.as_ref()?;
     Some(ServerMessage::ResyncRequired {
@@ -364,13 +410,25 @@ fn trading_error_code(error: &TradingError) -> &'static str {
     }
 }
 
-async fn build_snapshot_message(state: &AppState, market: &str) -> ServerMessage {
+async fn build_book_snapshot_message(state: &AppState, market: &str) -> ServerMessage {
     let (snapshot, sequence) = state.market_book_snapshot_with_sequence(market).await;
 
     ServerMessage::Snapshot {
-        channel: L3_CHANNEL.to_string(),
+        channel: L2_CHANNEL.to_string(),
         market: market.to_string(),
         sequence,
+        bids: snapshot.bids,
+        asks: snapshot.asks,
+    }
+}
+
+fn build_l3_snapshot_message(state: &AppState, market: &str) -> ServerMessage {
+    let snapshot = state.market_l3_snapshot(market);
+
+    ServerMessage::L3Snapshot {
+        channel: L3_CHANNEL.to_string(),
+        market: market.to_string(),
+        sequence: snapshot.sequence,
         bids: snapshot.bids,
         asks: snapshot.asks,
     }
@@ -408,7 +466,8 @@ mod tests {
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
             persistence_dispatch_queue_capacity: 4_096,
-            per_user_requests_per_second: 100,
+            per_user_rate_limit_burst_capacity: 500,
+            per_user_rate_limit_burst_window_seconds: 10,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
             postgres_write_flush_interval_ms: 25,
@@ -447,14 +506,15 @@ mod tests {
 
     fn test_connection() -> ClientConnection {
         ClientConnection {
-            market_stream_id: Uuid::new_v4(),
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
             authenticated_user: None,
             subscription: None,
         }
     }
 
     #[tokio::test]
-    async fn subscribe_returns_snapshot_for_requested_market() {
+    async fn subscribe_returns_l2_snapshot_for_requested_market() {
         let state = test_state();
         state
             .storage
@@ -468,11 +528,16 @@ mod tests {
         let reply = handle_client_text(
             &state,
             &mut connection,
-            r#"{"op":"subscribe","channel":"l3","market":"BTC-USD"}"#,
+            r#"{"op":"subscribe","channel":"l2","market":"BTC-USD"}"#,
         )
         .await;
 
-        assert_eq!(connection.subscription.as_deref(), Some("BTC-USD"));
+        assert_eq!(
+            connection.subscription.as_ref().map(|subscription| {
+                (subscription.channel.as_str(), subscription.market.as_str())
+            }),
+            Some(("l2", "BTC-USD"))
+        );
         assert_eq!(reply.len(), 1);
         match &reply[0] {
             ServerMessage::Snapshot {
@@ -482,7 +547,7 @@ mod tests {
                 bids,
                 asks,
             } => {
-                assert_eq!(channel, "l3");
+                assert_eq!(channel, "l2");
                 assert_eq!(market, "BTC-USD");
                 assert_eq!(*sequence, 0);
                 assert_eq!(
@@ -505,6 +570,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_l3_subscribe_returns_raw_order_snapshot() {
+        let state = test_state();
+        let provisioned = crate::auth::AuthService::provision_user(
+            &state,
+            crate::auth::ProvisionUserRequest {
+                username: "l3-user".to_string(),
+                role: None,
+            },
+        )
+        .expect("provision user");
+        state
+            .storage
+            .upsert_open_order(Uuid::from_u128(10_001), stable_order(1, Side::Buy, 100, 3));
+        state
+            .storage
+            .upsert_open_order(Uuid::from_u128(10_002), stable_order(2, Side::Sell, 101, 2));
+        state.rebuild_derived_market_data();
+        let mut connection = ClientConnection {
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
+            authenticated_user: Some(AuthenticatedUser {
+                trader_id: provisioned.profile.trader_id,
+                username: provisioned.profile.username.clone(),
+                role: provisioned.profile.role,
+            }),
+            subscription: None,
+        };
+
+        let reply = handle_client_text(
+            &state,
+            &mut connection,
+            r#"{"op":"subscribe","channel":"l3","market":"BTC-USD"}"#,
+        )
+        .await;
+
+        assert_eq!(
+            connection.subscription.as_ref().map(|subscription| {
+                (subscription.channel.as_str(), subscription.market.as_str())
+            }),
+            Some(("l3", "BTC-USD"))
+        );
+        assert_eq!(reply.len(), 1);
+        match &reply[0] {
+            ServerMessage::L3Snapshot {
+                channel,
+                market,
+                sequence,
+                bids,
+                asks,
+            } => {
+                assert_eq!(channel, "l3");
+                assert_eq!(market, "BTC-USD");
+                assert_eq!(*sequence, 0);
+                assert_eq!(bids.len(), 1);
+                assert_eq!(bids[0].price, 100);
+                assert_eq!(bids[0].remaining, 3);
+                assert_eq!(asks.len(), 1);
+                assert_eq!(asks[0].price, 101);
+                assert_eq!(asks[0].remaining, 2);
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_l3_subscribe_returns_error() {
+        let state = test_state();
+        let mut connection = test_connection();
+
+        let reply = handle_client_text(
+            &state,
+            &mut connection,
+            r#"{"op":"subscribe","channel":"l3","market":"BTC-USD"}"#,
+        )
+        .await;
+
+        assert_eq!(
+            reply,
+            vec![ServerMessage::Error {
+                code: "unauthenticated".to_string(),
+                message: "authenticate before subscribing to l3".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn invalid_channel_returns_error() {
         let state = test_state();
         let mut connection = test_connection();
@@ -520,7 +671,7 @@ mod tests {
             reply,
             vec![ServerMessage::Error {
                 code: "unsupported_channel".to_string(),
-                message: "only the l3 channel is supported".to_string(),
+                message: "supported market-data channels are l2 and l3".to_string(),
             }]
         );
     }
@@ -625,7 +776,8 @@ mod tests {
         .expect("provision user");
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
-            market_stream_id: Uuid::new_v4(),
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: provisioned.profile.trader_id,
                 username: provisioned.profile.username.clone(),
@@ -682,7 +834,8 @@ mod tests {
         .expect("taker");
 
         let mut maker_connection = ClientConnection {
-            market_stream_id: Uuid::new_v4(),
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: maker.profile.trader_id,
                 username: maker.profile.username.clone(),
@@ -702,7 +855,8 @@ mod tests {
         let _ = user_rx.recv().await.expect("maker open state");
 
         let mut taker_connection = ClientConnection {
-            market_stream_id: Uuid::new_v4(),
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: taker.profile.trader_id,
                 username: taker.profile.username.clone(),
@@ -785,7 +939,8 @@ mod tests {
         .expect("trader");
         let mut user_rx = state.user_events_tx.subscribe();
         let mut connection = ClientConnection {
-            market_stream_id: Uuid::new_v4(),
+            book_stream_id: Uuid::new_v4(),
+            l3_stream_id: Uuid::new_v4(),
             authenticated_user: Some(AuthenticatedUser {
                 trader_id: trader.profile.trader_id,
                 username: trader.profile.username.clone(),
@@ -864,7 +1019,7 @@ mod tests {
     #[test]
     fn delta_messages_serialize_with_sequence_and_event() {
         let message = ServerMessage::Delta {
-            channel: "l3".to_string(),
+            channel: "l2".to_string(),
             market: "BTC-USD".to_string(),
             start_sequence: 7,
             sequence: 7,
@@ -880,5 +1035,29 @@ mod tests {
         assert_eq!(json["start_sequence"], 7);
         assert_eq!(json["sequence"], 7);
         assert_eq!(json["events"][0]["kind"], "level_updated");
+    }
+
+    #[test]
+    fn l3_delta_messages_serialize_with_market_events() {
+        let message = ServerMessage::L3Delta {
+            channel: "l3".to_string(),
+            market: "BTC-USD".to_string(),
+            start_sequence: 9,
+            sequence: 9,
+            events: vec![crate::marketdata::MarketEvent::OrderAdded {
+                order_id: Uuid::from_u128(1),
+                side: Side::Buy,
+                price: 100,
+                remaining: 2,
+                created_at: Utc.timestamp_opt(0, 0).single().expect("epoch"),
+            }],
+        };
+
+        let json = serde_json::to_value(message).expect("l3 delta json");
+        assert_eq!(json["type"], "l3_delta");
+        assert_eq!(json["channel"], "l3");
+        assert_eq!(json["start_sequence"], 9);
+        assert_eq!(json["sequence"], 9);
+        assert_eq!(json["events"][0]["kind"], "order_added");
     }
 }

@@ -14,7 +14,8 @@ pub struct Config {
     pub runtime_dispatch_queue_capacity: usize,
     pub account_dispatch_queue_capacity: usize,
     pub persistence_dispatch_queue_capacity: usize,
-    pub per_user_requests_per_second: u64,
+    pub per_user_rate_limit_burst_capacity: u64,
+    pub per_user_rate_limit_burst_window_seconds: u64,
     pub admin_api_token: String,
     pub postgres_write_batch_size: usize,
     pub postgres_write_flush_interval_ms: u64,
@@ -65,10 +66,16 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(16_384),
-            per_user_requests_per_second: env::var("PER_USER_REQUESTS_PER_SECOND")
+            per_user_rate_limit_burst_capacity: env::var("PER_USER_RATE_LIMIT_BURST_CAPACITY")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(100),
+                .unwrap_or(500),
+            per_user_rate_limit_burst_window_seconds: env::var(
+                "PER_USER_RATE_LIMIT_BURST_WINDOW_SECONDS",
+            )
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10),
             admin_api_token: env::var("ADMIN_API_TOKEN")
                 .unwrap_or_else(|_| "local-admin-token".to_string()),
             postgres_write_batch_size: env::var("POSTGRES_WRITE_BATCH_SIZE")

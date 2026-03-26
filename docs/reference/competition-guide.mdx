@@ -34,7 +34,7 @@ This page is the short path to the decisions you actually need to make on event 
 - Standard competitors have a fixed worst-case per-market net position limit of `+/-1000`.
 - Prices must align to the market `tick_size`.
 - Quantities must be at least the market `min_order_quantity`.
-- Authenticated competitor operations are limited to `100 ops/sec` per API key. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages.
+- Authenticated competitor operations are limited by a per-user bucket of `500 ops per 10s`. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages.
 
 ### Recommended client split
 
@@ -48,16 +48,16 @@ Use REST for bootstrap and recovery:
 
 Use WebSocket for:
 
-- aggregated price-level market data on the `l3`-named channel
-- short batched `delta` updates, usually flushed about every `100ms`
+- aggregated price-level market data on `l2`
+- short batched `l2` `delta` updates, usually flushed about every `100ms`
+- authenticated raw per-order public market data on `l3`
 - user `fill` events
 - user `order_state` events
 - low-latency order actions
 
 Current limitation:
 
-- one `l3` market subscription per connection
-- the `l3` market-data feed is price-level only, not a public per-order L3 feed
+- one market-data subscription per connection
 
 ### What a successful order means
 
@@ -67,7 +67,9 @@ When an order is accepted:
 - the REST response can include immediate `fills`
 - `resting: true` means remaining quantity was posted to the book
 - `order_state` and `fill` messages are the live account-state feed while your socket is healthy
-- the market-data `snapshot` and `delta` feed is aggregated by price level, so use `order_state` for your own exact resting-order detail
+- the `l2` market-data `snapshot` and `delta` feed is aggregated by price level
+- the `l3_snapshot` and `l3_delta` feed is a public per-order feed for strategy logic
+- use `order_state` for your own exact resting-order detail
 - market-data `delta` messages can carry multiple ordered events, so validate `start_sequence` and then advance your local book sequence to `sequence`
 
 ## Recovery during the event

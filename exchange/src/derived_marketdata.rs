@@ -1,4 +1,4 @@
-use crate::marketdata::{BookDelta, MarketEvent, MarketEventEnvelope};
+use crate::marketdata::{BookDelta, MarketEvent, MarketEventEnvelope, MarketL3Order};
 use crate::orderbook::{BookLevel, Order, Side};
 use crate::trading::MarketBookSnapshot;
 use chrono::{DateTime, Utc};
@@ -7,16 +7,6 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 const MARKET_EVENT_REPLAY_LIMIT: usize = 4_096;
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarketL3Order {
-    pub order_id: Uuid,
-    pub side: Side,
-    pub price: u64,
-    pub remaining: u64,
-    pub created_at: DateTime<Utc>,
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,7 +247,6 @@ impl DerivedMarketState {
             .filter(|order| order.side == Side::Buy)
             .map(|order| MarketL3Order {
                 order_id: order.order_id,
-                side: order.side,
                 price: order.price,
                 remaining: order.remaining,
                 created_at: order.created_at,
@@ -277,7 +266,6 @@ impl DerivedMarketState {
             .filter(|order| order.side == Side::Sell)
             .map(|order| MarketL3Order {
                 order_id: order.order_id,
-                side: order.side,
                 price: order.price,
                 remaining: order.remaining,
                 created_at: order.created_at,

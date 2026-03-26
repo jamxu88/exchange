@@ -2,8 +2,8 @@ use crate::bots::BotManager;
 use crate::config::Config;
 use crate::derived_marketdata::{DerivedMarketDataHandle, MarketL3Snapshot};
 use crate::marketdata::{
-    BookDelta, BroadcastEvent, L3_CHANNEL, MarketEvent, MarketEventEnvelope, ServerMessage,
-    UserBroadcastEvent,
+    BookDelta, BroadcastEvent, L2_CHANNEL, L3_CHANNEL, L3BroadcastEvent, MarketEvent,
+    MarketEventEnvelope, ServerMessage, UserBroadcastEvent,
 };
 use crate::marketdata_bridge::MarketDataBridgeHandle;
 use crate::marketdata_ipc::MarketBootstrapState;
@@ -328,6 +328,7 @@ pub struct AppState {
     account_barrier_telemetry: AccountBarrierTelemetry,
     persistence_dispatcher: PersistenceDispatchHandle,
     market_broadcaster: MarketBroadcastHandle,
+    market_event_broadcaster: MarketEventBroadcastHandle,
     pub events_tx: broadcast::Sender<BroadcastEvent>,
     pub market_event_tx: broadcast::Sender<MarketEventEnvelope>,
     pub user_events_tx: broadcast::Sender<UserBroadcastEvent>,
@@ -352,12 +353,17 @@ impl AppState {
             config.ws_market_broadcast_workers,
             config.runtime_dispatch_queue_capacity,
         );
+        let market_event_broadcaster = MarketEventBroadcastHandle::spawn(
+            config.ws_market_broadcast_workers,
+            config.runtime_dispatch_queue_capacity,
+        );
         let runtime_dispatcher = RuntimeDispatchHandle::spawn(
             config.runtime_dispatch_queue_capacity,
             config.ws_market_delta_batch_interval_ms,
             events_tx.clone(),
             market_event_tx.clone(),
             market_broadcaster.clone(),
+            market_event_broadcaster.clone(),
             user_events_tx.clone(),
             system_events_tx.clone(),
         );
@@ -380,6 +386,7 @@ impl AppState {
             account_barrier_telemetry,
             persistence_dispatcher,
             market_broadcaster,
+            market_event_broadcaster,
             events_tx,
             market_event_tx,
             user_events_tx,
@@ -455,14 +462,14 @@ impl AppState {
         self.runtime_dispatcher.dispatch_market_event(envelope);
     }
 
-    pub fn register_market_stream(
+    pub fn register_book_stream(
         &self,
         tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
     ) -> Uuid {
         self.market_broadcaster.register(tx)
     }
 
-    pub fn update_market_stream_subscription(
+    pub fn update_book_stream_subscription(
         &self,
         client_id: Uuid,
         market: Option<String>,
@@ -472,8 +479,26 @@ impl AppState {
             .update_subscription(client_id, market, last_sequence);
     }
 
-    pub fn unregister_market_stream(&self, client_id: Uuid) {
+    pub fn unregister_book_stream(&self, client_id: Uuid) {
         self.market_broadcaster.unregister(client_id);
+    }
+
+    pub fn register_l3_stream(&self, tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>) -> Uuid {
+        self.market_event_broadcaster.register(tx)
+    }
+
+    pub fn update_l3_stream_subscription(
+        &self,
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    ) {
+        self.market_event_broadcaster
+            .update_subscription(client_id, market, last_sequence);
+    }
+
+    pub fn unregister_l3_stream(&self, client_id: Uuid) {
+        self.market_event_broadcaster.unregister(client_id);
     }
 
     pub fn dispatch_user_event(&self, trader_id: Uuid, message: ServerMessage) {
@@ -840,8 +865,198 @@ impl MarketBroadcastWorker {
     }
 }
 
+#[derive(Clone)]
+struct MarketEventBroadcastHandle {
+    workers: Arc<Vec<MarketEventBroadcastWorker>>,
+    worker_index_by_client: Arc<DashMap<Uuid, usize>>,
+    next_worker: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct MarketEventBroadcastWorker {
+    tx: mpsc::SyncSender<MarketEventBroadcastCommand>,
+}
+
+enum MarketEventBroadcastCommand {
+    Register {
+        client_id: Uuid,
+        tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
+    },
+    UpdateSubscription {
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    },
+    Publish(L3BroadcastEvent),
+    Remove {
+        client_id: Uuid,
+    },
+}
+
+struct MarketEventBroadcastClient {
+    tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
+    subscription: Option<String>,
+    last_market_sequence: Option<u64>,
+}
+
+impl MarketEventBroadcastHandle {
+    fn spawn(worker_count: usize, queue_capacity: usize) -> Self {
+        let worker_count = worker_count.max(1);
+        let workers = (0..worker_count)
+            .map(|index| MarketEventBroadcastWorker::spawn(index, queue_capacity))
+            .collect();
+
+        Self {
+            workers: Arc::new(workers),
+            worker_index_by_client: Arc::new(DashMap::new()),
+            next_worker: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn register(&self, tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>) -> Uuid {
+        let client_id = Uuid::new_v4();
+        let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        self.worker_index_by_client.insert(client_id, worker_index);
+        self.workers[worker_index].send(MarketEventBroadcastCommand::Register { client_id, tx });
+        client_id
+    }
+
+    fn update_subscription(
+        &self,
+        client_id: Uuid,
+        market: Option<String>,
+        last_sequence: Option<u64>,
+    ) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketEventBroadcastCommand::UpdateSubscription {
+            client_id,
+            market,
+            last_sequence,
+        });
+    }
+
+    fn publish(&self, batch: L3BroadcastEvent) {
+        for worker in self.workers.iter() {
+            worker.send(MarketEventBroadcastCommand::Publish(batch.clone()));
+        }
+    }
+
+    fn unregister(&self, client_id: Uuid) {
+        let Some((_, worker_index)) = self.worker_index_by_client.remove(&client_id) else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketEventBroadcastCommand::Remove { client_id });
+    }
+}
+
+impl MarketEventBroadcastWorker {
+    fn spawn(index: usize, queue_capacity: usize) -> Self {
+        let (tx, rx) = mpsc::sync_channel(queue_capacity);
+        thread::Builder::new()
+            .name(format!("exchange-l3-broadcast-{index}"))
+            .spawn(move || {
+                let mut clients = HashMap::<Uuid, MarketEventBroadcastClient>::new();
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        MarketEventBroadcastCommand::Register { client_id, tx } => {
+                            clients.insert(
+                                client_id,
+                                MarketEventBroadcastClient {
+                                    tx,
+                                    subscription: None,
+                                    last_market_sequence: None,
+                                },
+                            );
+                        }
+                        MarketEventBroadcastCommand::UpdateSubscription {
+                            client_id,
+                            market,
+                            last_sequence,
+                        } => {
+                            if let Some(client) = clients.get_mut(&client_id) {
+                                client.subscription = market;
+                                client.last_market_sequence = last_sequence;
+                            }
+                        }
+                        MarketEventBroadcastCommand::Publish(batch) => {
+                            publish_market_event_batch(&mut clients, batch);
+                        }
+                        MarketEventBroadcastCommand::Remove { client_id } => {
+                            clients.remove(&client_id);
+                        }
+                    }
+                }
+            })
+            .unwrap_or_else(|error| panic!("failed to spawn l3 broadcast thread: {error}"));
+        Self { tx }
+    }
+
+    fn send(&self, command: MarketEventBroadcastCommand) {
+        self.tx
+            .send(command)
+            .unwrap_or_else(|_| panic!("l3 broadcast thread terminated"));
+    }
+}
+
 fn publish_market_batch(clients: &mut HashMap<Uuid, MarketBroadcastClient>, batch: BroadcastEvent) {
     let delta_message = Arc::new(ServerMessage::Delta {
+        channel: L2_CHANNEL.to_string(),
+        market: batch.market.clone(),
+        start_sequence: batch.start_sequence,
+        sequence: batch.sequence,
+        events: batch.events.clone(),
+    });
+    let mut disconnected = Vec::new();
+
+    for (client_id, client) in clients.iter_mut() {
+        if client.subscription.as_deref() != Some(batch.market.as_str()) {
+            continue;
+        }
+
+        if let Some(last_sequence) = client.last_market_sequence {
+            let expected_sequence = last_sequence.saturating_add(1);
+            if batch.start_sequence != expected_sequence {
+                let resync_message = Arc::new(ServerMessage::ResyncRequired {
+                    channel: L2_CHANNEL.to_string(),
+                    market: Some(batch.market.clone()),
+                    expected_sequence: Some(expected_sequence),
+                    current_sequence: Some(batch.sequence),
+                    reason: "market sequence gap detected; resubscribe for a fresh snapshot"
+                        .to_string(),
+                });
+                client.subscription = None;
+                client.last_market_sequence = None;
+                if client.tx.send(resync_message).is_err() {
+                    disconnected.push(*client_id);
+                }
+                continue;
+            }
+        }
+
+        client.last_market_sequence = Some(batch.sequence);
+        if client.tx.send(delta_message.clone()).is_err() {
+            disconnected.push(*client_id);
+        }
+    }
+
+    for client_id in disconnected {
+        clients.remove(&client_id);
+    }
+}
+
+fn publish_market_event_batch(
+    clients: &mut HashMap<Uuid, MarketEventBroadcastClient>,
+    batch: L3BroadcastEvent,
+) {
+    let delta_message = Arc::new(ServerMessage::L3Delta {
         channel: L3_CHANNEL.to_string(),
         market: batch.market.clone(),
         start_sequence: batch.start_sequence,
@@ -940,6 +1155,7 @@ impl RuntimeDispatchHandle {
         events_tx: broadcast::Sender<BroadcastEvent>,
         market_event_tx: broadcast::Sender<MarketEventEnvelope>,
         market_broadcaster: MarketBroadcastHandle,
+        market_event_broadcaster: MarketEventBroadcastHandle,
         user_events_tx: broadcast::Sender<UserBroadcastEvent>,
         system_events_tx: broadcast::Sender<ServerMessage>,
     ) -> Self {
@@ -990,7 +1206,14 @@ impl RuntimeDispatchHandle {
                                     });
                                 }
                                 RuntimeDispatch::MarketEvent(message) => {
+                                    let l3_batch = L3BroadcastEvent {
+                                        market: message.market.clone(),
+                                        start_sequence: message.sequence,
+                                        sequence: message.sequence,
+                                        events: vec![message.event.clone()],
+                                    };
                                     let _ = market_event_tx.send(message);
+                                    market_event_broadcaster.publish(l3_batch);
                                 }
                                 RuntimeDispatch::User(message) => {
                                     let _ = user_events_tx.send(message);
@@ -1337,7 +1560,8 @@ mod tests {
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
             persistence_dispatch_queue_capacity: 4_096,
-            per_user_requests_per_second: 100,
+            per_user_rate_limit_burst_capacity: 500,
+            per_user_rate_limit_burst_window_seconds: 10,
             admin_api_token: "test-admin-token".to_string(),
             postgres_write_batch_size: 128,
             postgres_write_flush_interval_ms: 25,
@@ -1490,8 +1714,8 @@ mod tests {
     async fn market_broadcast_batches_consecutive_deltas_for_fanout() {
         let state = AppState::new(test_config());
         let (tx, mut rx) = tokio_mpsc::unbounded_channel();
-        let client_id = state.register_market_stream(tx);
-        state.update_market_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(0));
+        let client_id = state.register_book_stream(tx);
+        state.update_book_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(0));
 
         state.dispatch_market_delta(
             "BTC-USD",
@@ -1521,7 +1745,7 @@ mod tests {
                 sequence,
                 events,
             } => {
-                assert_eq!(channel, "l3");
+                assert_eq!(channel, "l2");
                 assert_eq!(market, "BTC-USD");
                 assert_eq!(*start_sequence, 1);
                 assert_eq!(*sequence, 2);
@@ -1549,15 +1773,15 @@ mod tests {
             timeout(Duration::from_millis(25), rx.recv()).await.is_err(),
             "expected a single batched delta message",
         );
-        state.unregister_market_stream(client_id);
+        state.unregister_book_stream(client_id);
     }
 
     #[tokio::test]
     async fn market_broadcast_requests_resync_after_sequence_gap() {
         let state = AppState::new(test_config());
         let (tx, mut rx) = tokio_mpsc::unbounded_channel();
-        let client_id = state.register_market_stream(tx);
-        state.update_market_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(4));
+        let client_id = state.register_book_stream(tx);
+        state.update_book_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(4));
 
         state.runtime_dispatcher.dispatch_market(BroadcastEvent {
             market: "BTC-USD".to_string(),
@@ -1577,6 +1801,86 @@ mod tests {
         assert_eq!(
             message.as_ref(),
             &ServerMessage::ResyncRequired {
+                channel: "l2".to_string(),
+                market: Some("BTC-USD".to_string()),
+                expected_sequence: Some(5),
+                current_sequence: Some(7),
+                reason: "market sequence gap detected; resubscribe for a fresh snapshot"
+                    .to_string(),
+            }
+        );
+        state.unregister_book_stream(client_id);
+    }
+
+    #[tokio::test]
+    async fn l3_broadcast_streams_raw_market_events_and_detects_gaps() {
+        let state = AppState::new(test_config());
+        let (tx, mut rx) = tokio_mpsc::unbounded_channel();
+        let client_id = state.register_l3_stream(tx);
+        state.update_l3_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(0));
+
+        state.dispatch_market_event(
+            "BTC-USD",
+            MarketEvent::OrderAdded {
+                order_id: Uuid::from_u128(1),
+                side: Side::Buy,
+                price: 100,
+                remaining: 2,
+                created_at: Utc::now(),
+            },
+        );
+
+        let message = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for l3 delta")
+            .expect("l3 message");
+        match message.as_ref() {
+            ServerMessage::L3Delta {
+                channel,
+                market,
+                start_sequence,
+                sequence,
+                events,
+            } => {
+                assert_eq!(channel, "l3");
+                assert_eq!(market, "BTC-USD");
+                assert_eq!(*start_sequence, 1);
+                assert_eq!(*sequence, 1);
+                assert!(matches!(
+                    events.as_slice(),
+                    [MarketEvent::OrderAdded {
+                        side: Side::Buy,
+                        price: 100,
+                        remaining: 2,
+                        ..
+                    }]
+                ));
+            }
+            other => panic!("unexpected l3 message: {other:?}"),
+        }
+
+        state.update_l3_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(4));
+        state
+            .runtime_dispatcher
+            .dispatch_market_event(MarketEventEnvelope {
+                market: "BTC-USD".to_string(),
+                sequence: 7,
+                recorded_at: Utc::now(),
+                event: MarketEvent::OrderRemoved {
+                    order_id: Uuid::from_u128(1),
+                    side: Side::Buy,
+                    price: 100,
+                    reason: crate::marketdata::MarketEventRemoveReason::Canceled,
+                },
+            });
+
+        let message = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for l3 resync message")
+            .expect("l3 resync message");
+        assert_eq!(
+            message.as_ref(),
+            &ServerMessage::ResyncRequired {
                 channel: "l3".to_string(),
                 market: Some("BTC-USD".to_string()),
                 expected_sequence: Some(5),
@@ -1585,6 +1889,7 @@ mod tests {
                     .to_string(),
             }
         );
-        state.unregister_market_stream(client_id);
+
+        state.unregister_l3_stream(client_id);
     }
 }

@@ -13,8 +13,8 @@ type ApiSide = "BUY" | "SELL";
 
 type RawClientMessage =
   | { op: "authenticate"; api_key: string }
-  | { op: "subscribe"; channel: "l3"; market: string; last_sequence?: number | null }
-  | { op: "unsubscribe"; channel: "l3"; market: string };
+  | { op: "subscribe"; channel: "l2"; market: string; last_sequence?: number | null }
+  | { op: "unsubscribe"; channel: "l2"; market: string };
 
 type RawBookLevel = {
   price: number;
@@ -34,7 +34,7 @@ type RawServerMessage =
   | { type: "authenticated"; trader_id: string; username: string }
   | {
       type: "snapshot";
-      channel: "l3";
+      channel: "l2";
       market: string;
       sequence: number;
       bids: RawBookLevel[];
@@ -42,7 +42,7 @@ type RawServerMessage =
     }
   | {
       type: "delta";
-      channel: "l3";
+      channel: "l2";
       market: string;
       sequence: number;
       events: RawBookDelta[];
@@ -91,7 +91,7 @@ type RawServerMessage =
       current_sequence?: number | null;
       reason: string;
     }
-  | { type: "unsubscribed"; channel: "l3"; market: string }
+  | { type: "unsubscribed"; channel: "l2"; market: string }
   | { type: "error"; code: string; message: string };
 
 export type TradeWsSnapshot = {
@@ -249,7 +249,7 @@ export class TradeWsClient {
     if (this.socket?.readyState === 1) {
       this.send({
         op: "unsubscribe",
-        channel: "l3",
+        channel: "l2",
         market: previousMarket,
       });
       this.subscribeCurrentMarket();
@@ -354,7 +354,7 @@ export class TradeWsClient {
           marketId: message.market ?? undefined,
           reason: message.reason,
         });
-        if (message.channel === "l3" && message.market === this.selectedMarket) {
+        if (message.channel === "l2" && message.market === this.selectedMarket) {
           this.subscribeCurrentMarket();
         }
         return;
@@ -369,7 +369,7 @@ export class TradeWsClient {
   private subscribeCurrentMarket() {
     this.send({
       op: "subscribe",
-      channel: "l3",
+      channel: "l2",
       market: this.selectedMarket,
       last_sequence: null,
     });
