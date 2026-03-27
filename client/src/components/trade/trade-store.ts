@@ -94,6 +94,10 @@ export type TradeAction =
       time: string;
     }
   | {
+      type: "ws-market-state";
+      market: MarketDefinition;
+    }
+  | {
       type: "ws-resync-required";
       channel: string;
       marketId?: MarketId;
@@ -279,6 +283,20 @@ function syncMarketDefinitions(
     ),
     selectedMarketId: nextSelectedMarketId,
   };
+}
+
+function upsertMarketDefinition(
+  markets: MarketDefinition[],
+  nextMarket: MarketDefinition,
+) {
+  const index = markets.findIndex((market) => market.id === nextMarket.id);
+  if (index === -1) {
+    return [...markets, nextMarket];
+  }
+
+  return markets.map((market, currentIndex) =>
+    currentIndex === index ? nextMarket : market,
+  );
 }
 
 function tradesFromFills(fills: TradeFill[], marketId: MarketId): MarketTrade[] {
@@ -803,6 +821,23 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           tone: action.status === "canceled" ? "neutral" : "positive",
           text,
         }),
+      };
+    }
+
+    case "ws-market-state": {
+      const synced = syncMarketDefinitions(
+        state,
+        upsertMarketDefinition(state.availableMarkets, action.market),
+        state.positions,
+      );
+
+      return {
+        ...state,
+        availableMarkets: synced.availableMarkets,
+        selectedMarketId: synced.selectedMarketId,
+        marketBooks: synced.marketBooks,
+        marketTradesByMarket: synced.marketTradesByMarket,
+        positionsByMarket: synced.positionsByMarket,
       };
     }
 

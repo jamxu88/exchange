@@ -63,6 +63,27 @@ Do this:
 4. re-fetch `/api/v1/fills`
 5. reconnect the socket if your client cannot confidently recover local order state
 
+## Market-metadata lag
+
+When the market-metadata stream lags, you may get:
+
+```json
+{
+  "type": "resync_required",
+  "channel": "markets",
+  "market": null,
+  "expected_sequence": null,
+  "current_sequence": null,
+  "reason": "market event stream lagged by N messages; refresh market state from REST if needed"
+}
+```
+
+Do this:
+
+1. re-fetch `/api/v1/markets`
+2. replace your cached market definitions
+3. keep using websocket `market_state` pushes after the refresh
+
 ## Restart behavior
 
 After a backend restart:

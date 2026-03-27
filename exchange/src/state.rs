@@ -332,6 +332,7 @@ pub struct AppState {
     market_event_broadcaster: MarketEventBroadcastHandle,
     pub events_tx: broadcast::Sender<BroadcastEvent>,
     pub market_event_tx: broadcast::Sender<MarketEventEnvelope>,
+    pub public_events_tx: broadcast::Sender<ServerMessage>,
     pub user_events_tx: broadcast::Sender<UserBroadcastEvent>,
     pub system_events_tx: broadcast::Sender<ServerMessage>,
     pub market_sequences: Arc<DashMap<String, u64>>,
@@ -349,6 +350,7 @@ impl AppState {
     pub fn with_storage(config: Config, storage: StorageRepository) -> Self {
         let (events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (market_event_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
+        let (public_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (user_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (system_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let operator_telemetry = OperatorTelemetry::default();
@@ -369,6 +371,7 @@ impl AppState {
             market_event_tx.clone(),
             market_broadcaster.clone(),
             market_event_broadcaster.clone(),
+            public_events_tx.clone(),
             user_events_tx.clone(),
             system_events_tx.clone(),
         );
@@ -394,6 +397,7 @@ impl AppState {
             market_event_broadcaster,
             events_tx,
             market_event_tx,
+            public_events_tx,
             user_events_tx,
             system_events_tx,
             market_sequences: Arc::new(DashMap::new()),
@@ -510,6 +514,10 @@ impl AppState {
     pub fn dispatch_user_event(&self, trader_id: Uuid, message: ServerMessage) {
         self.runtime_dispatcher
             .dispatch_user(UserBroadcastEvent { trader_id, message });
+    }
+
+    pub fn dispatch_public_message(&self, message: ServerMessage) {
+        self.runtime_dispatcher.dispatch_public(message);
     }
 
     pub fn dispatch_system_message(&self, message: ServerMessage) {
@@ -1173,6 +1181,7 @@ struct RuntimeDispatchHandle {
 enum RuntimeDispatch {
     Market(BroadcastEvent),
     MarketEvent(MarketEventEnvelope),
+    Public(ServerMessage),
     User(UserBroadcastEvent),
     System(ServerMessage),
 }
@@ -1185,6 +1194,7 @@ impl RuntimeDispatchHandle {
         market_event_tx: broadcast::Sender<MarketEventEnvelope>,
         market_broadcaster: MarketBroadcastHandle,
         market_event_broadcaster: MarketEventBroadcastHandle,
+        public_events_tx: broadcast::Sender<ServerMessage>,
         user_events_tx: broadcast::Sender<UserBroadcastEvent>,
         system_events_tx: broadcast::Sender<ServerMessage>,
     ) -> Self {
@@ -1244,6 +1254,9 @@ impl RuntimeDispatchHandle {
                                     let _ = market_event_tx.send(message);
                                     market_event_broadcaster.publish(l3_batch);
                                 }
+                                RuntimeDispatch::Public(message) => {
+                                    let _ = public_events_tx.send(message);
+                                }
                                 RuntimeDispatch::User(message) => {
                                     let _ = user_events_tx.send(message);
                                 }
@@ -1286,6 +1299,10 @@ impl RuntimeDispatchHandle {
 
     fn dispatch_user(&self, event: UserBroadcastEvent) {
         self.send(RuntimeDispatch::User(event));
+    }
+
+    fn dispatch_public(&self, message: ServerMessage) {
+        self.send(RuntimeDispatch::Public(message));
     }
 
     fn dispatch_system(&self, message: ServerMessage) {

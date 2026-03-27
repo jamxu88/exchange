@@ -597,6 +597,7 @@ impl AdminService {
             .market_sequences
             .entry(market.market_id.clone())
             .or_insert(0);
+        publish_market_state(state, market.clone());
         record_admin_audit(
             state,
             admin.username.clone(),
@@ -661,6 +662,7 @@ impl AdminService {
         }
         market.updated_at = Utc::now();
         state.storage.upsert_market(market.clone());
+        publish_market_state(state, market.clone());
         record_admin_audit(
             state,
             admin.username.clone(),
@@ -821,6 +823,7 @@ impl AdminService {
         market.status = MarketStatus::Disabled;
         market.updated_at = Utc::now();
         state.storage.upsert_market(market.clone());
+        publish_market_state(state, market.clone());
 
         let canceled_orders = state
             .storage
@@ -842,6 +845,7 @@ impl AdminService {
         market.settlement_price = Some(request.settlement_price);
         market.updated_at = Utc::now();
         state.storage.upsert_market(market.clone());
+        publish_market_state(state, market.clone());
 
         let announcement = request.announcement.unwrap_or_else(|| {
             if market.quote_asset == DEFAULT_COMPETITION_QUOTE_ASSET {
@@ -1455,6 +1459,10 @@ fn publish_admin_message(state: &AppState, entry: AdminMessageEntry) {
     state.dispatch_system_message(message);
 }
 
+fn publish_market_state(state: &AppState, market: MarketDefinition) {
+    state.dispatch_public_message(ServerMessage::MarketState { market });
+}
+
 fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
     state.dispatch_market_delta(market, event);
 }
@@ -1465,7 +1473,7 @@ fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage)
 
 fn publish_market_resync(state: &AppState, market: &str, reason: &str) {
     for channel in ["l2", "l3"] {
-        state.dispatch_system_message(ServerMessage::ResyncRequired {
+        state.dispatch_public_message(ServerMessage::ResyncRequired {
             channel: channel.to_string(),
             market: Some(market.to_string()),
             expected_sequence: None,

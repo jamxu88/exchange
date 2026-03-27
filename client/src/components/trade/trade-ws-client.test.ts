@@ -28,6 +28,7 @@ describe("TradeWsClient", () => {
       onReject: vi.fn(),
       onFill: vi.fn(),
       onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -69,6 +70,7 @@ describe("TradeWsClient", () => {
       onReject: vi.fn(),
       onFill: vi.fn(),
       onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -164,6 +166,7 @@ describe("TradeWsClient", () => {
         onReject: vi.fn(),
         onFill: vi.fn(),
         onOrderState: vi.fn(),
+        onMarketState: vi.fn(),
         onResyncRequired: vi.fn(),
         onAdminMessage: vi.fn(),
         onError: vi.fn(),
@@ -189,6 +192,7 @@ describe("TradeWsClient", () => {
       onReject: vi.fn(),
       onFill: vi.fn(),
       onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -245,6 +249,18 @@ describe("TradeWsClient", () => {
     });
     socket.onmessage?.({
       data: JSON.stringify({
+        type: "market_state",
+        market: {
+          market_id: "BTC-USD",
+          display_name: "Bitcoin",
+          base_asset: "BTC",
+          quote_asset: "USD",
+          status: "disabled",
+        },
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
         type: "admin_message",
         message: {
           level: "warning",
@@ -289,6 +305,13 @@ describe("TradeWsClient", () => {
         status: "partial",
       },
       status: "open",
+    });
+    expect(callbacks.onMarketState).toHaveBeenCalledWith({
+      id: "BTC-USD",
+      name: "Bitcoin",
+      baseAsset: "BTC",
+      quoteAsset: "USD",
+      status: "disabled",
     });
     expect(callbacks.onAdminMessage).toHaveBeenCalledWith({
       level: "warning",

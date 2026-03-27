@@ -102,6 +102,54 @@ describe("tradeReducer", () => {
     expect(next.bootstrapStatus).toBe("ready");
   });
 
+  it("applies websocket market-state updates to market availability", () => {
+    let state = createInitialTradeState(markets);
+
+    state = tradeReducer(state, {
+      type: "ws-market-state",
+      market: {
+        id: "ETH-USD",
+        name: "Ether",
+        baseAsset: "ETH",
+        quoteAsset: "USD",
+        status: "disabled",
+      },
+    });
+
+    expect(state.availableMarkets.find((market) => market.id === "ETH-USD")).toEqual({
+      id: "ETH-USD",
+      name: "Ether",
+      baseAsset: "ETH",
+      quoteAsset: "USD",
+      status: "disabled",
+    });
+
+    state = tradeReducer(state, {
+      type: "ws-market-state",
+      market: {
+        id: "SOL-USD",
+        name: "Solana",
+        baseAsset: "SOL",
+        quoteAsset: "USD",
+        status: "enabled",
+      },
+    });
+
+    expect(state.availableMarkets.map((market) => market.id)).toEqual([
+      "BTC-USD",
+      "ETH-USD",
+      "SOL-USD",
+    ]);
+    expect(state.marketBooks["SOL-USD"]).toEqual({
+      marketId: "SOL-USD",
+      sequence: 0,
+      bids: [],
+      asks: [],
+      lastTradePrice: null,
+      lastTradeQuantity: null,
+    });
+  });
+
   it("does not add a message when switching markets", () => {
     const initial = createInitialTradeState(markets);
     const next = tradeReducer(initial, {

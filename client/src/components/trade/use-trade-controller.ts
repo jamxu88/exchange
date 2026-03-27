@@ -29,7 +29,7 @@ import {
   type TradeWsSnapshot,
   type WebSocketFactory,
 } from "@/components/trade/trade-ws-client";
-import type { ConnectionStatus, TradeSide } from "@/components/trade/trade-types";
+import type { ConnectionStatus, MarketDefinition, TradeSide } from "@/components/trade/trade-types";
 
 type RestClientFactory = (config: Pick<TradeRuntimeConfig, "httpUrl" | "apiKey">) => TradeRestClient;
 type WsClientFactory = (
@@ -207,6 +207,12 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     },
   );
 
+  const handleMarketState = useEffectEvent((market: MarketDefinition) => {
+    startTransition(() => {
+      dispatch({ type: "ws-market-state", market });
+    });
+  });
+
   const handleResyncRequired = useEffectEvent(
     (payload: { channel: string; marketId?: string; reason: string }) => {
       startTransition(() => {
@@ -307,6 +313,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
         onReject: handleReject,
         onFill: handleFill,
         onOrderState: handleOrderState,
+        onMarketState: handleMarketState,
         onResyncRequired: handleResyncRequired,
         onAdminMessage: handleAdminMessage,
         onError: handleSocketError,

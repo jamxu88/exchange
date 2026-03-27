@@ -6,6 +6,7 @@ use chrono::Utc;
 use exchange::{
     admin::{
         AdminMessageLevel, AdminService, MarketDefinition, MarketStatus, SendAdminMessageRequest,
+        SettleMarketRequest, UpdateMarketRequest,
     },
     auth::{AuthService, AuthenticatedAdmin, ProvisionUserRequest, ProvisionUserResponse},
     build_app,
@@ -1387,6 +1388,85 @@ async fn websocket_delivers_broadcast_admin_messages_to_authenticated_clients() 
         }
         other => panic!("unexpected admin message event: {other:?}"),
     }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_delivers_market_state_updates_without_authentication() {
+    let state = test_state();
+    let (url, server) = spawn_server(state.clone()).await;
+    let mut socket = connect_socket(&url).await;
+
+    let updated = AdminService::update_market(
+        &state,
+        &AuthenticatedAdmin {
+            username: "ops".to_string(),
+        },
+        "BTC-USD",
+        UpdateMarketRequest {
+            display_name: Some("Bitcoin".to_string()),
+            tick_size: None,
+            min_order_quantity: None,
+            reference_price: None,
+            enabled: Some(false),
+        },
+    )
+    .expect("update market");
+
+    match next_server_message(&mut socket).await {
+        ServerMessage::MarketState { market } => {
+            assert_eq!(market.market_id, updated.market_id);
+            assert_eq!(market.display_name, "Bitcoin");
+            assert_eq!(market.status, MarketStatus::Disabled);
+        }
+        other => panic!("unexpected market state event: {other:?}"),
+    }
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn websocket_delivers_settlement_market_state_transitions_without_authentication() {
+    let state = test_state();
+    let (url, server) = spawn_server(state.clone()).await;
+    let mut socket = connect_socket(&url).await;
+
+    let settled = AdminService::settle_market(
+        &state,
+        &AuthenticatedAdmin {
+            username: "ops".to_string(),
+        },
+        "BTC-USD",
+        SettleMarketRequest {
+            settlement_price: 123,
+            announcement: None,
+        },
+    )
+    .await
+    .expect("settle market");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let mut observed_statuses = Vec::new();
+    while observed_statuses.len() < 2 {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let Some(message) = maybe_next_server_message(&mut socket, remaining).await else {
+            break;
+        };
+        if let ServerMessage::MarketState { market } = message {
+            observed_statuses.push((market.status, market.settlement_price));
+        }
+    }
+
+    assert_eq!(
+        observed_statuses,
+        vec![
+            (MarketStatus::Disabled, None),
+            (MarketStatus::Settled, Some(settled.settlement_price)),
+        ]
+    );
 
     server.abort();
     let _ = server.await;

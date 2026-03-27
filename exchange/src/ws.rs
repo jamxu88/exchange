@@ -32,6 +32,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
     let (market_tx, mut market_rx) = tokio_mpsc::unbounded_channel::<Arc<ServerMessage>>();
     let book_stream_id = state.register_book_stream(market_tx.clone());
     let l3_stream_id = state.register_l3_stream(market_tx);
+    let mut public_rx = state.public_events_tx.subscribe();
     let mut user_rx = state.user_events_tx.subscribe();
     let mut system_rx = state.system_events_tx.subscribe();
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
@@ -57,6 +58,22 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         }
                     }
                     None => break,
+                }
+            }
+            event = public_rx.recv() => {
+                match event {
+                    Ok(message) => {
+                        if send_server_message(&mut socket, &message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        let message = public_resync_required(skipped);
+                        if send_server_message(&mut socket, &message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Closed) => break,
                 }
             }
             event = user_rx.recv() => {
@@ -392,6 +409,18 @@ fn user_resync_required(
             "user event stream lagged by {skipped} messages; refresh account state and reconnect if needed"
         ),
     })
+}
+
+fn public_resync_required(skipped: u64) -> ServerMessage {
+    ServerMessage::ResyncRequired {
+        channel: "markets".to_string(),
+        market: None,
+        expected_sequence: None,
+        current_sequence: None,
+        reason: format!(
+            "market event stream lagged by {skipped} messages; refresh market state from REST if needed"
+        ),
+    }
 }
 
 fn system_resync_required(

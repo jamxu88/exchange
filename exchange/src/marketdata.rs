@@ -1,4 +1,4 @@
-use crate::admin::AdminMessageEntry;
+use crate::admin::{AdminMessageEntry, MarketDefinition};
 use crate::orderbook::{BookLevel, Fill, Order, Side};
 use crate::trading::OrderType;
 use chrono::{DateTime, Utc};
@@ -107,6 +107,9 @@ pub enum ServerMessage {
     OrderState {
         order: Order,
         status: OrderStateStatus,
+    },
+    MarketState {
+        market: MarketDefinition,
     },
     AdminMessage {
         message: AdminMessageEntry,

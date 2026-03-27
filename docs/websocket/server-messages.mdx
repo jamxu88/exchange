@@ -179,6 +179,29 @@ Use `order_state` for your own exact resting-order detail. This is the per-order
 
 For market orders, accepted taker flow is terminal. You should expect `status: "filled"` with `remaining: 0` because market orders never rest on the book. In that case, `order.price` is the weighted average executed price across the immediate fills, rounded down to an integer.
 
+## `market_state`
+
+```json
+{
+  "type": "market_state",
+  "market": {
+    "market_id": "BTC-USD",
+    "display_name": "BTC-USD",
+    "base_asset": "BTC",
+    "quote_asset": "USD",
+    "tick_size": 1,
+    "min_order_quantity": 1,
+    "reference_price": 100000,
+    "settlement_price": null,
+    "status": "disabled",
+    "created_at": "2026-03-18T16:05:00.000000Z",
+    "updated_at": "2026-03-18T16:05:00.000000Z"
+  }
+}
+```
+
+Treat `market_state` as the live websocket push for market metadata and lifecycle status. Apply it immediately so tabs, ticket gating, and other market-aware UI stays current without waiting for a REST refresh.
+
 ## `admin_message`
 
 ```json
@@ -221,5 +244,6 @@ Use [Recovery and resync](/reference/recovery-and-resync) for the recommended cl
 - `l3_snapshot` and `l3_delta` are the raw per-order market-data source of truth while an authenticated `l3` subscription is healthy.
 - For `delta` and `l3_delta`, verify that `start_sequence` is exactly one greater than your last applied market sequence, then apply all `events` in order and store `sequence` as the new last applied value.
 - `fill` and `order_state` are the user-scoped state feed after authentication.
+- `market_state` is the live market-definition feed for status and metadata changes.
 - `admin_message` can change the practical trading environment even before you refresh REST state.
 - `resync_required` means your local state is no longer trustworthy and must be rebuilt.

@@ -2,6 +2,7 @@ import type {
   ConnectionStatus,
   MarketBookDelta,
   MarketBookLevel,
+  MarketDefinition,
   MarketId,
   PendingOrder,
   TradeFill,
@@ -84,6 +85,16 @@ type RawServerMessage =
       };
     }
   | {
+      type: "market_state";
+      market: {
+        market_id: string;
+        display_name: string;
+        base_asset: string;
+        quote_asset: string;
+        status: "enabled" | "disabled" | "settled";
+      };
+    }
+  | {
       type: "resync_required";
       channel: string;
       market?: string | null;
@@ -118,6 +129,7 @@ export type TradeWsCallbacks = {
     order: PendingOrder;
     status: "open" | "filled" | "canceled";
   }) => void;
+  onMarketState: (payload: MarketDefinition) => void;
   onResyncRequired: (payload: { channel: string; marketId?: string; reason: string }) => void;
   onAdminMessage: (payload: {
     level: "info" | "warning" | "critical";
@@ -175,6 +187,18 @@ function mapFill(fill: Extract<RawServerMessage, { type: "fill" }>["fill"]): Tra
     price: fill.price,
     quantity: fill.quantity,
     occurredAt: fill.occurred_at,
+  };
+}
+
+function mapMarketDefinition(
+  market: Extract<RawServerMessage, { type: "market_state" }>["market"],
+): MarketDefinition {
+  return {
+    id: market.market_id,
+    name: market.display_name,
+    baseAsset: market.base_asset,
+    quoteAsset: market.quote_asset,
+    status: market.status,
   };
 }
 
@@ -339,6 +363,9 @@ export class TradeWsClient {
           order: mapPendingOrder(message.order),
           status: message.status,
         });
+        return;
+      case "market_state":
+        this.callbacks.onMarketState(mapMarketDefinition(message.market));
         return;
       case "admin_message":
         this.callbacks.onAdminMessage({
