@@ -16,6 +16,7 @@ pub mod rest;
 pub mod settlement;
 pub mod state;
 pub mod storage;
+pub mod telemetry;
 pub mod trading;
 pub mod ws;
 
@@ -101,6 +102,7 @@ pub fn build_app(app_state: AppState) -> Router {
             "/api/v1/admin/messages",
             get(rest::list_admin_messages).post(rest::send_admin_message),
         )
+        .route("/api/v1/admin/telemetry", get(rest::get_admin_telemetry))
         .route("/api/v1/admin/users/reset", post(rest::reset_all_users))
         .route(
             "/api/v1/admin/leaderboard",

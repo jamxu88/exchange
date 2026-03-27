@@ -17,11 +17,13 @@ import {
   toggleMarketAction,
 } from "@/app/(dashboard)/admin/actions";
 import { CreateMarketForm } from "@/app/(dashboard)/admin/create-market-form";
+import { LiveTelemetryPanel } from "@/app/(dashboard)/admin/live-telemetry-panel";
 import {
   COMPETITION_QUOTE_ASSET,
   deriveCompetitionMarketId,
 } from "@/app/(dashboard)/admin/market-utils";
 import {
+  getAdminTelemetry,
   ExchangeServerError,
   getAdminLeaderboard,
   getAdminState,
@@ -100,10 +102,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
 
   let adminState;
   let leaderboard;
+  let initialTelemetry = null;
   try {
-    [adminState, leaderboard] = await Promise.all([
+    [adminState, leaderboard, initialTelemetry] = await Promise.all([
       getAdminState(session.apiKey),
       getAdminLeaderboard(session.apiKey, 10),
+      getAdminTelemetry(session.apiKey).catch(() => null),
     ]);
   } catch (error) {
     if (error instanceof ExchangeServerError && error.status === 401) {
@@ -208,6 +212,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </span>
             </div>
           </div>
+          <LiveTelemetryPanel initialTelemetry={initialTelemetry} />
         </section>
 
         <section className="ops-panel px-5 py-5">

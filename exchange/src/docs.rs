@@ -4,6 +4,10 @@ use crate::auth::{ProvisionUserRequest, ProvisionUserResponse};
 use crate::orderbook::{Fill, Order, Side};
 use crate::rest::{ApiError, HealthResponse};
 use crate::state::{PortfolioSnapshot, Position};
+use crate::telemetry::{
+    ActionTelemetrySnapshot, CounterTelemetrySnapshot, FillTelemetrySnapshot,
+    OperatorTelemetrySnapshot, ResyncTelemetrySnapshot, WebSocketTelemetrySnapshot,
+};
 use crate::trading::{
     AmendOrderRequest, AmendOrderResponse, CancelOrderResponse, SubmitOrderRequest,
     SubmitOrderResponse,
@@ -17,6 +21,7 @@ use utoipa::OpenApi;
         crate::rest::list_provisioned_users,
         crate::rest::provision_user,
         crate::rest::export_provisioned_users_csv,
+        crate::rest::get_admin_telemetry,
         crate::rest::get_user,
         crate::rest::get_positions,
         crate::rest::get_portfolio,
@@ -43,12 +48,19 @@ use utoipa::OpenApi;
             ProvisionedUsersResponse,
             ProvisionUserRequest,
             ProvisionUserResponse,
+            crate::admin::AdminTelemetryResponse,
             SubmitOrderRequest,
             SubmitOrderResponse,
             CancelOrderResponse,
             AmendOrderRequest,
             AmendOrderResponse,
-            crate::admin::ResetUsersResponse
+            crate::admin::ResetUsersResponse,
+            ActionTelemetrySnapshot,
+            CounterTelemetrySnapshot,
+            FillTelemetrySnapshot,
+            OperatorTelemetrySnapshot,
+            ResyncTelemetrySnapshot,
+            WebSocketTelemetrySnapshot
         )
     ),
     tags(

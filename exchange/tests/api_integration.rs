@@ -6,11 +6,12 @@ use chrono::Utc;
 use exchange::{
     accounts::{UserProfile, UserRole},
     admin::{
-        AdminMessageEntry, AdminMessageLevel, AdminStateResponse, CompetitionLeaderboardSnapshot,
-        CompetitionSettlementRequest, DeleteMarketResponse, FinalizeCompetitionRequest,
-        FinalizeCompetitionResponse, LeaderboardRow, LoadExchangeConfigResponse, MarketDefinition,
-        MarketStatus, ProvisionedUsersResponse, ResetUsersResponse, SendAdminMessageRequest,
-        SettleMarketRequest, SettleMarketResponse, TradingControlResponse, UpdateMarketRequest,
+        AdminMessageEntry, AdminMessageLevel, AdminStateResponse, AdminTelemetryResponse,
+        CompetitionLeaderboardSnapshot, CompetitionSettlementRequest, DeleteMarketResponse,
+        FinalizeCompetitionRequest, FinalizeCompetitionResponse, LeaderboardRow,
+        LoadExchangeConfigResponse, MarketDefinition, MarketStatus, ProvisionedUsersResponse,
+        ResetUsersResponse, SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse,
+        TradingControlResponse, UpdateMarketRequest,
     },
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
     bots::{
@@ -1936,6 +1937,154 @@ async fn admin_messages_and_state_endpoint_round_trip() {
             .iter()
             .any(|message| message.message_id == sent.message_id)
     );
+}
+
+#[tokio::test]
+async fn admin_telemetry_endpoint_reports_live_operator_counters() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "telemetry-maker");
+    let taker = provision_user(&state, "telemetry-taker");
+
+    let resting_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 101,
+                quantity: 4,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(resting_submit.status(), StatusCode::CREATED);
+    let resting_order: SubmitOrderResponse = json_body(resting_submit).await;
+
+    let invalid_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 101,
+                quantity: 0,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_submit.status(), StatusCode::BAD_REQUEST);
+
+    let fill_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &taker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 101,
+                quantity: 4,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(fill_submit.status(), StatusCode::CREATED);
+
+    let amend_submit = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 102,
+                quantity: 6,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(amend_submit.status(), StatusCode::CREATED);
+    let amendable_order: SubmitOrderResponse = json_body(amend_submit).await;
+
+    let invalid_amend = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::PATCH,
+            format!("/api/v1/orders/{}", amendable_order.order.id),
+            &maker.profile.api_key,
+            &AmendOrderRequest { remaining: 0 },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_amend.status(), StatusCode::BAD_REQUEST);
+
+    let valid_amend = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::PATCH,
+            format!("/api/v1/orders/{}", amendable_order.order.id),
+            &maker.profile.api_key,
+            &AmendOrderRequest { remaining: 3 },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(valid_amend.status(), StatusCode::OK);
+
+    let cancel_response = app
+        .clone()
+        .oneshot(api_key_request(
+            Method::DELETE,
+            &format!("/api/v1/orders/{}", amendable_order.order.id),
+            &maker.profile.api_key,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(cancel_response.status(), StatusCode::OK);
+
+    let telemetry_response = app
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/v1/admin/telemetry",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(telemetry_response.status(), StatusCode::OK);
+    let telemetry: AdminTelemetryResponse = json_body(telemetry_response).await;
+
+    assert_eq!(telemetry.status, "ok");
+    assert_eq!(telemetry.service, "exchange");
+    assert_eq!(telemetry.traffic.submits.total, 4);
+    assert_eq!(telemetry.traffic.submits.accepted, 3);
+    assert_eq!(telemetry.traffic.submits.rejected, 1);
+    assert_eq!(telemetry.traffic.amends.total, 2);
+    assert_eq!(telemetry.traffic.amends.accepted, 1);
+    assert_eq!(telemetry.traffic.amends.rejected, 1);
+    assert_eq!(telemetry.traffic.cancels.total, 1);
+    assert_eq!(telemetry.traffic.cancels.accepted, 1);
+    assert_eq!(telemetry.traffic.cancels.rejected, 0);
+    assert_eq!(telemetry.traffic.fills.total, 1);
+    assert_eq!(telemetry.traffic.fills.shares, 4);
+    assert_eq!(telemetry.traffic.rate_limit_rejections.total, 0);
+    assert_eq!(telemetry.traffic.websocket.connections_current, 0);
+    assert_eq!(telemetry.traffic.websocket.l2_subscribers_current, 0);
+    assert_eq!(telemetry.traffic.websocket.l3_subscribers_current, 0);
+    assert_eq!(resting_order.order.remaining, 4);
 }
 
 #[tokio::test]

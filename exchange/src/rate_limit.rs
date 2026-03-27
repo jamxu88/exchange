@@ -96,6 +96,7 @@ pub fn enforce_authenticated_user_rate_limit(
     ) {
         Ok(())
     } else {
+        state.operator_telemetry().record_rate_limit_reject();
         Err(format!(
             "per-user rate limit exceeded: max {} ops per {}s",
             state.config.per_user_rate_limit_burst_capacity,

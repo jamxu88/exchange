@@ -39,6 +39,97 @@ export type ExchangePersistenceStatus = {
   last_error: string | null;
 };
 
+export type ExchangeDispatchQueueStatus = {
+  mode: "disabled" | "ok" | "backpressured" | "stopped";
+  queue_capacity: number;
+  backpressure_threshold: number;
+  queue_depth: number;
+  high_water_mark: number;
+  total_enqueued: number;
+  total_dequeued: number;
+  total_blocked_enqueues: number;
+  total_enqueue_block_time_ms: number;
+};
+
+export type ExchangeBarrierWaitStatus = {
+  total_waits: number;
+  total_wait_time_ms: number;
+  max_wait_time_ms: number;
+  last_wait_time_ms: number;
+  waits_over_1ms: number;
+  waits_over_5ms: number;
+  waits_over_25ms: number;
+  waits_over_100ms: number;
+};
+
+export type ExchangeAccountBarrierStatus = {
+  submit: ExchangeBarrierWaitStatus;
+  cancel: ExchangeBarrierWaitStatus;
+  amend: ExchangeBarrierWaitStatus;
+};
+
+export type ExchangeHealth = {
+  status: "ok" | "degraded";
+  service: string;
+  now: string;
+  persistence: ExchangePersistenceStatus;
+  runtime_dispatch: ExchangeDispatchQueueStatus;
+  account_dispatch: ExchangeDispatchQueueStatus;
+  persistence_dispatch: ExchangeDispatchQueueStatus;
+  account_barrier: ExchangeAccountBarrierStatus;
+};
+
+export type ExchangeActionTelemetry = {
+  total: number;
+  accepted: number;
+  rejected: number;
+  total_per_second_10s: number;
+  accepted_per_second_10s: number;
+  rejected_per_second_10s: number;
+};
+
+export type ExchangeFillTelemetry = {
+  total: number;
+  shares: number;
+  fills_per_second_10s: number;
+  shares_per_second_10s: number;
+};
+
+export type ExchangeCounterTelemetry = {
+  total: number;
+  per_second_10s: number;
+};
+
+export type ExchangeWebSocketTelemetry = {
+  connections_current: number;
+  connections_total: number;
+  authenticated_current: number;
+  authenticated_total: number;
+  l2_subscribers_current: number;
+  l3_subscribers_current: number;
+};
+
+export type ExchangeResyncTelemetry = {
+  user: ExchangeCounterTelemetry;
+  system: ExchangeCounterTelemetry;
+  l2: ExchangeCounterTelemetry;
+  l3: ExchangeCounterTelemetry;
+};
+
+export type ExchangeOperatorTelemetry = {
+  submits: ExchangeActionTelemetry;
+  cancels: ExchangeActionTelemetry;
+  amends: ExchangeActionTelemetry;
+  fills: ExchangeFillTelemetry;
+  rate_limit_rejections: ExchangeCounterTelemetry;
+  websocket: ExchangeWebSocketTelemetry;
+  resyncs: ExchangeResyncTelemetry;
+};
+
+export type ExchangeAdminTelemetry = ExchangeHealth & {
+  traffic: ExchangeOperatorTelemetry;
+};
+
 export type ExchangeMarket = {
   market_id: string;
   display_name: string;
@@ -283,6 +374,16 @@ export async function getAdminLeaderboard(adminToken: string, limit?: number) {
 
 export async function getPublicMarkets() {
   return exchangeRequest<ExchangeMarket[]>("/api/v1/markets");
+}
+
+export async function getExchangeHealth() {
+  return exchangeRequest<ExchangeHealth>("/health");
+}
+
+export async function getAdminTelemetry(adminToken: string) {
+  return exchangeRequest<ExchangeAdminTelemetry>("/api/v1/admin/telemetry", {
+    adminToken,
+  });
 }
 
 export async function sendAdminMutation<T>(

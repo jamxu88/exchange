@@ -1,10 +1,10 @@
 use crate::accounts::UserProfile;
 use crate::admin::{
-    AdminService, CompetitionLeaderboardSnapshot, CompetitionSnapshotQuery, DeleteMarketResponse,
-    FinalizeCompetitionRequest, FinalizeCompetitionResponse, ListQuery, LoadExchangeConfigRequest,
-    LoadExchangeConfigResponse, MarketDefinition, ProvisionedUsersQuery, ProvisionedUsersResponse,
-    SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse, UpdateMarketRequest,
-    UpsertMarketRequest,
+    AdminService, AdminTelemetryResponse, CompetitionLeaderboardSnapshot, CompetitionSnapshotQuery,
+    DeleteMarketResponse, FinalizeCompetitionRequest, FinalizeCompetitionResponse, ListQuery,
+    LoadExchangeConfigRequest, LoadExchangeConfigResponse, MarketDefinition, ProvisionedUsersQuery,
+    ProvisionedUsersResponse, SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse,
+    UpdateMarketRequest, UpsertMarketRequest,
 };
 use crate::auth::{
     AuthError, AuthService, AuthenticatedAdmin, AuthenticatedUser, ProvisionUserRequest,
@@ -402,6 +402,22 @@ pub async fn get_admin_state(
     _admin: AuthenticatedAdmin,
 ) -> impl IntoResponse {
     Json(AdminService::get_state(&state, 50))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/telemetry",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Live operator telemetry and health snapshot", body = AdminTelemetryResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
+pub async fn get_admin_telemetry(
+    State(state): State<AppState>,
+    _admin: AuthenticatedAdmin,
+) -> impl IntoResponse {
+    Json(AdminService::get_telemetry(&state))
 }
 
 pub async fn ensure_admin_desk(

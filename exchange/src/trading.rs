@@ -515,13 +515,22 @@ impl TradingService {
         trader_id: Uuid,
         request: SubmitOrderRequest,
     ) -> Result<SubmitOrderResponse, TradingError> {
-        validate_market_symbol(&request.market)?;
-        let market = state
-            .storage
-            .get_market(&request.market)
-            .ok_or(TradingError::MarketNotConfigured)?;
-        let engine = state.ensure_market_engine(&market.market_id);
-        engine.submit_order(trader_id, request).await
+        state.operator_telemetry().record_submit_attempt();
+        let result = match validate_market_symbol(&request.market) {
+            Ok(()) => match state.storage.get_market(&request.market) {
+                Some(market) => {
+                    let engine = state.ensure_market_engine(&market.market_id);
+                    engine.submit_order(trader_id, request).await
+                }
+                None => Err(TradingError::MarketNotConfigured),
+            },
+            Err(error) => Err(error),
+        };
+        match &result {
+            Ok(_) => state.operator_telemetry().record_submit_accept(),
+            Err(_) => state.operator_telemetry().record_submit_reject(),
+        }
+        result
     }
 
     pub async fn submit_limit_order(
@@ -537,9 +546,19 @@ impl TradingService {
         trader_id: Uuid,
         order_id: Uuid,
     ) -> Result<CancelOrderResponse, TradingError> {
-        let market = find_order_market(state, trader_id, order_id)?;
-        let engine = state.ensure_market_engine(&market);
-        engine.cancel_order(trader_id, order_id).await
+        state.operator_telemetry().record_cancel_attempt();
+        let result = match find_order_market(state, trader_id, order_id) {
+            Ok(market) => {
+                let engine = state.ensure_market_engine(&market);
+                engine.cancel_order(trader_id, order_id).await
+            }
+            Err(error) => Err(error),
+        };
+        match &result {
+            Ok(_) => state.operator_telemetry().record_cancel_accept(),
+            Err(_) => state.operator_telemetry().record_cancel_reject(),
+        }
+        result
     }
 
     pub async fn amend_order(
@@ -548,13 +567,24 @@ impl TradingService {
         order_id: Uuid,
         request: AmendOrderRequest,
     ) -> Result<AmendOrderResponse, TradingError> {
+        state.operator_telemetry().record_amend_attempt();
         if request.remaining == 0 {
+            state.operator_telemetry().record_amend_reject();
             return Err(TradingError::InvalidRemaining);
         }
 
-        let market = find_order_market(state, trader_id, order_id)?;
-        let engine = state.ensure_market_engine(&market);
-        engine.amend_order(trader_id, order_id, request).await
+        let result = match find_order_market(state, trader_id, order_id) {
+            Ok(market) => {
+                let engine = state.ensure_market_engine(&market);
+                engine.amend_order(trader_id, order_id, request).await
+            }
+            Err(error) => Err(error),
+        };
+        match &result {
+            Ok(_) => state.operator_telemetry().record_amend_accept(),
+            Err(_) => state.operator_telemetry().record_amend_reject(),
+        }
+        result
     }
 }
 
@@ -896,6 +926,9 @@ fn process_submit_order(
                 occurred_at,
             })
             .collect::<Vec<_>>();
+        for fill in &fills {
+            state.operator_telemetry().record_fill(fill.quantity);
+        }
 
         let mut latest_positions = HashMap::new();
         for execution in &executions {

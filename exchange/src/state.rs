@@ -10,6 +10,7 @@ use crate::marketdata_ipc::MarketBootstrapState;
 use crate::orderbook::{Fill, Order, OrderBook};
 use crate::rate_limit::PerUserRateLimiter;
 use crate::storage::{StorageBackendKind, StorageRepository};
+use crate::telemetry::{OperatorTelemetry, OperatorTelemetrySnapshot};
 use crate::trading::{MarketBookSnapshot, MarketEngineHandle};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -336,6 +337,7 @@ pub struct AppState {
     pub market_sequences: Arc<DashMap<String, u64>>,
     pub market_event_sequences: Arc<DashMap<String, u64>>,
     pub user_rate_limiter: PerUserRateLimiter,
+    operator_telemetry: OperatorTelemetry,
 }
 
 impl AppState {
@@ -349,13 +351,16 @@ impl AppState {
         let (market_event_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (user_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
         let (system_events_tx, _) = broadcast::channel(config.ws_broadcast_buffer);
+        let operator_telemetry = OperatorTelemetry::default();
         let market_broadcaster = MarketBroadcastHandle::spawn(
             config.ws_market_broadcast_workers,
             config.runtime_dispatch_queue_capacity,
+            operator_telemetry.clone(),
         );
         let market_event_broadcaster = MarketEventBroadcastHandle::spawn(
             config.ws_market_broadcast_workers,
             config.runtime_dispatch_queue_capacity,
+            operator_telemetry.clone(),
         );
         let runtime_dispatcher = RuntimeDispatchHandle::spawn(
             config.runtime_dispatch_queue_capacity,
@@ -394,6 +399,7 @@ impl AppState {
             market_sequences: Arc::new(DashMap::new()),
             market_event_sequences: Arc::new(DashMap::new()),
             user_rate_limiter: PerUserRateLimiter::new(),
+            operator_telemetry,
         };
         state.recover_runtime_state();
         state.rebuild_derived_market_data();
@@ -562,6 +568,14 @@ impl AppState {
 
     pub fn account_barrier_status(&self) -> AccountBarrierStatus {
         self.account_barrier_telemetry.snapshot()
+    }
+
+    pub fn operator_telemetry_snapshot(&self) -> OperatorTelemetrySnapshot {
+        self.operator_telemetry.snapshot()
+    }
+
+    pub(crate) fn operator_telemetry(&self) -> &OperatorTelemetry {
+        &self.operator_telemetry
     }
 
     pub(crate) fn account_barrier_telemetry(&self) -> AccountBarrierTelemetry {
@@ -765,10 +779,10 @@ struct MarketBroadcastClient {
 }
 
 impl MarketBroadcastHandle {
-    fn spawn(worker_count: usize, queue_capacity: usize) -> Self {
+    fn spawn(worker_count: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
         let worker_count = worker_count.max(1);
         let workers = (0..worker_count)
-            .map(|index| MarketBroadcastWorker::spawn(index, queue_capacity))
+            .map(|index| MarketBroadcastWorker::spawn(index, queue_capacity, telemetry.clone()))
             .collect();
 
         Self {
@@ -823,7 +837,7 @@ impl MarketBroadcastHandle {
 }
 
 impl MarketBroadcastWorker {
-    fn spawn(index: usize, queue_capacity: usize) -> Self {
+    fn spawn(index: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
         let (tx, rx) = mpsc::sync_channel(queue_capacity);
         thread::Builder::new()
             .name(format!("exchange-market-broadcast-{index}"))
@@ -852,7 +866,7 @@ impl MarketBroadcastWorker {
                             }
                         }
                         MarketBroadcastCommand::Publish(batch) => {
-                            publish_market_batch(&mut clients, batch);
+                            publish_market_batch(&mut clients, batch, &telemetry);
                         }
                         MarketBroadcastCommand::Remove { client_id } => {
                             clients.remove(&client_id);
@@ -906,10 +920,12 @@ struct MarketEventBroadcastClient {
 }
 
 impl MarketEventBroadcastHandle {
-    fn spawn(worker_count: usize, queue_capacity: usize) -> Self {
+    fn spawn(worker_count: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
         let worker_count = worker_count.max(1);
         let workers = (0..worker_count)
-            .map(|index| MarketEventBroadcastWorker::spawn(index, queue_capacity))
+            .map(|index| {
+                MarketEventBroadcastWorker::spawn(index, queue_capacity, telemetry.clone())
+            })
             .collect();
 
         Self {
@@ -964,7 +980,7 @@ impl MarketEventBroadcastHandle {
 }
 
 impl MarketEventBroadcastWorker {
-    fn spawn(index: usize, queue_capacity: usize) -> Self {
+    fn spawn(index: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
         let (tx, rx) = mpsc::sync_channel(queue_capacity);
         thread::Builder::new()
             .name(format!("exchange-l3-broadcast-{index}"))
@@ -993,7 +1009,7 @@ impl MarketEventBroadcastWorker {
                             }
                         }
                         MarketEventBroadcastCommand::Publish(batch) => {
-                            publish_market_event_batch(&mut clients, batch);
+                            publish_market_event_batch(&mut clients, batch, &telemetry);
                         }
                         MarketEventBroadcastCommand::Remove { client_id } => {
                             clients.remove(&client_id);
@@ -1012,7 +1028,11 @@ impl MarketEventBroadcastWorker {
     }
 }
 
-fn publish_market_batch(clients: &mut HashMap<Uuid, MarketBroadcastClient>, batch: BroadcastEvent) {
+fn publish_market_batch(
+    clients: &mut HashMap<Uuid, MarketBroadcastClient>,
+    batch: BroadcastEvent,
+    telemetry: &OperatorTelemetry,
+) {
     let delta_message = Arc::new(ServerMessage::Delta {
         channel: L2_CHANNEL.to_string(),
         market: batch.market.clone(),
@@ -1030,6 +1050,7 @@ fn publish_market_batch(clients: &mut HashMap<Uuid, MarketBroadcastClient>, batc
         if let Some(last_sequence) = client.last_market_sequence {
             let expected_sequence = last_sequence.saturating_add(1);
             if batch.start_sequence != expected_sequence {
+                telemetry.record_l2_resync();
                 let resync_message = Arc::new(ServerMessage::ResyncRequired {
                     channel: L2_CHANNEL.to_string(),
                     market: Some(batch.market.clone()),
@@ -1061,6 +1082,7 @@ fn publish_market_batch(clients: &mut HashMap<Uuid, MarketBroadcastClient>, batc
 fn publish_market_event_batch(
     clients: &mut HashMap<Uuid, MarketEventBroadcastClient>,
     batch: L3BroadcastEvent,
+    telemetry: &OperatorTelemetry,
 ) {
     let delta_message = Arc::new(ServerMessage::L3Delta {
         channel: L3_CHANNEL.to_string(),
@@ -1079,6 +1101,7 @@ fn publish_market_event_batch(
         if let Some(last_sequence) = client.last_market_sequence {
             let expected_sequence = last_sequence.saturating_add(1);
             if batch.start_sequence != expected_sequence {
+                telemetry.record_l3_resync();
                 let resync_message = Arc::new(ServerMessage::ResyncRequired {
                     channel: L3_CHANNEL.to_string(),
                     market: Some(batch.market.clone()),

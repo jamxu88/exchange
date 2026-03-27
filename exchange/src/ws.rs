@@ -28,6 +28,7 @@ struct MarketSubscription {
 }
 
 async fn client_loop(mut socket: WebSocket, state: AppState) {
+    state.operator_telemetry().record_ws_connection_open();
     let (market_tx, mut market_rx) = tokio_mpsc::unbounded_channel::<Arc<ServerMessage>>();
     let book_stream_id = state.register_book_stream(market_tx.clone());
     let l3_stream_id = state.register_l3_stream(market_tx);
@@ -72,7 +73,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
-                        if let Some(message) = user_resync_required(&connection, skipped) {
+                        if let Some(message) = user_resync_required(&state, &connection, skipped) {
                             if send_server_message(&mut socket, &message).await.is_err() {
                                 break;
                             }
@@ -91,7 +92,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
-                        if let Some(message) = system_resync_required(&connection, skipped) {
+                        if let Some(message) = system_resync_required(&state, &connection, skipped) {
                             if send_server_message(&mut socket, &message).await.is_err() {
                                 break;
                             }
@@ -106,8 +107,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
                         let replies = handle_client_text(&state, &mut connection, &text).await;
                         for reply in replies {
                             if send_server_message(&mut socket, &reply).await.is_err() {
-                                state.unregister_book_stream(connection.book_stream_id);
-                                state.unregister_l3_stream(connection.l3_stream_id);
+                                cleanup_connection(&state, &connection);
                                 return;
                             }
                         }
@@ -120,8 +120,7 @@ async fn client_loop(mut socket: WebSocket, state: AppState) {
         }
     }
 
-    state.unregister_book_stream(connection.book_stream_id);
-    state.unregister_l3_stream(connection.l3_stream_id);
+    cleanup_connection(&state, &connection);
 }
 
 async fn handle_client_text(
@@ -143,6 +142,9 @@ async fn handle_client_text(
         ClientMessage::Authenticate { api_key } => {
             match AuthService::authenticate_api_key(state, &api_key) {
                 Ok(user) => {
+                    if connection.authenticated_user.is_none() {
+                        state.operator_telemetry().record_ws_authenticated_open();
+                    }
                     connection.authenticated_user = Some(user.clone());
                     vec![ServerMessage::Authenticated {
                         trader_id: user.trader_id,
@@ -166,10 +168,13 @@ async fn handle_client_text(
                     ServerMessage::Snapshot { sequence, .. } => Some(*sequence),
                     _ => None,
                 };
-                connection.subscription = Some(MarketSubscription {
+                update_subscription_telemetry(state, connection.subscription.as_ref(), None);
+                let next_subscription = Some(MarketSubscription {
                     channel: channel.clone(),
                     market: market.clone(),
                 });
+                update_subscription_telemetry(state, None, next_subscription.as_ref());
+                connection.subscription = next_subscription;
                 state.update_l3_stream_subscription(connection.l3_stream_id, None, None);
                 state.update_book_stream_subscription(
                     connection.book_stream_id,
@@ -191,10 +196,13 @@ async fn handle_client_text(
                     ServerMessage::L3Snapshot { sequence, .. } => Some(*sequence),
                     _ => None,
                 };
-                connection.subscription = Some(MarketSubscription {
+                update_subscription_telemetry(state, connection.subscription.as_ref(), None);
+                let next_subscription = Some(MarketSubscription {
                     channel: channel.clone(),
                     market: market.clone(),
                 });
+                update_subscription_telemetry(state, None, next_subscription.as_ref());
+                connection.subscription = next_subscription;
                 state.update_book_stream_subscription(connection.book_stream_id, None, None);
                 state.update_l3_stream_subscription(
                     connection.l3_stream_id,
@@ -217,6 +225,7 @@ async fn handle_client_text(
                     subscription.channel == channel && subscription.market == market
                 })
             {
+                update_subscription_telemetry(state, connection.subscription.as_ref(), None);
                 connection.subscription = None;
                 state.update_book_stream_subscription(connection.book_stream_id, None, None);
                 state.update_l3_stream_subscription(connection.l3_stream_id, None, None);
@@ -335,8 +344,45 @@ fn unsupported_channel_error() -> ServerMessage {
     }
 }
 
-fn user_resync_required(connection: &ClientConnection, skipped: u64) -> Option<ServerMessage> {
+fn cleanup_connection(state: &AppState, connection: &ClientConnection) {
+    update_subscription_telemetry(state, connection.subscription.as_ref(), None);
+    if connection.authenticated_user.is_some() {
+        state.operator_telemetry().record_ws_authenticated_close();
+    }
+    state.operator_telemetry().record_ws_connection_close();
+    state.unregister_book_stream(connection.book_stream_id);
+    state.unregister_l3_stream(connection.l3_stream_id);
+}
+
+fn update_subscription_telemetry(
+    state: &AppState,
+    previous: Option<&MarketSubscription>,
+    next: Option<&MarketSubscription>,
+) {
+    if let Some(subscription) = previous {
+        match subscription.channel.as_str() {
+            L2_CHANNEL => state.operator_telemetry().record_l2_subscriber_close(),
+            L3_CHANNEL => state.operator_telemetry().record_l3_subscriber_close(),
+            _ => {}
+        }
+    }
+
+    if let Some(subscription) = next {
+        match subscription.channel.as_str() {
+            L2_CHANNEL => state.operator_telemetry().record_l2_subscriber_open(),
+            L3_CHANNEL => state.operator_telemetry().record_l3_subscriber_open(),
+            _ => {}
+        }
+    }
+}
+
+fn user_resync_required(
+    state: &AppState,
+    connection: &ClientConnection,
+    skipped: u64,
+) -> Option<ServerMessage> {
     connection.authenticated_user.as_ref()?;
+    state.operator_telemetry().record_user_resync();
     Some(ServerMessage::ResyncRequired {
         channel: "user".to_string(),
         market: None,
@@ -348,8 +394,13 @@ fn user_resync_required(connection: &ClientConnection, skipped: u64) -> Option<S
     })
 }
 
-fn system_resync_required(connection: &ClientConnection, skipped: u64) -> Option<ServerMessage> {
+fn system_resync_required(
+    state: &AppState,
+    connection: &ClientConnection,
+    skipped: u64,
+) -> Option<ServerMessage> {
     connection.authenticated_user.as_ref()?;
+    state.operator_telemetry().record_system_resync();
     Some(ServerMessage::ResyncRequired {
         channel: "system".to_string(),
         market: None,

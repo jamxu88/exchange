@@ -7,8 +7,9 @@ use crate::bots::{
 };
 use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
 use crate::settlement::{SettlementEngine, SettlementError};
-use crate::state::AppState;
+use crate::state::{AccountBarrierStatus, AppState, DispatchQueueMode, DispatchQueueStatus};
 use crate::storage::PersistenceStatus;
+use crate::telemetry::OperatorTelemetrySnapshot;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -237,6 +238,19 @@ pub struct AdminStateResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AdminTelemetryResponse {
+    pub status: String,
+    pub service: String,
+    pub now: String,
+    pub persistence: PersistenceStatus,
+    pub runtime_dispatch: DispatchQueueStatus,
+    pub account_dispatch: DispatchQueueStatus,
+    pub persistence_dispatch: DispatchQueueStatus,
+    pub account_barrier: AccountBarrierStatus,
+    pub traffic: OperatorTelemetrySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DeleteMarketResponse {
     pub market_id: String,
 }
@@ -352,6 +366,45 @@ impl AdminService {
             admin_desk: admin_desk_summary(state),
             recent_messages: state.storage.list_admin_messages(Some(message_limit)),
             persistence: state.storage.persistence_status(),
+        }
+    }
+
+    pub fn get_telemetry(state: &AppState) -> AdminTelemetryResponse {
+        let persistence = state.storage.persistence_status();
+        let runtime_dispatch = state.runtime_dispatch_status();
+        let account_dispatch = state.account_dispatch_status();
+        let persistence_dispatch = state.persistence_dispatch_status();
+        let account_barrier = state.account_barrier_status();
+        let status = if matches!(
+            persistence.mode,
+            crate::storage::PersistenceMode::Retrying
+                | crate::storage::PersistenceMode::Backpressured
+                | crate::storage::PersistenceMode::Stopped
+        ) || matches!(
+            runtime_dispatch.mode,
+            DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+        ) || matches!(
+            account_dispatch.mode,
+            DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+        ) || matches!(
+            persistence_dispatch.mode,
+            DispatchQueueMode::Backpressured | DispatchQueueMode::Stopped
+        ) {
+            "degraded"
+        } else {
+            "ok"
+        };
+
+        AdminTelemetryResponse {
+            status: status.to_string(),
+            service: "exchange".to_string(),
+            now: Utc::now().to_rfc3339(),
+            persistence,
+            runtime_dispatch,
+            account_dispatch,
+            persistence_dispatch,
+            account_barrier,
+            traffic: state.operator_telemetry_snapshot(),
         }
     }
 
