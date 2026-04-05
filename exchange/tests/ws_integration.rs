@@ -36,8 +36,8 @@ fn test_state() -> AppState {
 fn test_state_with_rate_limit(per_user_burst_capacity: u64) -> AppState {
     let state = AppState::new(Config {
         bind_addr: "127.0.0.1:0".to_string(),
-        database_url: "postgres://test".to_string(),
-        storage_backend: exchange::storage::StorageBackendKind::InMemory,
+        checkpoint_path: None,
+        checkpoint_interval_seconds: 5,
         ws_broadcast_buffer: 64,
         ws_market_delta_batch_interval_ms: 10,
         ws_market_broadcast_workers: 1,
@@ -45,14 +45,9 @@ fn test_state_with_rate_limit(per_user_burst_capacity: u64) -> AppState {
         market_data_service_retry_backoff_ms: 250,
         runtime_dispatch_queue_capacity: 4_096,
         account_dispatch_queue_capacity: 4_096,
-        persistence_dispatch_queue_capacity: 4_096,
         per_user_rate_limit_burst_capacity: per_user_burst_capacity,
         per_user_rate_limit_burst_window_seconds: 1,
         admin_api_token: "test-admin-token".to_string(),
-        postgres_write_batch_size: 128,
-        postgres_write_flush_interval_ms: 25,
-        postgres_write_queue_capacity: 4_096,
-        postgres_write_retry_backoff_ms: 250,
     });
     seed_market(&state, "BTC-USD", "BTC", "USD");
     state

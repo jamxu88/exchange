@@ -1,9 +1,10 @@
 use crate::accounts::UserProfile;
 use crate::admin::{
-    AdminService, AdminTelemetryResponse, CompetitionLeaderboardSnapshot, CompetitionSnapshotQuery,
-    DeleteMarketResponse, FinalizeCompetitionRequest, FinalizeCompetitionResponse, ListQuery,
-    LoadExchangeConfigRequest, LoadExchangeConfigResponse, MarketDefinition, ProvisionedUsersQuery,
-    ProvisionedUsersResponse, SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse,
+    AdminService, AdminStateResponse, AdminTelemetryResponse, CompetitionLeaderboardSnapshot,
+    CompetitionSnapshotQuery, DeleteMarketResponse, FinalizeCompetitionRequest,
+    FinalizeCompetitionResponse, LeaderboardRow, ListQuery, LoadExchangeConfigRequest,
+    LoadExchangeConfigResponse, MarketDefinition, ProvisionedUsersQuery, ProvisionedUsersResponse,
+    SendAdminMessageRequest, SettleMarketRequest, SettleMarketResponse, TradingControlResponse,
     UpdateMarketRequest, UpsertMarketRequest,
 };
 use crate::auth::{
@@ -104,7 +105,7 @@ impl IntoResponse for BotControlError {
     )
 )]
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let persistence = state.storage.persistence_status();
+    let persistence = state.persistence_status();
     let runtime_dispatch = state.runtime_dispatch_status();
     let account_dispatch = state.account_dispatch_status();
     let persistence_dispatch = state.persistence_dispatch_status();
@@ -143,6 +144,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     get,
     path = "/api/v1/admin/users",
     tag = "admin",
+    security(("admin_bearer" = [])),
     params(
         ("username_prefix" = Option<String>, Query, description = "Optional username prefix filter"),
         ("role" = Option<crate::accounts::UserRole>, Query, description = "Optional role filter"),
@@ -165,6 +167,7 @@ pub async fn list_provisioned_users(
     post,
     path = "/api/v1/admin/users",
     tag = "admin",
+    security(("admin_bearer" = [])),
     request_body = ProvisionUserRequest,
     responses(
         (status = 201, description = "Competition user provisioned", body = ProvisionUserResponse),
@@ -187,6 +190,7 @@ pub async fn provision_user(
     get,
     path = "/api/v1/admin/users/export.csv",
     tag = "admin",
+    security(("admin_bearer" = [])),
     params(
         ("username_prefix" = Option<String>, Query, description = "Optional username prefix filter"),
         ("role" = Option<crate::accounts::UserRole>, Query, description = "Optional role filter"),
@@ -220,6 +224,7 @@ pub async fn export_provisioned_users_csv(
     get,
     path = "/api/v1/user",
     tag = "account",
+    security(("competitor_api_key" = [])),
     responses(
         (status = 200, description = "Authenticated user profile", body = UserProfile)
     )
@@ -237,6 +242,7 @@ pub async fn get_user(State(state): State<AppState>, auth: AuthenticatedUser) ->
     get,
     path = "/api/v1/positions",
     tag = "account",
+    security(("competitor_api_key" = [])),
     responses(
         (status = 200, description = "Positions", body = [Position])
     )
@@ -248,6 +254,15 @@ pub async fn get_positions(
     Json(state.storage.list_positions(auth.trader_id))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/balance",
+    tag = "account",
+    security(("competitor_api_key" = [])),
+    responses(
+        (status = 200, description = "Per-asset balances", body = [crate::state::Balance])
+    )
+)]
 pub async fn get_balance(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -259,6 +274,7 @@ pub async fn get_balance(
     get,
     path = "/api/v1/portfolio",
     tag = "account",
+    security(("competitor_api_key" = [])),
     responses(
         (status = 200, description = "Portfolio", body = PortfolioSnapshot)
     )
@@ -278,6 +294,7 @@ pub async fn get_portfolio(
     get,
     path = "/api/v1/open-orders",
     tag = "account",
+    security(("competitor_api_key" = [])),
     params(
         ("market" = Option<String>, Query, description = "Optional market filter")
     ),
@@ -301,6 +318,7 @@ pub async fn get_open_orders(
     get,
     path = "/api/v1/fills",
     tag = "account",
+    security(("competitor_api_key" = [])),
     params(
         ("market" = Option<String>, Query, description = "Optional market filter")
     ),
@@ -324,6 +342,7 @@ pub async fn get_fills(
     post,
     path = "/api/v1/orders",
     tag = "trading",
+    security(("competitor_api_key" = [])),
     request_body = SubmitOrderRequest,
     responses(
         (status = 201, description = "Limit order accepted", body = SubmitOrderResponse),
@@ -344,6 +363,7 @@ pub async fn submit_order(
     delete,
     path = "/api/v1/orders/{order_id}",
     tag = "trading",
+    security(("competitor_api_key" = [])),
     params(
         ("order_id" = Uuid, Path, description = "Order id")
     ),
@@ -365,6 +385,7 @@ pub async fn cancel_order(
     patch,
     path = "/api/v1/orders/{order_id}",
     tag = "trading",
+    security(("competitor_api_key" = [])),
     params(
         ("order_id" = Uuid, Path, description = "Order id")
     ),
@@ -385,10 +406,31 @@ pub async fn amend_order(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/markets",
+    tag = "system",
+    responses(
+        (status = 200, description = "Active markets", body = [MarketDefinition])
+    )
+)]
 pub async fn get_markets(State(state): State<AppState>) -> impl IntoResponse {
     Json(AdminService::list_markets(&state))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/leaderboard",
+    tag = "account",
+    security(("competitor_api_key" = [])),
+    params(
+        ("limit" = Option<usize>, Query, description = "Optional maximum number of rows to return")
+    ),
+    responses(
+        (status = 200, description = "Live competition leaderboard", body = [LeaderboardRow]),
+        (status = 401, description = "Invalid API key", body = ApiError)
+    )
+)]
 pub async fn get_leaderboard(
     State(state): State<AppState>,
     _auth: AuthenticatedUser,
@@ -397,6 +439,16 @@ pub async fn get_leaderboard(
     Json(AdminService::leaderboard(&state, query.limit).await)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/state",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "Operator snapshot of controls, markets, desk, bots, and messages", body = AdminStateResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn get_admin_state(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -405,9 +457,30 @@ pub async fn get_admin_state(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/v1/admin/desk/ensure",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "Admin desk user ready", body = AdminDeskSummary),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
+pub async fn ensure_admin_desk(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> Result<Json<AdminDeskSummary>, (StatusCode, Json<ApiError>)> {
+    AdminService::ensure_admin_desk(&state, &admin)
+        .map(Json)
+        .map_err(|error| (error.status_code(), Json(ApiError::from(error))))
+}
+
+#[utoipa::path(
     get,
     path = "/api/v1/admin/telemetry",
     tag = "admin",
+    security(("admin_bearer" = [])),
     responses(
         (status = 200, description = "Live operator telemetry and health snapshot", body = AdminTelemetryResponse),
         (status = 401, description = "Invalid admin token", body = ApiError)
@@ -420,15 +493,20 @@ pub async fn get_admin_telemetry(
     Json(AdminService::get_telemetry(&state))
 }
 
-pub async fn ensure_admin_desk(
-    State(state): State<AppState>,
-    admin: AuthenticatedAdmin,
-) -> Result<Json<AdminDeskSummary>, (StatusCode, Json<ApiError>)> {
-    AdminService::ensure_admin_desk(&state, &admin)
-        .map(Json)
-        .map_err(|error| (error.status_code(), Json(ApiError::from(error))))
-}
-
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/desk/orders",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = AdminDeskOrderRequest,
+    responses(
+        (status = 201, description = "Desk order submitted", body = AdminDeskOrderResponse),
+        (status = 400, description = "Invalid order or market", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Desk or market not found", body = ApiError),
+        (status = 409, description = "Trading or market state blocks order", body = ApiError)
+    )
+)]
 pub async fn submit_admin_desk_order(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -448,6 +526,19 @@ pub async fn submit_admin_desk_order(
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/bots",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = UpsertAdminBotRequest,
+    responses(
+        (status = 201, description = "Bot created or updated", body = AdminBotState),
+        (status = 400, description = "Invalid bot configuration", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Market not found", body = ApiError)
+    )
+)]
 pub async fn upsert_admin_bot(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -458,6 +549,21 @@ pub async fn upsert_admin_bot(
         .map(|response| (StatusCode::CREATED, Json(response)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/bots/{bot_id}/start",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("bot_id" = String, Path, description = "Bot identifier")
+    ),
+    responses(
+        (status = 200, description = "Bot running", body = AdminBotState),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot or market not found", body = ApiError)
+    )
+)]
 pub async fn start_admin_bot(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -468,6 +574,21 @@ pub async fn start_admin_bot(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/bots/{bot_id}/pause",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("bot_id" = String, Path, description = "Bot identifier")
+    ),
+    responses(
+        (status = 200, description = "Bot paused", body = AdminBotState),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot not found", body = ApiError)
+    )
+)]
 pub async fn pause_admin_bot(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -478,6 +599,21 @@ pub async fn pause_admin_bot(
         .map(Json)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/bots/{bot_id}",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("bot_id" = String, Path, description = "Bot identifier")
+    ),
+    responses(
+        (status = 200, description = "Bot removed", body = AdminBotState),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot not found", body = ApiError)
+    )
+)]
 pub async fn delete_admin_bot(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -488,6 +624,16 @@ pub async fn delete_admin_bot(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/trading/start",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "Trading enabled", body = TradingControlResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn start_trading(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -495,6 +641,16 @@ pub async fn start_trading(
     Json(AdminService::set_trading_enabled(&state, &admin, true))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/trading/stop",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "Trading disabled", body = TradingControlResponse),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn stop_trading(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -502,6 +658,16 @@ pub async fn stop_trading(
     Json(AdminService::set_trading_enabled(&state, &admin, false))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/markets",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "All markets", body = [MarketDefinition]),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn list_admin_markets(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -509,6 +675,21 @@ pub async fn list_admin_markets(
     Json(AdminService::list_markets(&state))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/markets",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = UpsertMarketRequest,
+    responses(
+        (status = 200, description = "Market upserted", body = MarketDefinition),
+        (status = 400, description = "Invalid market definition", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Referenced market missing", body = ApiError),
+        (status = 409, description = "Market state conflict", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError)
+    )
+)]
 pub async fn create_or_update_market(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -526,6 +707,24 @@ pub async fn create_or_update_market(
         })
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/admin/markets/{market_id}",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("market_id" = String, Path, description = "Market symbol")
+    ),
+    request_body = UpdateMarketRequest,
+    responses(
+        (status = 200, description = "Market updated", body = MarketDefinition),
+        (status = 400, description = "Invalid update", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Market not found", body = ApiError),
+        (status = 409, description = "Market state conflict", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError)
+    )
+)]
 pub async fn patch_market(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -544,6 +743,22 @@ pub async fn patch_market(
         })
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/markets/{market_id}",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("market_id" = String, Path, description = "Market symbol")
+    ),
+    responses(
+        (status = 200, description = "Market deleted", body = DeleteMarketResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Market not found", body = ApiError),
+        (status = 409, description = "Market has open orders or is settled", body = ApiError)
+    )
+)]
 pub async fn delete_market(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -561,6 +776,21 @@ pub async fn delete_market(
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/config/load",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = LoadExchangeConfigRequest,
+    responses(
+        (status = 200, description = "Config applied", body = LoadExchangeConfigResponse),
+        (status = 400, description = "Invalid config payload", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Missing market or user reference", body = ApiError),
+        (status = 409, description = "State conflict", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError)
+    )
+)]
 pub async fn load_exchange_config(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -578,6 +808,19 @@ pub async fn load_exchange_config(
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/messages",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = SendAdminMessageRequest,
+    responses(
+        (status = 200, description = "Message recorded and broadcast", body = crate::admin::AdminMessageEntry),
+        (status = 400, description = "Invalid message", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Target user not found", body = ApiError)
+    )
+)]
 pub async fn send_admin_message(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -595,6 +838,19 @@ pub async fn send_admin_message(
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/messages",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("limit" = Option<usize>, Query, description = "Maximum messages to return (default 50)")
+    ),
+    responses(
+        (status = 200, description = "Recent admin messages", body = [crate::admin::AdminMessageEntry]),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn list_admin_messages(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -606,6 +862,24 @@ pub async fn list_admin_messages(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/markets/{market_id}/settle",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("market_id" = String, Path, description = "Market symbol")
+    ),
+    request_body = SettleMarketRequest,
+    responses(
+        (status = 200, description = "Market settled", body = SettleMarketResponse),
+        (status = 400, description = "Invalid settlement", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Market not found", body = ApiError),
+        (status = 409, description = "Market already settled or has blocking state", body = ApiError),
+        (status = 500, description = "Settlement failed", body = ApiError)
+    )
+)]
 pub async fn settle_market(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -625,6 +899,21 @@ pub async fn settle_market(
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/competition/finalize",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    request_body = FinalizeCompetitionRequest,
+    responses(
+        (status = 200, description = "Competition finalized", body = FinalizeCompetitionResponse),
+        (status = 400, description = "Invalid finalize request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "User or snapshot reference not found", body = ApiError),
+        (status = 409, description = "Eligibility or settlement conflict", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError)
+    )
+)]
 pub async fn finalize_competition(
     State(state): State<AppState>,
     admin: AuthenticatedAdmin,
@@ -643,6 +932,20 @@ pub async fn finalize_competition(
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/competition/snapshots/{snapshot_id}",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("snapshot_id" = Uuid, Path, description = "Snapshot UUID")
+    ),
+    responses(
+        (status = 200, description = "Leaderboard snapshot", body = CompetitionLeaderboardSnapshot),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Snapshot not found", body = ApiError)
+    )
+)]
 pub async fn get_competition_snapshot(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -660,6 +963,20 @@ pub async fn get_competition_snapshot(
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/competition/snapshots/latest",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("competition_id" = String, Query, description = "Competition identifier")
+    ),
+    responses(
+        (status = 200, description = "Latest snapshot for competition", body = CompetitionLeaderboardSnapshot),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "No snapshot for competition", body = ApiError)
+    )
+)]
 pub async fn get_latest_competition_snapshot(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -677,6 +994,20 @@ pub async fn get_latest_competition_snapshot(
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/competition/snapshots/{snapshot_id}/export.csv",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("snapshot_id" = Uuid, Path, description = "Snapshot UUID")
+    ),
+    responses(
+        (status = 200, description = "CSV attachment", body = String, content_type = "text/csv"),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Snapshot not found", body = ApiError)
+    )
+)]
 pub async fn export_competition_snapshot_csv(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,
@@ -713,6 +1044,7 @@ pub async fn export_competition_snapshot_csv(
     post,
     path = "/api/v1/admin/users/reset",
     tag = "admin",
+    security(("admin_bearer" = [])),
     responses(
         (status = 200, description = "All user trading state reset", body = crate::admin::ResetUsersResponse),
         (status = 401, description = "Invalid admin token", body = ApiError)
@@ -725,6 +1057,19 @@ pub async fn reset_all_users(
     Json(AdminService::reset_all_users(&state, &admin))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/leaderboard",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    params(
+        ("limit" = Option<usize>, Query, description = "Optional maximum number of rows to return")
+    ),
+    responses(
+        (status = 200, description = "Live leaderboard (operator view)", body = [LeaderboardRow]),
+        (status = 401, description = "Invalid admin token", body = ApiError)
+    )
+)]
 pub async fn get_admin_leaderboard(
     State(state): State<AppState>,
     _admin: AuthenticatedAdmin,

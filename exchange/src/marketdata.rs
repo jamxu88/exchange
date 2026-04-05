@@ -17,6 +17,7 @@ pub enum ClientMessage {
     Subscribe {
         channel: String,
         market: String,
+        #[serde(default)]
         last_sequence: Option<u64>,
     },
     Unsubscribe {

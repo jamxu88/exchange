@@ -25,7 +25,7 @@ Handle these statuses explicitly in your error UI:
 | `403` | Resource exists but belongs to another competitor |
 | `404` | Order, market, or user not found |
 | `409` | Trade would breach limits, market status blocks trading, or duplicate username |
-| `500` | Unexpected overflow or backend failure |
+| `500` | Matching engine unavailable, numeric overflow, or other unexpected backend failure |
 
 Use [Rate limits](/reference/rate-limits) for the exact shared-bucket behavior behind `429`.
 
@@ -38,6 +38,7 @@ Known codes you may see:
 - `invalid_message`
 - `unsupported_channel`
 - `invalid_api_key`
+- `unauthenticated` (for example, subscribing to `l3` before a successful `authenticate`)
 
 Example:
 
@@ -74,6 +75,7 @@ Known codes:
 - `order_not_owned`
 - `position_limit_exceeded`
 - `rate_limit_exceeded`
+- `engine_unavailable`
 - `overflow`
 
 Example:
@@ -90,9 +92,11 @@ Example:
 
 ## Health degradation
 
-Check `GET /health` to monitor persistence:
+Check `GET /health` for overall readiness:
 
-- `status: "ok"` when persistence is `disabled` or `ok`
-- `status: "degraded"` when persistence is `retrying`, `backpressured`, or `stopped`
+- `status: "ok"` when checkpoint persistence is not `retrying`, `backpressured`, or `stopped`, and `runtime_dispatch`, `account_dispatch`, and `persistence_dispatch` are not `backpressured` or `stopped`. A `persistence.mode` of `disabled` (checkpointing off) is still compatible with `status: "ok"`.
+- `status: "degraded"` when any of those persistence or dispatch modes indicates a fault or overload.
+
+See [Health](/rest/health) for field-level detail.
 
 Internal operator-only error cases are intentionally not expanded here.

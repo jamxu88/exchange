@@ -12,7 +12,7 @@ API clients can also use `l2` when they want compact, batched depth instead of t
 <RequestExample>
 
 ```json Client Message
-{"op":"subscribe","channel":"l2","market":"BTC-USD","last_sequence":null}
+{"op":"subscribe","channel":"l2","market":"BTC-USD"}
 ```
 
 </RequestExample>
@@ -43,7 +43,6 @@ API clients can also use `l2` when they want compact, batched depth instead of t
 - `op` must be `subscribe`.
 - `channel` must be `l2`.
 - `market` is the market you want to subscribe to.
-- `last_sequence` is part of the message shape, but the supported recovery flow still expects a fresh resubscribe after a gap.
 
 ## What happens next
 
@@ -62,3 +61,4 @@ API clients can also use `l2` when they want compact, batched depth instead of t
 - If you need multiple markets, open multiple sockets.
 - Use `start_sequence` to validate the first event in a batched `delta`, then store `sequence` as your new last applied market sequence.
 - Use `order_state` messages for your own exact resting-order state. The `l2` market-data stream is intentionally aggregated.
+- Older clients may still send `last_sequence`; the server ignores it and always starts with a fresh snapshot.

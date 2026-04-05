@@ -166,6 +166,10 @@ describe("tradeReducer", () => {
   it("applies snapshots and deltas to the market book", () => {
     let state = createInitialTradeState(markets);
     state = tradeReducer(state, {
+      type: "set-limit-price",
+      value: "123",
+    });
+    state = tradeReducer(state, {
       type: "ws-snapshot",
       marketId: "BTC-USD",
       sequence: 3,
@@ -196,6 +200,7 @@ describe("tradeReducer", () => {
     expect(summary.bestBid).toBe(100);
     expect(summary.bestAsk).toBe(101);
     expect(summary.lastPrice).toBe(101);
+    expect(state.limitPriceInput).toBe("123");
     expect(summary.bids[0]).toEqual({
       price: 100,
       liquidity: 5,

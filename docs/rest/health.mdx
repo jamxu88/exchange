@@ -23,30 +23,30 @@ curl https://exchange.jamesxu.dev/health
   "service": "exchange",
   "now": "2026-03-25T13:10:04.185031Z",
   "persistence": {
-    "backend": "postgres",
+    "backend": "in_memory",
     "mode": "ok",
-    "queue_capacity": 4096,
-    "backpressure_threshold": 3277,
+    "queue_capacity": 1,
+    "backpressure_threshold": 1,
     "queue_depth": 0,
     "in_flight_ops": 0,
     "backlog_depth": 0,
-    "high_water_mark": 12,
+    "high_water_mark": 1,
     "total_enqueued": 15342,
-    "total_flushes": 417,
+    "total_flushes": 15342,
     "total_flushed_ops": 15342,
     "total_blocked_enqueues": 0,
     "total_enqueue_block_time_ms": 0,
     "total_flush_failures": 0,
     "total_retries": 0,
-    "last_batch_size": 36,
+    "last_batch_size": 1,
     "last_flush_latency_ms": 7,
     "max_flush_latency_ms": 15,
     "last_error": null
   },
   "runtime_dispatch": {
     "mode": "ok",
-    "queue_capacity": 4096,
-    "backpressure_threshold": 3277,
+    "queue_capacity": 16384,
+    "backpressure_threshold": 13107,
     "queue_depth": 0,
     "high_water_mark": 44,
     "total_enqueued": 9281,
@@ -56,8 +56,8 @@ curl https://exchange.jamesxu.dev/health
   },
   "account_dispatch": {
     "mode": "ok",
-    "queue_capacity": 4096,
-    "backpressure_threshold": 3277,
+    "queue_capacity": 65536,
+    "backpressure_threshold": 52428,
     "queue_depth": 0,
     "high_water_mark": 38,
     "total_enqueued": 8410,
@@ -66,13 +66,13 @@ curl https://exchange.jamesxu.dev/health
     "total_enqueue_block_time_ms": 0
   },
   "persistence_dispatch": {
-    "mode": "ok",
-    "queue_capacity": 4096,
-    "backpressure_threshold": 3277,
+    "mode": "disabled",
+    "queue_capacity": 0,
+    "backpressure_threshold": 0,
     "queue_depth": 0,
-    "high_water_mark": 52,
-    "total_enqueued": 11203,
-    "total_dequeued": 11203,
+    "high_water_mark": 0,
+    "total_enqueued": 0,
+    "total_dequeued": 0,
     "total_blocked_enqueues": 0,
     "total_enqueue_block_time_ms": 0
   },
@@ -113,10 +113,12 @@ curl https://exchange.jamesxu.dev/health
 
 </ResponseExample>
 
+Dispatch queue sizes and backpressure thresholds in the example match the exchange defaults (`RUNTIME_DISPATCH_QUEUE_CAPACITY` defaults to `16384`, `ACCOUNT_DISPATCH_QUEUE_CAPACITY` to `65536`). Your deployment may override them.
+
 ## Response fields
 
 <ResponseField name="status" type="string" required>
-  Top-level exchange health. `ok` means the service is reachable and no core queue or persistence path is currently degraded.
+  Top-level exchange health. `ok` means the service is reachable and checkpoint persistence (if enabled) is not retrying, backpressured, or stopped, and `runtime_dispatch`, `account_dispatch`, and `persistence_dispatch` are not backpressured or stopped. `PersistenceMode::disabled` alone does not imply degraded.
 </ResponseField>
 
 <ResponseField name="service" type="string" required>
@@ -128,7 +130,7 @@ curl https://exchange.jamesxu.dev/health
 </ResponseField>
 
 <ResponseField name="persistence" type="object" required>
-  Postgres or in-memory persistence health, including backlog and flush telemetry.
+  When disk checkpointing is enabled, checkpoint-writer health and flush telemetry (in-memory storage with periodic JSON checkpoint writes). When checkpointing is disabled, this reflects the in-memory repository persistence view (`mode` is typically `disabled`).
 </ResponseField>
 
 <ResponseField name="runtime_dispatch" type="object" required>
@@ -149,7 +151,7 @@ curl https://exchange.jamesxu.dev/health
 
 ## What to watch
 
-- `status = "degraded"` means at least one critical queue or the persistence writer is backpressured, retrying, or stopped.
+- `status = "degraded"` means the checkpoint writer is retrying, backpressured, or stopped, or at least one of `runtime_dispatch`, `account_dispatch`, or `persistence_dispatch` is backpressured or stopped.
 - `persistence.backlog_depth` shows how far durable writes are trailing the in-memory exchange state.
 - `runtime_dispatch`, `account_dispatch`, and `persistence_dispatch` expose queue depth and high-water marks for the off-thread architecture.
 - `account_barrier.submit.max_wait_time_ms` tells you how long requests have recently waited for read-your-writes account state to catch up.

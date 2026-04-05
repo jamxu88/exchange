@@ -1,0 +1,57 @@
+---
+title: "Get Balance"
+api: "GET /api/v1/balance"
+description: "Read per-asset free and locked balances for the authenticated trader."
+---
+
+Use this endpoint when you need raw balance rows (free versus locked) without the combined portfolio view.
+
+<RequestExample>
+
+```bash Request
+curl https://exchange.jamesxu.dev/api/v1/balance \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 Response
+[
+  {
+    "asset": "USD",
+    "free": 1000000,
+    "locked": 0
+  }
+]
+```
+
+</ResponseExample>
+
+## Headers
+
+<ParamField header="x-api-key" type="string" required>
+  Assigned competitor API key.
+</ParamField>
+
+## Response fields
+
+The response is a JSON array of balance objects.
+
+<ResponseField name="[].asset" type="string" required>
+  Asset symbol for this balance row.
+</ResponseField>
+
+<ResponseField name="[].free" type="u64" required>
+  Quantity available for new orders.
+</ResponseField>
+
+<ResponseField name="[].locked" type="u64" required>
+  Quantity reserved against open orders.
+</ResponseField>
+
+## Notes
+
+- This route counts toward the same authenticated per-user rate limit as other account endpoints; see [Rate limits](/reference/rate-limits).
+- For positions, limits, and leaderboard-oriented context in one call, prefer [Get Portfolio](/rest/portfolio).

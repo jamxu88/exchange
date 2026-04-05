@@ -28,27 +28,15 @@ cp exchange/.env.example exchange/.env
 Key backend settings:
 
 - `BIND_ADDR`
-- `DATABASE_URL`
-- `STORAGE_BACKEND=in_memory|postgres`
 - `ADMIN_API_TOKEN`
+- `CHECKPOINT_PATH`
+- `CHECKPOINT_INTERVAL_SECONDS`
 - `WS_BROADCAST_BUFFER`
 - `PER_USER_REQUESTS_PER_SECOND`
-- `POSTGRES_WRITE_BATCH_SIZE`
-- `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
-- `POSTGRES_WRITE_QUEUE_CAPACITY`
-- `POSTGRES_WRITE_RETRY_BACKOFF_MS`
 
-For fast local iteration without PostgreSQL:
+For local development:
 
 ```bash
-STORAGE_BACKEND=in_memory cargo run --manifest-path exchange/Cargo.toml
-```
-
-For local PostgreSQL-backed development:
-
-```bash
-STORAGE_BACKEND=postgres \
-DATABASE_URL=postgres://exchange:exchange@localhost:5432/exchange \
 cargo run --manifest-path exchange/Cargo.toml
 ```
 
@@ -94,8 +82,7 @@ Client default local targets:
 
 ## Recommended local workflow
 
-1. Start PostgreSQL if you want durable storage testing.
-2. Start the backend with `STORAGE_BACKEND=postgres` when testing persistence or restart behavior.
-3. Start the client and point it at the local backend.
-4. Provision a user with the admin endpoint.
-5. Use the returned API key in the client login form or direct REST and WS tests. The client login route now validates the key against the backend before writing the session cookie.
+1. Start the backend with a checkpoint file if you want restart persistence testing.
+2. Start the client and point it at the local backend.
+3. Provision a user with the admin endpoint.
+4. Use the returned API key in the client login form or direct REST and WS tests. The client login route now validates the key against the backend before writing the session cookie.

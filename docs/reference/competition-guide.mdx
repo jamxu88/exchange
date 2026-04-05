@@ -42,6 +42,7 @@ Use REST for bootstrap and recovery:
 
 - [Get User](/rest/user)
 - [Get Portfolio](/rest/portfolio)
+- [Get Balance](/rest/balance) (optional; per-asset free and locked)
 - [Get Open Orders](/rest/open-orders)
 - [Get Fills](/rest/fills)
 - [Get Markets](/rest/markets)
@@ -91,7 +92,7 @@ When a market settles:
 - positions flatten at the operator-entered `settlement_price`
 - unrealized PnL for that market becomes realized
 
-Refresh everything right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), and [Get Leaderboard](/rest/leaderboard).
+Refresh everything right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Balance](/rest/balance), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), and [Get Leaderboard](/rest/leaderboard).
 
 Live `GET /api/v1/leaderboard` shows the event-day standings; ops may publish official final standings later once all relevant markets are settled and locked.
 

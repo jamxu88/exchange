@@ -718,26 +718,12 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           ...state.marketBooks,
           [action.marketId]: nextBook,
         },
-        limitPriceInput:
-          action.marketId === state.selectedMarketId
-            ? maybeLimitInputForMarket(
-                {
-                  ...state,
-                  marketBooks: {
-                    ...state.marketBooks,
-                    [action.marketId]: nextBook,
-                  },
-                },
-                action.marketId,
-                state.ticketSide,
-              )
-            : state.limitPriceInput,
       };
     }
 
     case "ws-delta": {
       const currentBook = state.marketBooks[action.marketId] ?? createEmptyMarketBook(action.marketId);
-      if (action.sequence < currentBook.sequence) {
+      if (action.sequence <= currentBook.sequence) {
         return state;
       }
 

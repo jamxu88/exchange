@@ -24,8 +24,12 @@ fn main() {
             .expect("bind listener");
         info!("exchange template listening on {}", config.bind_addr);
         info!("swagger docs at http://{}/docs", config.bind_addr);
-        info!("database URL configured: {}", config.database_url);
-        info!("storage backend: {:?}", app_state.storage.kind());
+        info!("runtime storage backend: {:?}", app_state.storage.kind());
+        info!(
+            checkpoint_path = ?config.checkpoint_path,
+            checkpoint_interval_seconds = config.checkpoint_interval_seconds,
+            "checkpoint persistence configured"
+        );
 
         axum::serve(listener, app).await.expect("serve app");
     });

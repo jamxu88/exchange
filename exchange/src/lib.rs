@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod admin;
 pub mod auth;
 pub mod bots;
+mod checkpoint;
 pub mod config;
 mod derived_marketdata;
 pub mod docs;

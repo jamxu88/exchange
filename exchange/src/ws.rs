@@ -180,11 +180,6 @@ async fn handle_client_text(
             last_sequence: _,
         } => match channel.as_str() {
             L2_CHANNEL => {
-                let snapshot = build_book_snapshot_message(state, &market).await;
-                let last_sequence = match &snapshot {
-                    ServerMessage::Snapshot { sequence, .. } => Some(*sequence),
-                    _ => None,
-                };
                 update_subscription_telemetry(state, connection.subscription.as_ref(), None);
                 let next_subscription = Some(MarketSubscription {
                     channel: channel.clone(),
@@ -193,10 +188,18 @@ async fn handle_client_text(
                 update_subscription_telemetry(state, None, next_subscription.as_ref());
                 connection.subscription = next_subscription;
                 state.update_l3_stream_subscription(connection.l3_stream_id, None, None);
-                state.update_book_stream_subscription(
+                state
+                    .begin_book_stream_bootstrap(connection.book_stream_id, market.clone())
+                    .await;
+                let snapshot = build_book_snapshot_message(state, &market).await;
+                let snapshot_sequence = match &snapshot {
+                    ServerMessage::Snapshot { sequence, .. } => *sequence,
+                    other => panic!("expected l2 snapshot response, got {other:?}"),
+                };
+                state.complete_book_stream_bootstrap(
                     connection.book_stream_id,
-                    Some(market),
-                    last_sequence,
+                    market.clone(),
+                    snapshot_sequence,
                 );
                 vec![snapshot]
             }
@@ -208,11 +211,6 @@ async fn handle_client_text(
                     }];
                 }
 
-                let snapshot = build_l3_snapshot_message(state, &market);
-                let last_sequence = match &snapshot {
-                    ServerMessage::L3Snapshot { sequence, .. } => Some(*sequence),
-                    _ => None,
-                };
                 update_subscription_telemetry(state, connection.subscription.as_ref(), None);
                 let next_subscription = Some(MarketSubscription {
                     channel: channel.clone(),
@@ -221,10 +219,18 @@ async fn handle_client_text(
                 update_subscription_telemetry(state, None, next_subscription.as_ref());
                 connection.subscription = next_subscription;
                 state.update_book_stream_subscription(connection.book_stream_id, None, None);
-                state.update_l3_stream_subscription(
+                state
+                    .begin_l3_stream_bootstrap(connection.l3_stream_id, market.clone())
+                    .await;
+                let snapshot = build_l3_snapshot_message(state, &market);
+                let snapshot_sequence = match &snapshot {
+                    ServerMessage::L3Snapshot { sequence, .. } => *sequence,
+                    other => panic!("expected l3 snapshot response, got {other:?}"),
+                };
+                state.complete_l3_stream_bootstrap(
                     connection.l3_stream_id,
-                    Some(market),
-                    last_sequence,
+                    market.clone(),
+                    snapshot_sequence,
                 );
                 vec![snapshot]
             }
@@ -528,16 +534,21 @@ mod tests {
     use crate::admin::{MarketDefinition, MarketStatus};
     use crate::config::Config;
     use crate::marketdata::{BookDelta, OrderStateStatus};
+    use crate::marketdata_ipc::{MarketDataRequest, MarketDataResponse};
     use crate::orderbook::{BookLevel, Order, Side};
     use crate::state::AppState;
     use chrono::{TimeZone, Utc};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+    use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+    use tokio::time::timeout;
     use uuid::Uuid;
 
     fn test_state() -> AppState {
         let state = AppState::new(Config {
             bind_addr: "127.0.0.1:0".to_string(),
-            database_url: "postgres://test".to_string(),
-            storage_backend: crate::storage::StorageBackendKind::InMemory,
+            checkpoint_path: None,
+            checkpoint_interval_seconds: 5,
             ws_broadcast_buffer: 64,
             ws_market_delta_batch_interval_ms: 10,
             ws_market_broadcast_workers: 1,
@@ -545,14 +556,42 @@ mod tests {
             market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
-            persistence_dispatch_queue_capacity: 4_096,
             per_user_rate_limit_burst_capacity: 500,
             per_user_rate_limit_burst_window_seconds: 10,
             admin_api_token: "test-admin-token".to_string(),
-            postgres_write_batch_size: 128,
-            postgres_write_flush_interval_ms: 25,
-            postgres_write_queue_capacity: 4_096,
-            postgres_write_retry_backoff_ms: 250,
+        });
+        let now = Utc::now();
+        state.storage.upsert_market(MarketDefinition {
+            market_id: "BTC-USD".to_string(),
+            display_name: "BTC-USD".to_string(),
+            base_asset: "BTC".to_string(),
+            quote_asset: "USD".to_string(),
+            tick_size: 1,
+            min_order_quantity: 1,
+            reference_price: None,
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
+        state
+    }
+
+    fn test_state_with_market_data_socket(socket_path: String) -> AppState {
+        let state = AppState::new(Config {
+            bind_addr: "127.0.0.1:0".to_string(),
+            checkpoint_path: None,
+            checkpoint_interval_seconds: 5,
+            ws_broadcast_buffer: 64,
+            ws_market_delta_batch_interval_ms: 10,
+            ws_market_broadcast_workers: 1,
+            market_data_service_socket: Some(socket_path),
+            market_data_service_retry_backoff_ms: 1,
+            runtime_dispatch_queue_capacity: 4_096,
+            account_dispatch_queue_capacity: 4_096,
+            per_user_rate_limit_burst_capacity: 500,
+            per_user_rate_limit_burst_window_seconds: 10,
+            admin_api_token: "test-admin-token".to_string(),
         });
         let now = Utc::now();
         state.storage.upsert_market(MarketDefinition {
@@ -712,6 +751,177 @@ mod tests {
             }
             other => panic!("unexpected reply: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn l2_subscribe_keeps_sequence_continuity_when_snapshot_is_in_flight() {
+        let socket_path = std::env::temp_dir().join(format!("exchange-ws-{}.sock", Uuid::new_v4()));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).expect("bind market-data socket");
+        let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
+        let (snapshot_tx, snapshot_rx) = oneshot::channel();
+        let (respond_tx, respond_rx) = oneshot::channel();
+
+        let service = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept market-data bridge");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut lines = BufReader::new(read_half).lines();
+
+            let bootstrap = serde_json::from_str::<MarketDataRequest>(
+                &lines
+                    .next_line()
+                    .await
+                    .expect("bootstrap line io")
+                    .expect("bootstrap line"),
+            )
+            .expect("decode bootstrap request");
+            assert!(matches!(bootstrap, MarketDataRequest::Bootstrap { .. }));
+            let _ = bootstrap_tx.send(());
+
+            let snapshot_request = serde_json::from_str::<MarketDataRequest>(
+                &lines
+                    .next_line()
+                    .await
+                    .expect("snapshot line io")
+                    .expect("snapshot line"),
+            )
+            .expect("decode snapshot request");
+            let MarketDataRequest::SnapshotRequest { request_id, market } = snapshot_request else {
+                panic!("expected snapshot request");
+            };
+            assert_eq!(market, "BTC-USD");
+            let _ = snapshot_tx.send(request_id);
+
+            let request_id = respond_rx.await.expect("snapshot response signal");
+            let payload = serde_json::to_vec(&MarketDataResponse::Snapshot {
+                request_id,
+                market: "BTC-USD".to_string(),
+                sequence: 0,
+                bids: vec![],
+                asks: vec![],
+            })
+            .expect("snapshot json");
+            write_half
+                .write_all(&payload)
+                .await
+                .expect("write snapshot");
+            write_half.write_all(b"\n").await.expect("write newline");
+            write_half.flush().await.expect("flush snapshot");
+        });
+
+        let state = test_state_with_market_data_socket(
+            socket_path.to_str().expect("socket path utf8").to_string(),
+        );
+        timeout(Duration::from_secs(1), bootstrap_rx)
+            .await
+            .expect("bridge did not bootstrap")
+            .expect("bootstrap signal");
+
+        let (book_tx, mut book_rx) = tokio_mpsc::unbounded_channel();
+        let (l3_tx, _) = tokio_mpsc::unbounded_channel();
+        let mut connection = ClientConnection {
+            book_stream_id: state.register_book_stream(book_tx),
+            l3_stream_id: state.register_l3_stream(l3_tx),
+            authenticated_user: None,
+            subscription: None,
+        };
+
+        let state_for_subscribe = state.clone();
+        let subscribe = tokio::spawn(async move {
+            let replies = handle_client_text(
+                &state_for_subscribe,
+                &mut connection,
+                r#"{"op":"subscribe","channel":"l2","market":"BTC-USD"}"#,
+            )
+            .await;
+            (replies, connection)
+        });
+
+        let request_id = timeout(Duration::from_secs(1), snapshot_rx)
+            .await
+            .expect("snapshot request was not sent")
+            .expect("snapshot request signal");
+
+        state.dispatch_market_delta(
+            "BTC-USD",
+            BookDelta::Trade {
+                price: 101,
+                quantity: 1,
+            },
+        );
+
+        assert!(
+            timeout(Duration::from_millis(50), book_rx.recv()).await.is_err(),
+            "snapshot bootstrap should not deliver live deltas before the snapshot reply"
+        );
+
+        respond_tx
+            .send(request_id)
+            .expect("respond to snapshot request");
+        let (replies, connection) = subscribe.await.expect("subscribe task");
+        assert_eq!(
+            connection.subscription.as_ref().map(|subscription| {
+                (subscription.channel.as_str(), subscription.market.as_str())
+            }),
+            Some(("l2", "BTC-USD"))
+        );
+        assert_eq!(
+            replies,
+            vec![ServerMessage::Snapshot {
+                channel: "l2".to_string(),
+                market: "BTC-USD".to_string(),
+                sequence: 0,
+                bids: vec![],
+                asks: vec![],
+            }]
+        );
+
+        match timeout(Duration::from_secs(1), book_rx.recv())
+            .await
+            .expect("timed out waiting for buffered post-snapshot delta")
+            .expect("delta message")
+            .as_ref()
+        {
+            ServerMessage::Delta {
+                start_sequence,
+                sequence,
+                ..
+            } => {
+                assert_eq!(*start_sequence, 1_u64);
+                assert_eq!(*sequence, 1_u64);
+            }
+            other => panic!("unexpected buffered post-snapshot message: {other:?}"),
+        }
+
+        state.dispatch_market_delta(
+            "BTC-USD",
+            BookDelta::Trade {
+                price: 102,
+                quantity: 1,
+            },
+        );
+
+        match timeout(Duration::from_secs(1), book_rx.recv())
+            .await
+            .expect("timed out waiting for post-snapshot delta")
+            .expect("post-snapshot message")
+            .as_ref()
+        {
+            ServerMessage::Delta {
+                start_sequence,
+                sequence,
+                ..
+            } => {
+                assert_eq!(*start_sequence, 2_u64);
+                assert_eq!(*sequence, 2_u64);
+            }
+            other => panic!("unexpected post-snapshot message: {other:?}"),
+        }
+
+        state.unregister_book_stream(connection.book_stream_id);
+        state.unregister_l3_stream(connection.l3_stream_id);
+        service.await.expect("market-data service task");
+        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]

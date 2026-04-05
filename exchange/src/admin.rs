@@ -365,12 +365,12 @@ impl AdminService {
             bots: state.bot_manager.list(),
             admin_desk: admin_desk_summary(state),
             recent_messages: state.storage.list_admin_messages(Some(message_limit)),
-            persistence: state.storage.persistence_status(),
+            persistence: state.persistence_status(),
         }
     }
 
     pub fn get_telemetry(state: &AppState) -> AdminTelemetryResponse {
-        let persistence = state.storage.persistence_status();
+        let persistence = state.persistence_status();
         let runtime_dispatch = state.runtime_dispatch_status();
         let account_dispatch = state.account_dispatch_status();
         let persistence_dispatch = state.persistence_dispatch_status();
@@ -477,6 +477,7 @@ impl AdminService {
             None,
             format!("trading_enabled set to {trading_enabled}"),
         );
+        state.request_checkpoint_save();
 
         TradingControlResponse { controls }
     }
@@ -569,6 +570,7 @@ impl AdminService {
                 settled_markets.len()
             ),
         );
+        state.request_checkpoint_save();
 
         Ok(FinalizeCompetitionResponse {
             controls,
@@ -613,6 +615,7 @@ impl AdminService {
                 market.market_id, market.status, market.tick_size, market.min_order_quantity
             ),
         );
+        state.request_checkpoint_save();
 
         Ok(market)
     }
@@ -674,6 +677,7 @@ impl AdminService {
                 market.market_id, market.status, market.tick_size, market.min_order_quantity
             ),
         );
+        state.request_checkpoint_save();
 
         Ok(market)
     }
@@ -708,6 +712,7 @@ impl AdminService {
             None,
             format!("deleted market {trimmed_market}"),
         );
+        state.request_checkpoint_save();
         Ok(DeleteMarketResponse {
             market_id: trimmed_market.to_string(),
         })
@@ -750,6 +755,7 @@ impl AdminService {
                 controls.trading_enabled
             ),
         );
+        state.request_checkpoint_save();
 
         Ok(LoadExchangeConfigResponse { controls, markets })
     }
@@ -889,6 +895,7 @@ impl AdminService {
                 summary.settled_quantity
             ),
         );
+        state.request_checkpoint_save();
 
         Ok(SettleMarketResponse {
             market,
@@ -956,6 +963,7 @@ impl AdminService {
                 cleared_orders, cleared_positions, cleared_fills
             ),
         );
+        state.request_checkpoint_save();
 
         ResetUsersResponse {
             cleared_orders,
@@ -1533,8 +1541,8 @@ mod tests {
     fn test_state() -> AppState {
         AppState::new(Config {
             bind_addr: "127.0.0.1:0".to_string(),
-            database_url: "postgres://test".to_string(),
-            storage_backend: crate::storage::StorageBackendKind::InMemory,
+            checkpoint_path: None,
+            checkpoint_interval_seconds: 5,
             ws_broadcast_buffer: 64,
             ws_market_delta_batch_interval_ms: 10,
             ws_market_broadcast_workers: 1,
@@ -1542,14 +1550,9 @@ mod tests {
             market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
-            persistence_dispatch_queue_capacity: 4_096,
             per_user_rate_limit_burst_capacity: 500,
             per_user_rate_limit_burst_window_seconds: 10,
             admin_api_token: "test-admin-token".to_string(),
-            postgres_write_batch_size: 128,
-            postgres_write_flush_interval_ms: 25,
-            postgres_write_queue_capacity: 4_096,
-            postgres_write_retry_backoff_ms: 250,
         })
     }
 

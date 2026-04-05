@@ -50,13 +50,13 @@ describe("TradeWsClient", () => {
 
     expect(socket.sent).toEqual([
       JSON.stringify({ op: "authenticate", api_key: "secret" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD", last_sequence: null }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
     ]);
 
     client.updateMarket("ETH-USD");
     expect(socket.sent.slice(2)).toEqual([
       JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "ETH-USD", last_sequence: null }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "ETH-USD" }),
     ]);
   });
 
@@ -107,6 +107,7 @@ describe("TradeWsClient", () => {
         type: "delta",
         channel: "l2",
         market: "BTC-USD",
+        start_sequence: 5,
         sequence: 5,
         events: [
           {
@@ -325,7 +326,190 @@ describe("TradeWsClient", () => {
       reason: "market sequence gap detected",
     });
     expect(socket.sent.at(-1)).toBe(
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD", last_sequence: null }),
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
     );
+  });
+
+  it("ignores duplicate deltas and resubscribes on client-side sequence gaps", () => {
+    const socket = new MockSocket();
+    const callbacks = {
+      onStatusChange: vi.fn(),
+      onAuthenticated: vi.fn(),
+      onSnapshot: vi.fn(),
+      onDelta: vi.fn(),
+      onReject: vi.fn(),
+      onFill: vi.fn(),
+      onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
+      onResyncRequired: vi.fn(),
+      onAdminMessage: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new TradeWsClient(
+      {
+        wsUrl: "ws://localhost:8080/ws",
+        apiKey: undefined,
+        reconnectDelayMs: 1000,
+        initialMarket: "BTC-USD",
+      },
+      callbacks,
+      () => socket,
+    );
+
+    client.connect();
+    socket.readyState = 1;
+    socket.onopen?.();
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "snapshot",
+        channel: "l2",
+        market: "BTC-USD",
+        sequence: 4,
+        bids: [],
+        asks: [],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "delta",
+        channel: "l2",
+        market: "BTC-USD",
+        start_sequence: 4,
+        sequence: 4,
+        events: [
+          {
+            kind: "trade",
+            price: 101,
+            quantity: 1,
+          },
+        ],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "delta",
+        channel: "l2",
+        market: "BTC-USD",
+        start_sequence: 6,
+        sequence: 6,
+        events: [
+          {
+            kind: "trade",
+            price: 102,
+            quantity: 1,
+          },
+        ],
+      }),
+    });
+
+    expect(callbacks.onDelta).not.toHaveBeenCalled();
+    expect(callbacks.onResyncRequired).toHaveBeenCalledWith({
+      channel: "l2",
+      marketId: "BTC-USD",
+      reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
+    });
+    expect(socket.sent.at(-1)).toBe(
+      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
+    );
+  });
+
+  it("waits for a fresh snapshot before applying deltas and ignores stale snapshots", () => {
+    const socket = new MockSocket();
+    const callbacks = {
+      onStatusChange: vi.fn(),
+      onAuthenticated: vi.fn(),
+      onSnapshot: vi.fn(),
+      onDelta: vi.fn(),
+      onReject: vi.fn(),
+      onFill: vi.fn(),
+      onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
+      onResyncRequired: vi.fn(),
+      onAdminMessage: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new TradeWsClient(
+      {
+        wsUrl: "ws://localhost:8080/ws",
+        apiKey: undefined,
+        reconnectDelayMs: 1000,
+        initialMarket: "BTC-USD",
+      },
+      callbacks,
+      () => socket,
+    );
+
+    client.connect();
+    socket.readyState = 1;
+    socket.onopen?.();
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "delta",
+        channel: "l2",
+        market: "BTC-USD",
+        start_sequence: 1,
+        sequence: 1,
+        events: [
+          {
+            kind: "trade",
+            price: 101,
+            quantity: 1,
+          },
+        ],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "snapshot",
+        channel: "l2",
+        market: "BTC-USD",
+        sequence: 1,
+        bids: [],
+        asks: [],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "delta",
+        channel: "l2",
+        market: "BTC-USD",
+        start_sequence: 2,
+        sequence: 2,
+        events: [
+          {
+            kind: "trade",
+            price: 102,
+            quantity: 1,
+          },
+        ],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "snapshot",
+        channel: "l2",
+        market: "BTC-USD",
+        sequence: 1,
+        bids: [],
+        asks: [],
+      }),
+    });
+
+    expect(callbacks.onResyncRequired).not.toHaveBeenCalled();
+    expect(callbacks.onSnapshot).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDelta).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDelta).toHaveBeenCalledWith({
+      marketId: "BTC-USD",
+      sequence: 2,
+      events: [
+        {
+          kind: "trade",
+          price: 102,
+          quantity: 1,
+        },
+      ],
+    });
   });
 });

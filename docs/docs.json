@@ -74,6 +74,7 @@
             "pages": [
               "rest/user",
               "rest/portfolio",
+              "rest/balance",
               "rest/positions",
               "rest/open-orders",
               "rest/fills",

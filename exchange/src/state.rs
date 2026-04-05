@@ -1,4 +1,5 @@
 use crate::bots::BotManager;
+use crate::checkpoint::CheckpointHandle;
 use crate::config::Config;
 use crate::derived_marketdata::{DerivedMarketDataHandle, MarketL3Snapshot};
 use crate::marketdata::{
@@ -9,7 +10,7 @@ use crate::marketdata_bridge::MarketDataBridgeHandle;
 use crate::marketdata_ipc::MarketBootstrapState;
 use crate::orderbook::{Fill, Order, OrderBook};
 use crate::rate_limit::PerUserRateLimiter;
-use crate::storage::{StorageBackendKind, StorageRepository};
+use crate::storage::StorageRepository;
 use crate::telemetry::{OperatorTelemetry, OperatorTelemetrySnapshot};
 use crate::trading::{MarketBookSnapshot, MarketEngineHandle};
 use chrono::{DateTime, Utc};
@@ -321,6 +322,7 @@ pub struct AppState {
     pub config: Config,
     pub market_engines: Arc<DashMap<String, MarketEngineHandle>>,
     pub storage: StorageRepository,
+    checkpoint: Arc<OnceLock<CheckpointHandle>>,
     derived_market_data: DerivedMarketDataHandle,
     market_data_bridge: Arc<OnceLock<MarketDataBridgeHandle>>,
     pub bot_manager: BotManager,
@@ -343,7 +345,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let storage = StorageRepository::from_config(&config);
+        let storage = StorageRepository::new_in_memory();
+        if let Some(path) = config.checkpoint_path.as_deref() {
+            CheckpointHandle::load_into_storage(&storage, std::path::Path::new(path))
+                .unwrap_or_else(|error| panic!("failed to load checkpoint {path}: {error}"));
+        }
         Self::with_storage(config, storage)
     }
 
@@ -378,14 +384,12 @@ impl AppState {
         let account_dispatcher =
             AccountDispatchHandle::spawn(storage.clone(), config.account_dispatch_queue_capacity);
         let account_barrier_telemetry = AccountBarrierTelemetry::default();
-        let persistence_dispatcher = PersistenceDispatchHandle::spawn(
-            storage.clone(),
-            config.persistence_dispatch_queue_capacity,
-        );
+        let persistence_dispatcher = PersistenceDispatchHandle::spawn(storage.clone());
         let state = Self {
             config,
             market_engines: Arc::new(DashMap::new()),
             storage,
+            checkpoint: Arc::new(OnceLock::new()),
             derived_market_data: DerivedMarketDataHandle::default(),
             market_data_bridge: Arc::new(OnceLock::new()),
             bot_manager: BotManager::default(),
@@ -408,6 +412,7 @@ impl AppState {
         state.recover_runtime_state();
         state.rebuild_derived_market_data();
         state.start_market_data_bridge();
+        state.start_checkpointing();
         state
     }
 
@@ -489,6 +494,20 @@ impl AppState {
             .update_subscription(client_id, market, last_sequence);
     }
 
+    pub async fn begin_book_stream_bootstrap(&self, client_id: Uuid, market: String) {
+        self.market_broadcaster.begin_bootstrap(client_id, market).await;
+    }
+
+    pub fn complete_book_stream_bootstrap(
+        &self,
+        client_id: Uuid,
+        market: String,
+        snapshot_sequence: u64,
+    ) {
+        self.market_broadcaster
+            .complete_bootstrap(client_id, market, snapshot_sequence);
+    }
+
     pub fn unregister_book_stream(&self, client_id: Uuid) {
         self.market_broadcaster.unregister(client_id);
     }
@@ -505,6 +524,22 @@ impl AppState {
     ) {
         self.market_event_broadcaster
             .update_subscription(client_id, market, last_sequence);
+    }
+
+    pub async fn begin_l3_stream_bootstrap(&self, client_id: Uuid, market: String) {
+        self.market_event_broadcaster
+            .begin_bootstrap(client_id, market)
+            .await;
+    }
+
+    pub fn complete_l3_stream_bootstrap(
+        &self,
+        client_id: Uuid,
+        market: String,
+        snapshot_sequence: u64,
+    ) {
+        self.market_event_broadcaster
+            .complete_bootstrap(client_id, market, snapshot_sequence);
     }
 
     pub fn unregister_l3_stream(&self, client_id: Uuid) {
@@ -560,6 +595,19 @@ impl AppState {
 
     pub fn account_dispatch_barrier(&self) -> oneshot::Receiver<()> {
         self.account_dispatcher.barrier()
+    }
+
+    pub fn request_checkpoint_save(&self) {
+        if let Some(checkpoint) = self.checkpoint.get() {
+            checkpoint.request_save();
+        }
+    }
+
+    pub fn persistence_status(&self) -> crate::storage::PersistenceStatus {
+        self.checkpoint
+            .get()
+            .map(CheckpointHandle::status)
+            .unwrap_or_else(|| self.storage.persistence_status())
     }
 
     pub fn runtime_dispatch_status(&self) -> DispatchQueueStatus {
@@ -708,6 +756,18 @@ impl AppState {
             .set(MarketDataBridgeHandle::spawn(self.clone()));
     }
 
+    fn start_checkpointing(&self) {
+        let Some(path) = self.config.checkpoint_path.as_deref() else {
+            return;
+        };
+
+        let _ = self.checkpoint.set(CheckpointHandle::spawn(
+            self.clone(),
+            std::path::PathBuf::from(path),
+            Duration::from_secs(self.config.checkpoint_interval_seconds.max(1)),
+        ));
+    }
+
     fn market_data_bridge(&self) -> Option<MarketDataBridgeHandle> {
         self.market_data_bridge.get().cloned()
     }
@@ -769,6 +829,16 @@ enum MarketBroadcastCommand {
         client_id: Uuid,
         tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
     },
+    BeginBootstrap {
+        client_id: Uuid,
+        market: String,
+        ready: oneshot::Sender<()>,
+    },
+    CompleteBootstrap {
+        client_id: Uuid,
+        market: String,
+        snapshot_sequence: u64,
+    },
     UpdateSubscription {
         client_id: Uuid,
         market: Option<String>,
@@ -784,6 +854,8 @@ struct MarketBroadcastClient {
     tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
     subscription: Option<String>,
     last_market_sequence: Option<u64>,
+    bootstrap_market: Option<String>,
+    buffered_batches: Vec<BroadcastEvent>,
 }
 
 impl MarketBroadcastHandle {
@@ -829,6 +901,40 @@ impl MarketBroadcastHandle {
         });
     }
 
+    async fn begin_bootstrap(&self, client_id: Uuid, market: String) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        let (ready_tx, ready_rx) = oneshot::channel();
+        self.workers[worker_index].send(MarketBroadcastCommand::BeginBootstrap {
+            client_id,
+            market,
+            ready: ready_tx,
+        });
+        let _ = ready_rx.await;
+    }
+
+    fn complete_bootstrap(&self, client_id: Uuid, market: String, snapshot_sequence: u64) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketBroadcastCommand::CompleteBootstrap {
+            client_id,
+            market,
+            snapshot_sequence,
+        });
+    }
+
     fn publish(&self, batch: BroadcastEvent) {
         for worker in self.workers.iter() {
             worker.send(MarketBroadcastCommand::Publish(batch.clone()));
@@ -860,8 +966,42 @@ impl MarketBroadcastWorker {
                                     tx,
                                     subscription: None,
                                     last_market_sequence: None,
+                                    bootstrap_market: None,
+                                    buffered_batches: Vec::new(),
                                 },
                             );
+                        }
+                        MarketBroadcastCommand::BeginBootstrap {
+                            client_id,
+                            market,
+                            ready,
+                        } => {
+                            if let Some(client) = clients.get_mut(&client_id) {
+                                client.subscription = None;
+                                client.last_market_sequence = None;
+                                client.bootstrap_market = Some(market);
+                                client.buffered_batches.clear();
+                            }
+                            let _ = ready.send(());
+                        }
+                        MarketBroadcastCommand::CompleteBootstrap {
+                            client_id,
+                            market,
+                            snapshot_sequence,
+                        } => {
+                            let should_remove = clients
+                                .get_mut(&client_id)
+                                .is_some_and(|client| {
+                                    complete_market_bootstrap(
+                                        client,
+                                        market,
+                                        snapshot_sequence,
+                                        &telemetry,
+                                    )
+                                });
+                            if should_remove {
+                                clients.remove(&client_id);
+                            }
                         }
                         MarketBroadcastCommand::UpdateSubscription {
                             client_id,
@@ -871,6 +1011,8 @@ impl MarketBroadcastWorker {
                             if let Some(client) = clients.get_mut(&client_id) {
                                 client.subscription = market;
                                 client.last_market_sequence = last_sequence;
+                                client.bootstrap_market = None;
+                                client.buffered_batches.clear();
                             }
                         }
                         MarketBroadcastCommand::Publish(batch) => {
@@ -910,6 +1052,16 @@ enum MarketEventBroadcastCommand {
         client_id: Uuid,
         tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
     },
+    BeginBootstrap {
+        client_id: Uuid,
+        market: String,
+        ready: oneshot::Sender<()>,
+    },
+    CompleteBootstrap {
+        client_id: Uuid,
+        market: String,
+        snapshot_sequence: u64,
+    },
     UpdateSubscription {
         client_id: Uuid,
         market: Option<String>,
@@ -925,6 +1077,8 @@ struct MarketEventBroadcastClient {
     tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
     subscription: Option<String>,
     last_market_sequence: Option<u64>,
+    bootstrap_market: Option<String>,
+    buffered_batches: Vec<L3BroadcastEvent>,
 }
 
 impl MarketEventBroadcastHandle {
@@ -972,6 +1126,40 @@ impl MarketEventBroadcastHandle {
         });
     }
 
+    async fn begin_bootstrap(&self, client_id: Uuid, market: String) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        let (ready_tx, ready_rx) = oneshot::channel();
+        self.workers[worker_index].send(MarketEventBroadcastCommand::BeginBootstrap {
+            client_id,
+            market,
+            ready: ready_tx,
+        });
+        let _ = ready_rx.await;
+    }
+
+    fn complete_bootstrap(&self, client_id: Uuid, market: String, snapshot_sequence: u64) {
+        let Some(worker_index) = self
+            .worker_index_by_client
+            .get(&client_id)
+            .map(|entry| *entry.value())
+        else {
+            return;
+        };
+
+        self.workers[worker_index].send(MarketEventBroadcastCommand::CompleteBootstrap {
+            client_id,
+            market,
+            snapshot_sequence,
+        });
+    }
+
     fn publish(&self, batch: L3BroadcastEvent) {
         for worker in self.workers.iter() {
             worker.send(MarketEventBroadcastCommand::Publish(batch.clone()));
@@ -1003,8 +1191,42 @@ impl MarketEventBroadcastWorker {
                                     tx,
                                     subscription: None,
                                     last_market_sequence: None,
+                                    bootstrap_market: None,
+                                    buffered_batches: Vec::new(),
                                 },
                             );
+                        }
+                        MarketEventBroadcastCommand::BeginBootstrap {
+                            client_id,
+                            market,
+                            ready,
+                        } => {
+                            if let Some(client) = clients.get_mut(&client_id) {
+                                client.subscription = None;
+                                client.last_market_sequence = None;
+                                client.bootstrap_market = Some(market);
+                                client.buffered_batches.clear();
+                            }
+                            let _ = ready.send(());
+                        }
+                        MarketEventBroadcastCommand::CompleteBootstrap {
+                            client_id,
+                            market,
+                            snapshot_sequence,
+                        } => {
+                            let should_remove = clients
+                                .get_mut(&client_id)
+                                .is_some_and(|client| {
+                                    complete_l3_bootstrap(
+                                        client,
+                                        market,
+                                        snapshot_sequence,
+                                        &telemetry,
+                                    )
+                                });
+                            if should_remove {
+                                clients.remove(&client_id);
+                            }
                         }
                         MarketEventBroadcastCommand::UpdateSubscription {
                             client_id,
@@ -1014,6 +1236,8 @@ impl MarketEventBroadcastWorker {
                             if let Some(client) = clients.get_mut(&client_id) {
                                 client.subscription = market;
                                 client.last_market_sequence = last_sequence;
+                                client.bootstrap_market = None;
+                                client.buffered_batches.clear();
                             }
                         }
                         MarketEventBroadcastCommand::Publish(batch) => {
@@ -1041,16 +1265,14 @@ fn publish_market_batch(
     batch: BroadcastEvent,
     telemetry: &OperatorTelemetry,
 ) {
-    let delta_message = Arc::new(ServerMessage::Delta {
-        channel: L2_CHANNEL.to_string(),
-        market: batch.market.clone(),
-        start_sequence: batch.start_sequence,
-        sequence: batch.sequence,
-        events: batch.events.clone(),
-    });
     let mut disconnected = Vec::new();
 
     for (client_id, client) in clients.iter_mut() {
+        if client.bootstrap_market.as_deref() == Some(batch.market.as_str()) {
+            client.buffered_batches.push(batch.clone());
+            continue;
+        }
+
         if client.subscription.as_deref() != Some(batch.market.as_str()) {
             continue;
         }
@@ -1059,14 +1281,8 @@ fn publish_market_batch(
             let expected_sequence = last_sequence.saturating_add(1);
             if batch.start_sequence != expected_sequence {
                 telemetry.record_l2_resync();
-                let resync_message = Arc::new(ServerMessage::ResyncRequired {
-                    channel: L2_CHANNEL.to_string(),
-                    market: Some(batch.market.clone()),
-                    expected_sequence: Some(expected_sequence),
-                    current_sequence: Some(batch.sequence),
-                    reason: "market sequence gap detected; resubscribe for a fresh snapshot"
-                        .to_string(),
-                });
+                let resync_message =
+                    market_resync_message(L2_CHANNEL, batch.market.clone(), expected_sequence, batch.sequence);
                 client.subscription = None;
                 client.last_market_sequence = None;
                 if client.tx.send(resync_message).is_err() {
@@ -1077,7 +1293,7 @@ fn publish_market_batch(
         }
 
         client.last_market_sequence = Some(batch.sequence);
-        if client.tx.send(delta_message.clone()).is_err() {
+        if client.tx.send(l2_delta_message(&batch)).is_err() {
             disconnected.push(*client_id);
         }
     }
@@ -1087,21 +1303,63 @@ fn publish_market_batch(
     }
 }
 
+fn complete_market_bootstrap(
+    client: &mut MarketBroadcastClient,
+    market: String,
+    snapshot_sequence: u64,
+    telemetry: &OperatorTelemetry,
+) -> bool {
+    let mut last_sequence = snapshot_sequence;
+    for batch in std::mem::take(&mut client.buffered_batches) {
+        if batch.market != market || batch.sequence <= snapshot_sequence {
+            continue;
+        }
+
+        let expected_sequence = last_sequence.saturating_add(1);
+        if batch.start_sequence != expected_sequence {
+            telemetry.record_l2_resync();
+            client.bootstrap_market = None;
+            client.subscription = None;
+            client.last_market_sequence = None;
+            return client
+                .tx
+                .send(market_resync_message(
+                    L2_CHANNEL,
+                    market,
+                    expected_sequence,
+                    batch.sequence,
+                ))
+                .is_err();
+        }
+
+        last_sequence = batch.sequence;
+        if client.tx.send(l2_delta_message(&batch)).is_err() {
+            client.bootstrap_market = None;
+            client.subscription = None;
+            client.last_market_sequence = None;
+            return true;
+        }
+    }
+
+    client.bootstrap_market = None;
+    client.subscription = Some(market);
+    client.last_market_sequence = Some(last_sequence);
+    false
+}
+
 fn publish_market_event_batch(
     clients: &mut HashMap<Uuid, MarketEventBroadcastClient>,
     batch: L3BroadcastEvent,
     telemetry: &OperatorTelemetry,
 ) {
-    let delta_message = Arc::new(ServerMessage::L3Delta {
-        channel: L3_CHANNEL.to_string(),
-        market: batch.market.clone(),
-        start_sequence: batch.start_sequence,
-        sequence: batch.sequence,
-        events: batch.events.clone(),
-    });
     let mut disconnected = Vec::new();
 
     for (client_id, client) in clients.iter_mut() {
+        if client.bootstrap_market.as_deref() == Some(batch.market.as_str()) {
+            client.buffered_batches.push(batch.clone());
+            continue;
+        }
+
         if client.subscription.as_deref() != Some(batch.market.as_str()) {
             continue;
         }
@@ -1110,14 +1368,8 @@ fn publish_market_event_batch(
             let expected_sequence = last_sequence.saturating_add(1);
             if batch.start_sequence != expected_sequence {
                 telemetry.record_l3_resync();
-                let resync_message = Arc::new(ServerMessage::ResyncRequired {
-                    channel: L3_CHANNEL.to_string(),
-                    market: Some(batch.market.clone()),
-                    expected_sequence: Some(expected_sequence),
-                    current_sequence: Some(batch.sequence),
-                    reason: "market sequence gap detected; resubscribe for a fresh snapshot"
-                        .to_string(),
-                });
+                let resync_message =
+                    market_resync_message(L3_CHANNEL, batch.market.clone(), expected_sequence, batch.sequence);
                 client.subscription = None;
                 client.last_market_sequence = None;
                 if client.tx.send(resync_message).is_err() {
@@ -1128,7 +1380,7 @@ fn publish_market_event_batch(
         }
 
         client.last_market_sequence = Some(batch.sequence);
-        if client.tx.send(delta_message.clone()).is_err() {
+        if client.tx.send(l3_delta_message(&batch)).is_err() {
             disconnected.push(*client_id);
         }
     }
@@ -1136,6 +1388,85 @@ fn publish_market_event_batch(
     for client_id in disconnected {
         clients.remove(&client_id);
     }
+}
+
+fn complete_l3_bootstrap(
+    client: &mut MarketEventBroadcastClient,
+    market: String,
+    snapshot_sequence: u64,
+    telemetry: &OperatorTelemetry,
+) -> bool {
+    let mut last_sequence = snapshot_sequence;
+    for batch in std::mem::take(&mut client.buffered_batches) {
+        if batch.market != market || batch.sequence <= snapshot_sequence {
+            continue;
+        }
+
+        let expected_sequence = last_sequence.saturating_add(1);
+        if batch.start_sequence != expected_sequence {
+            telemetry.record_l3_resync();
+            client.bootstrap_market = None;
+            client.subscription = None;
+            client.last_market_sequence = None;
+            return client
+                .tx
+                .send(market_resync_message(
+                    L3_CHANNEL,
+                    market,
+                    expected_sequence,
+                    batch.sequence,
+                ))
+                .is_err();
+        }
+
+        last_sequence = batch.sequence;
+        if client.tx.send(l3_delta_message(&batch)).is_err() {
+            client.bootstrap_market = None;
+            client.subscription = None;
+            client.last_market_sequence = None;
+            return true;
+        }
+    }
+
+    client.bootstrap_market = None;
+    client.subscription = Some(market);
+    client.last_market_sequence = Some(last_sequence);
+    false
+}
+
+fn market_resync_message(
+    channel: &str,
+    market: String,
+    expected_sequence: u64,
+    current_sequence: u64,
+) -> Arc<ServerMessage> {
+    Arc::new(ServerMessage::ResyncRequired {
+        channel: channel.to_string(),
+        market: Some(market),
+        expected_sequence: Some(expected_sequence),
+        current_sequence: Some(current_sequence),
+        reason: "market sequence gap detected; resubscribe for a fresh snapshot".to_string(),
+    })
+}
+
+fn l2_delta_message(batch: &BroadcastEvent) -> Arc<ServerMessage> {
+    Arc::new(ServerMessage::Delta {
+        channel: L2_CHANNEL.to_string(),
+        market: batch.market.clone(),
+        start_sequence: batch.start_sequence,
+        sequence: batch.sequence,
+        events: batch.events.clone(),
+    })
+}
+
+fn l3_delta_message(batch: &L3BroadcastEvent) -> Arc<ServerMessage> {
+    Arc::new(ServerMessage::L3Delta {
+        channel: L3_CHANNEL.to_string(),
+        market: batch.market.clone(),
+        start_sequence: batch.start_sequence,
+        sequence: batch.sequence,
+        events: batch.events.clone(),
+    })
 }
 
 fn merge_market_batch(
@@ -1430,124 +1761,28 @@ impl AccountDispatchHandle {
 #[derive(Clone)]
 struct PersistenceDispatchHandle {
     storage: StorageRepository,
-    tx: Option<mpsc::SyncSender<PersistenceDispatch>>,
-    telemetry: Option<DispatchQueueTelemetry>,
-}
-
-enum PersistenceDispatch {
-    UpsertOrderLedger(Order),
-    CloseOrderLedger {
-        trader_id: Uuid,
-        order_id: Uuid,
-        remaining: u64,
-    },
-    AppendFill(Fill),
 }
 
 impl PersistenceDispatchHandle {
-    fn spawn(storage: StorageRepository, queue_capacity: usize) -> Self {
-        if storage.kind() == StorageBackendKind::InMemory {
-            return Self {
-                storage,
-                tx: None,
-                telemetry: None,
-            };
-        }
-
-        let telemetry = DispatchQueueTelemetry::new(queue_capacity);
-        let worker_telemetry = telemetry.clone();
-        let (tx, rx) = mpsc::sync_channel(queue_capacity);
-        let worker_storage = storage.clone();
-        thread::Builder::new()
-            .name("exchange-runtime-persistence".to_string())
-            .spawn(move || {
-                while let Ok(task) = rx.recv() {
-                    worker_telemetry.record_dequeued();
-                    match task {
-                        PersistenceDispatch::UpsertOrderLedger(order) => {
-                            worker_storage.upsert_order_ledger(order);
-                        }
-                        PersistenceDispatch::CloseOrderLedger {
-                            trader_id,
-                            order_id,
-                            remaining,
-                        } => {
-                            worker_storage.close_order_ledger(trader_id, order_id, remaining);
-                        }
-                        PersistenceDispatch::AppendFill(fill) => {
-                            worker_storage.persist_fill(fill);
-                        }
-                    }
-                }
-                worker_telemetry.mark_stopped();
-            })
-            .unwrap_or_else(|error| {
-                panic!("failed to spawn persistence dispatcher thread: {error}")
-            });
-
-        Self {
-            storage,
-            tx: Some(tx),
-            telemetry: Some(telemetry),
-        }
+    fn spawn(storage: StorageRepository) -> Self {
+        Self { storage }
     }
 
     fn upsert_order_ledger(&self, order: Order) {
-        if self
-            .send(PersistenceDispatch::UpsertOrderLedger(order.clone()))
-            .is_some()
-        {
-            return;
-        }
         self.storage.upsert_order_ledger(order);
     }
 
     fn close_order_ledger(&self, trader_id: Uuid, order_id: Uuid, remaining: u64) {
-        if self
-            .send(PersistenceDispatch::CloseOrderLedger {
-                trader_id,
-                order_id,
-                remaining,
-            })
-            .is_some()
-        {
-            return;
-        }
         self.storage
             .close_order_ledger(trader_id, order_id, remaining);
     }
 
     fn append_fill(&self, fill: Fill) {
-        if self
-            .send(PersistenceDispatch::AppendFill(fill.clone()))
-            .is_some()
-        {
-            return;
-        }
         self.storage.persist_fill(fill);
     }
 
-    fn send(&self, task: PersistenceDispatch) -> Option<()> {
-        let tx = self.tx.as_ref()?;
-        self.telemetry
-            .as_ref()
-            .expect("persistence telemetry")
-            .record_enqueue_started();
-        let blocked_at = Instant::now();
-        tx.send(task)
-            .unwrap_or_else(|_| panic!("persistence dispatcher thread terminated"));
-        self.telemetry
-            .as_ref()
-            .expect("persistence telemetry")
-            .record_enqueue_blocked(blocked_at.elapsed());
-        Some(())
-    }
-
     fn status(&self) -> DispatchQueueStatus {
-        self.telemetry
-            .as_ref()
-            .map(DispatchQueueTelemetry::snapshot)
-            .unwrap_or_else(DispatchQueueStatus::disabled)
+        DispatchQueueStatus::disabled()
     }
 }
 
@@ -1596,8 +1831,8 @@ mod tests {
     fn test_config() -> Config {
         Config {
             bind_addr: "127.0.0.1:0".to_string(),
-            database_url: "postgres://test".to_string(),
-            storage_backend: crate::storage::StorageBackendKind::InMemory,
+            checkpoint_path: None,
+            checkpoint_interval_seconds: 5,
             ws_broadcast_buffer: 64,
             ws_market_delta_batch_interval_ms: 10,
             ws_market_broadcast_workers: 1,
@@ -1605,14 +1840,9 @@ mod tests {
             market_data_service_retry_backoff_ms: 250,
             runtime_dispatch_queue_capacity: 4_096,
             account_dispatch_queue_capacity: 4_096,
-            persistence_dispatch_queue_capacity: 4_096,
             per_user_rate_limit_burst_capacity: 500,
             per_user_rate_limit_burst_window_seconds: 10,
             admin_api_token: "test-admin-token".to_string(),
-            postgres_write_batch_size: 128,
-            postgres_write_flush_interval_ms: 25,
-            postgres_write_queue_capacity: 4_096,
-            postgres_write_retry_backoff_ms: 250,
         }
     }
 

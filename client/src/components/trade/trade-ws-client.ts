@@ -14,7 +14,7 @@ type ApiSide = "BUY" | "SELL";
 
 type RawClientMessage =
   | { op: "authenticate"; api_key: string }
-  | { op: "subscribe"; channel: "l2"; market: string; last_sequence?: number | null }
+  | { op: "subscribe"; channel: "l2"; market: string }
   | { op: "unsubscribe"; channel: "l2"; market: string };
 
 type RawBookLevel = {
@@ -45,6 +45,7 @@ type RawServerMessage =
       type: "delta";
       channel: "l2";
       market: string;
+      start_sequence: number;
       sequence: number;
       events: RawBookDelta[];
     }
@@ -229,6 +230,8 @@ export class TradeWsClient {
   private socket: WebSocketLike | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private selectedMarket: MarketId;
+  private readonly marketSequences = new Map<MarketId, number>();
+  private readonly pendingSnapshots = new Set<MarketId>();
   private disposed = false;
 
   constructor(
@@ -257,6 +260,8 @@ export class TradeWsClient {
   disconnect() {
     this.disposed = true;
     this.clearReconnectTimer();
+    this.marketSequences.clear();
+    this.pendingSnapshots.clear();
     this.socket?.close();
     this.socket = null;
     this.callbacks.onStatusChange("disconnected");
@@ -269,6 +274,7 @@ export class TradeWsClient {
 
     const previousMarket = this.selectedMarket;
     this.selectedMarket = nextMarket;
+    this.pendingSnapshots.delete(previousMarket);
 
     if (this.socket?.readyState === 1) {
       this.send({
@@ -332,6 +338,11 @@ export class TradeWsClient {
         });
         return;
       case "snapshot":
+        if (!this.shouldApplySnapshot(message)) {
+          return;
+        }
+        this.marketSequences.set(message.market, message.sequence);
+        this.pendingSnapshots.delete(message.market);
         this.callbacks.onSnapshot({
           marketId: message.market,
           sequence: message.sequence,
@@ -340,6 +351,9 @@ export class TradeWsClient {
         });
         return;
       case "delta":
+        if (!this.shouldApplyDelta(message)) {
+          return;
+        }
         this.callbacks.onDelta({
           marketId: message.market,
           sequence: message.sequence,
@@ -394,11 +408,11 @@ export class TradeWsClient {
   }
 
   private subscribeCurrentMarket() {
+    this.pendingSnapshots.add(this.selectedMarket);
     this.send({
       op: "subscribe",
       channel: "l2",
       market: this.selectedMarket,
-      last_sequence: null,
     });
   }
 
@@ -408,6 +422,37 @@ export class TradeWsClient {
     }
 
     this.socket.send(JSON.stringify(message));
+  }
+
+  private shouldApplySnapshot(message: Extract<RawServerMessage, { type: "snapshot" }>) {
+    const previousSequence = this.marketSequences.get(message.market);
+    return previousSequence === undefined || message.sequence >= previousSequence;
+  }
+
+  private shouldApplyDelta(message: Extract<RawServerMessage, { type: "delta" }>) {
+    const previousSequence = this.marketSequences.get(message.market);
+    if (previousSequence === undefined) {
+      return !this.pendingSnapshots.has(message.market);
+    }
+    if (previousSequence !== undefined) {
+      if (message.sequence <= previousSequence) {
+        return false;
+      }
+      if (message.start_sequence !== previousSequence + 1) {
+        this.callbacks.onResyncRequired({
+          channel: message.channel,
+          marketId: message.market,
+          reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
+        });
+        if (message.market === this.selectedMarket) {
+          this.subscribeCurrentMarket();
+        }
+        return false;
+      }
+    }
+
+    this.marketSequences.set(message.market, message.sequence);
+    return true;
   }
 
   private clearReconnectTimer() {

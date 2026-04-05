@@ -13,25 +13,28 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Simple admin auth via `Authorization: Bearer $ADMIN_API_TOKEN`
 - Operator control-plane REST endpoints for:
   - exchange-wide start / stop trading
-  - market create / patch / delete
-  - market enable / disable / settle
+  - market create / patch / delete / settle
+  - optional admin desk user and desk order entry
+  - admin trading bots (create, start, pause, delete)
+  - competition finalize and frozen leaderboard snapshots (JSON + CSV export)
   - bulk config load
-  - admin messages
-  - leaderboard queries
+  - admin messages and live telemetry
+  - operator leaderboard query
 - Per-user token-bucket rate limiting on authenticated competitor operations, defaulting to `500 ops per 10s` and shared across REST account/trading routes and authenticated WebSocket trading messages
 - Matching engine + in-memory orderbook skeleton
-- PostgreSQL-oriented repository abstraction for user/position/order/fill state
-- Background PostgreSQL writer thread with bounded queue, batch flushing, and retry/backpressure telemetry
+- In-memory runtime repository with periodic checkpoint persistence for users, controls, balances, positions, and leaderboard snapshots
+- Atomic local checkpoint writer with health telemetry exposed through `/health`
 - Canonical per-market order-event stream inside the exchange core
 - Derived browser market-data feed built from that canonical stream
 - Optional external market-data service over a local Unix socket, with the core WebSocket API bridged onto it
 - Dedicated market-data broadcast worker threads with per-market delta batching and fanout separate from the main exchange path
-- OpenAPI docs + Swagger UI at `/docs`
+- OpenAPI spec + Swagger UI at `/docs` (covers every REST route registered in the exchange binary)
 - REST endpoints for trader visibility:
   - `GET /api/v1/markets`
   - `GET /api/v1/user`
   - `GET /api/v1/positions`
   - `GET /api/v1/portfolio`
+  - `GET /api/v1/balance`
   - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
   - `GET /api/v1/fills`
@@ -43,14 +46,25 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - `GET /api/v1/admin/state`
   - `GET|POST /api/v1/admin/users`
   - `GET /api/v1/admin/users/export.csv`
+  - `POST /api/v1/admin/users/reset`
   - `POST /api/v1/admin/trading/start`
   - `POST /api/v1/admin/trading/stop`
+  - `POST /api/v1/admin/bots`
+  - `POST /api/v1/admin/bots/{bot_id}/start`
+  - `POST /api/v1/admin/bots/{bot_id}/pause`
+  - `DELETE /api/v1/admin/bots/{bot_id}`
+  - `POST /api/v1/admin/desk/ensure`
+  - `POST /api/v1/admin/desk/orders`
   - `GET|POST /api/v1/admin/markets`
   - `PATCH|DELETE /api/v1/admin/markets/{market_id}`
   - `POST /api/v1/admin/markets/{market_id}/settle`
+  - `POST /api/v1/admin/competition/finalize`
+  - `GET /api/v1/admin/competition/snapshots/latest`
+  - `GET /api/v1/admin/competition/snapshots/{snapshot_id}`
+  - `GET /api/v1/admin/competition/snapshots/{snapshot_id}/export.csv`
   - `POST /api/v1/admin/config/load`
   - `GET|POST /api/v1/admin/messages`
-  - `POST /api/v1/admin/users/reset`
+  - `GET /api/v1/admin/telemetry`
   - `GET /api/v1/admin/leaderboard`
 - WebSocket endpoint for market data and trading events:
   - `GET /ws`
@@ -88,17 +102,18 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 ## Storage direction
 
 - Matching remains in memory.
-- Durable position, order, fill, and audit data can be routed to local PostgreSQL.
-- Exchange controls, market definitions, and admin messages are persisted through the same storage boundary.
-- `STORAGE_BACKEND=postgres` enables the PostgreSQL-backed repository.
-- The PostgreSQL backend keeps an in-memory cache for reads and pushes writes to a dedicated background writer thread.
-- The background writer uses a bounded queue plus transaction batches so the exchange path does not perform direct database writes.
-- The writer retries failed batches in order, applies backpressure by blocking enqueue when the queue is saturated, and reports queue/flush health through `/health`.
+- Runtime orderbooks, open orders, and fills stay in memory only.
+- The service writes periodic local disk checkpoints for:
+  - provisioned users and API keys
+  - exchange controls and market definitions
+  - balances, positions, and realized PnL
+  - competition leaderboard snapshots
+- On restart, the exchange reloads that checkpoint and starts with empty books and no restored resting orders.
+- `CHECKPOINT_PATH` controls the checkpoint file location. Set it to an empty string to disable disk checkpoints.
+- `CHECKPOINT_INTERVAL_SECONDS` controls how often the runtime rewrites the checkpoint file.
 - User risk is position-based, with a fixed per-market net position limit of `+/-1000`.
 - Traders can buy from flat, sell from flat, go long, and go short; there is no inventory pre-seeding requirement to place a sell order.
 - Realized PnL accumulates as positions are reduced, flipped, or settled.
-- Startup recovery rebuilds in-memory orderbooks from persisted open orders before the exchange begins serving traffic.
-- The initial schema lives at `sql/migrations/001_initial.sql`.
 - Provisioned users can now carry `role=admin`, which removes the fixed per-market net position cap for that API key.
 - A zero-dependency multi-trader stress harness lives at `tools/trader-stress-bot/`.
 
@@ -124,7 +139,7 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
 - Exchange binary: `/home/ec2-user/exchange-v2/exchange/target/release/exchange`
 - Exchange env file: `/home/ec2-user/exchange-v2/exchange.env`
 - Service names: `exchange`, `market-data-service`
-- Data store: local PostgreSQL on the same EC2 machine
+- Data store: local checkpoint file on the same EC2 machine
 - Source of truth for code updates: GitHub `origin/main`
 
 ## Update the deployed EC2 host from GitHub
@@ -181,8 +196,10 @@ Then open:
 Key environment variables:
 
 - `ADMIN_API_TOKEN`
-- `STORAGE_BACKEND=in_memory|postgres`
-- `DATABASE_URL`
+- `CHECKPOINT_PATH`
+  Defaults to `exchange.checkpoint.json`. Set to an empty string to disable checkpoint persistence entirely.
+- `CHECKPOINT_INTERVAL_SECONDS`
+  Defaults to `5`.
 - `MARKET_DATA_SERVICE_SOCKET`
   Optional Unix socket path for the external market-data service bridge. If unset, the exchange keeps using the in-process derived feed.
 - `MARKET_DATA_SERVICE_RETRY_BACKOFF_MS`
@@ -191,10 +208,6 @@ Key environment variables:
 - `WS_MARKET_BROADCAST_WORKERS`
 - `PER_USER_RATE_LIMIT_BURST_CAPACITY`
 - `PER_USER_RATE_LIMIT_BURST_WINDOW_SECONDS`
-- `POSTGRES_WRITE_BATCH_SIZE`
-- `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
-- `POSTGRES_WRITE_QUEUE_CAPACITY`
-- `POSTGRES_WRITE_RETRY_BACKOFF_MS`
 
 ## Testing and latency checks
 
@@ -207,7 +220,7 @@ Key environment variables:
 
 ## Next implementation priorities
 
-1. Extend startup recovery from lock reconciliation into full replay-based settlement recovery on top of persisted local PostgreSQL data
+1. Decide whether the current fresh-snapshot resubscribe model is sufficient for competition clients or whether to add true replay/resume support
 2. Decide whether the browser client should move order submit / cancel / amend onto the existing WS trading protocol or keep REST for ticket actions
 3. Open public port `80` if automatic `http` to `https` redirects are required
 4. Load test the deployed EC2 stack under competition-like traffic

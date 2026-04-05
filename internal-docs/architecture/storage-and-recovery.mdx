@@ -3,39 +3,25 @@ title: "Storage And Recovery"
 description: "How durable state is written today and what restart recovery does and does not cover."
 ---
 
-## Storage modes
+## Runtime model
 
-The backend supports two storage backends:
+The backend now uses one storage model:
 
-- `in_memory`
-- `postgres`
+- matching and orderbooks stay in memory
+- runtime open orders and fills stay in memory only
+- a local disk checkpoint is rewritten periodically
 
-`in_memory` is still the default local mode.
+Checkpoint contents:
 
-The deployed EC2 host should run with:
-
-```text
-STORAGE_BACKEND=postgres
-```
-
-## PostgreSQL write model
-
-The PostgreSQL backend does not write directly on the hot matching path.
-
-Instead it:
-
-1. keeps an in-memory cache for reads
-2. enqueues durable mutations to a bounded queue
-3. flushes batches on a dedicated background writer thread
-4. retries failed batches in order
-5. reports queue and flush health through `/health`
+1. provisioned users and API keys
+2. exchange controls and market definitions
+3. balances, positions, and realized PnL
+4. competition leaderboard snapshots
 
 Config knobs:
 
-- `POSTGRES_WRITE_BATCH_SIZE`
-- `POSTGRES_WRITE_FLUSH_INTERVAL_MS`
-- `POSTGRES_WRITE_QUEUE_CAPACITY`
-- `POSTGRES_WRITE_RETRY_BACKOFF_MS`
+- `CHECKPOINT_PATH`
+- `CHECKPOINT_INTERVAL_SECONDS`
 
 ## Health response
 
@@ -47,10 +33,10 @@ Example deployed response:
   "service": "exchange",
   "now": "2026-03-18T16:41:45.769893578+00:00",
   "persistence": {
-    "backend": "postgres",
+    "backend": "in_memory",
     "mode": "ok",
-    "queue_capacity": 4096,
-    "backpressure_threshold": 3277,
+    "queue_capacity": 1,
+    "backpressure_threshold": 1,
     "queue_depth": 0,
     "in_flight_ops": 0,
     "backlog_depth": 0,
@@ -76,20 +62,21 @@ Example deployed response:
 
 On process start, the backend:
 
-1. reads persisted open orders from the repository
-2. rebuilds in-memory orderbooks
-3. serves position, fill, and order queries from the storage-backed cache
-4. starts serving traffic with those restored books
+1. loads the latest checkpoint file if one exists
+2. restores users, markets, balances, positions, and competition snapshots
+3. starts with empty orderbooks and no restored resting orders
+4. expects clients to reconnect and resubscribe for fresh market-data snapshots
 
-This means resting orders survive a process restart if they were already flushed to PostgreSQL, and user positions remain queryable after the process comes back.
+This means user positions and PnL survive a restart, but live books do not.
 
 ## What recovery does not do yet
 
 - no full replay-based settlement recovery
 - no historical recomputation of positions and PnL from an event journal alone
 - no durable continuation of market-data sequence numbers
-- no crash guarantee for writes still queued but not flushed
+- no recovery of runtime-only open orders or fills
+- no crash guarantee for changes made after the most recent checkpoint flush
 
 ## Operational meaning
 
-Today, restart recovery is good enough to restore live resting orders into the book and keep persisted positions available, but it is not yet a complete replay-driven engine-state recovery system.
+Today, restart recovery is intentionally snapshot-based rather than replay-driven. It restores competition state, but every restart is effectively a fresh market-data session.

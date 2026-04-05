@@ -34,11 +34,11 @@ When this message hits you:
 
 Do this:
 
-1. treat `start_sequence` as the first sequence number you expect for the next batch
-2. if `start_sequence` is not exactly your expected next sequence, discard your local book for that market
-3. send a new `subscribe`
+1. compare your local last-applied sequence for that market against `expected_sequence` from the `resync_required` message (and treat any gap the server reports as authoritative)
+2. discard your local book state for that market
+3. send a new `subscribe` for the same channel and market
 4. replace local state with the returned `snapshot` or `l3_snapshot`
-5. resume processing deltas from the new snapshot sequence
+5. resume processing `delta` / `l3_delta` batches using the new snapshot’s `sequence` as your baseline
 
 ## User-event lag
 
@@ -59,9 +59,10 @@ Do this:
 
 1. re-fetch `/api/v1/user`
 2. re-fetch `/api/v1/positions`
-3. re-fetch `/api/v1/open-orders`
-4. re-fetch `/api/v1/fills`
-5. reconnect the socket if your client cannot confidently recover local order state
+3. re-fetch `/api/v1/balance`
+4. re-fetch `/api/v1/open-orders`
+5. re-fetch `/api/v1/fills`
+6. reconnect the socket if your client cannot confidently recover local order state
 
 ## Market-metadata lag
 
@@ -86,26 +87,25 @@ Do this:
 
 ## Restart behavior
 
-After a backend restart:
+After a backend restart, the process reloads the JSON checkpoint (when configured) for users, markets, balances, positions, and related metadata. **Resting open orders are not included in that checkpoint**, so the in-memory order books start empty and any previous resting orders are gone from the exchange’s view.
 
-- Open orders are restored into the in-memory books from storage.
-- Persisted positions remain queryable.
-- Market-data sequences restart from the rebuilt derived state for each market.
-- No historical replay is available.
+- Positions and balances restored from the checkpoint remain queryable over REST.
+- Market-data sequences are rebuilt from the live engine state (empty books until new orders arrive).
+- No historical market-data or user-event replay is available.
 
-Treat a reconnect after restart as a fresh session and re-bootstrap account state over REST before trusting cached data.
+Treat a reconnect after restart as a fresh session: re-fetch [open orders](/rest/open-orders), [portfolio](/rest/portfolio), and [markets](/rest/markets) over REST before trusting cached client state.
 
 ## Current recovery boundary
 
 What you can rely on:
 
-- Open-order recovery into the in-memory book.
-- Persisted position reads after restart.
-- Market-data gap detection.
-- User-event lag detection.
+- Checkpoint restore for users, markets, balances, and positions (when `CHECKPOINT_PATH` is set and a file exists).
+- Market-data gap and lag detection via `resync_required`.
+- User-event and market-metadata lag detection via `resync_required`.
 
 Still missing:
 
+- Durable restore of resting open orders across process restarts.
 - Full settlement replay.
-- Durable sequence continuation.
+- Durable sequence continuation across restarts.
 - Historical gap-fill API.

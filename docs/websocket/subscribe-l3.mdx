@@ -12,7 +12,7 @@ This is the API-user alternative to batched `l2`: use `l3` when your strategy ne
 <RequestExample>
 
 ```json Client Message
-{"op":"subscribe","channel":"l3","market":"BTC-USD","last_sequence":null}
+{"op":"subscribe","channel":"l3","market":"BTC-USD"}
 ```
 
 </RequestExample>
@@ -51,7 +51,6 @@ This is the API-user alternative to batched `l2`: use `l3` when your strategy ne
 - `op` must be `subscribe`.
 - `channel` must be `l3`.
 - `market` is the market you want to subscribe to.
-- `last_sequence` is part of the message shape, but the supported recovery flow still expects a fresh resubscribe after a gap.
 
 ## What happens next
 
@@ -71,3 +70,4 @@ This is the API-user alternative to batched `l2`: use `l3` when your strategy ne
 - If you need multiple markets, open multiple sockets.
 - Use `start_sequence` to validate the first event in each `l3_delta`, then store `sequence` as your new last applied market sequence.
 - `l3` is a public order feed. It does not include private trader identity.
+- Older clients may still send `last_sequence`; the server ignores it and always starts with a fresh snapshot.
