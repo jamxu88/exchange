@@ -1,11 +1,13 @@
 ---
-title: "Error Codes"
-description: "REST error behavior and WebSocket reject and error codes that competitors should handle."
+title: "Error codes"
+description: "REST responses and WebSocket error and reject codes—so your client can react clearly."
 ---
 
-## REST error shape
+Your integration will be smoother if you map **HTTP status codes** and WebSocket **`error`** / **`reject`** payloads to user-visible messages and retry logic.
 
-REST errors deliver a single `error` field so your client can surface what went wrong:
+## REST error body
+
+Errors return a single string field:
 
 ```json
 {
@@ -13,32 +15,28 @@ REST errors deliver a single `error` field so your client can surface what went 
 }
 ```
 
-## REST status mapping
+Use the message in logs or a debug panel while you are building; in production, translate it to a clear line for your team.
 
-Handle these statuses explicitly in your error UI:
+## REST status codes
 
-| Status | What it means for you |
+| Status | What it usually means |
 | --- | --- |
-| `400` | Bad payload: wrong market, price, tick-size, quantity, amend, or market order liquidity |
-| `401` | Missing or invalid API key |
-| `429` | Authenticated rate limit bucket (`500 ops per 10s` by default) exceeded |
-| `403` | Resource exists but belongs to another competitor |
-| `404` | Order, market, or user not found |
-| `409` | Trade would breach limits, market status blocks trading, or duplicate username |
-| `500` | Matching engine unavailable, numeric overflow, or other unexpected backend failure |
+| `400` | Request body or fields are invalid (market, price, tick, quantity, amend, or market-order liquidity). |
+| `401` | Missing or wrong **`x-api-key`**. |
+| `429` | You exceeded the shared authenticated budget (default **500 ops / 10s**). See [Rate limits](/reference/rate-limits). |
+| `403` | The resource exists but belongs to **another** competitor. |
+| `404` | Unknown order, market, or user for that operation. |
+| `409` | Business rule conflict—limits, market status, duplicate username, etc. |
+| `500` | Engine unavailable, overflow, or unexpected server fault—retry with care. |
 
-Use [Rate limits](/reference/rate-limits) for the exact shared-bucket behavior behind `429`.
+## WebSocket `type: "error"`
 
-## WebSocket `error` messages
-
-These tell you about protocol-level problems you need to fix before trading.
-
-Known codes you may see:
+Protocol issues you should fix **before** relying on trading:
 
 - `invalid_message`
 - `unsupported_channel`
 - `invalid_api_key`
-- `unauthenticated` (for example, subscribing to `l3` before a successful `authenticate`)
+- `unauthenticated` (for example, **`l3`** before a successful **`authenticate`**)
 
 Example:
 
@@ -50,11 +48,11 @@ Example:
 }
 ```
 
-## WebSocket `reject` messages
+## WebSocket `type: "reject"`
 
-Trading operations fail with a `reject`. Handle every code so you stay in sync with the exchange.
+Trading requests that fail validation or risk checks arrive as **`reject`**. Handling these keeps your local model aligned with the exchange.
 
-Known codes:
+Codes you may see:
 
 - `unauthenticated`
 - `trading_disabled`
@@ -90,13 +88,13 @@ Example:
 }
 ```
 
-## Health degradation
+## Health: `status` field
 
-Check `GET /health` for overall readiness:
+[GET /health](/rest/health) includes a top-level **`status`**:
 
-- `status: "ok"` when checkpoint persistence is not `retrying`, `backpressured`, or `stopped`, and `runtime_dispatch`, `account_dispatch`, and `persistence_dispatch` are not `backpressured` or `stopped`. A `persistence.mode` of `disabled` (checkpointing off) is still compatible with `status: "ok"`.
-- `status: "degraded"` when any of those persistence or dispatch modes indicates a fault or overload.
+- **`ok`** — Checkpoint writer is healthy (or checkpointing is off), and core dispatch queues are not overloaded or stopped.
+- **`degraded`** — Persistence or a dispatch queue reports retry, backpressure, or stop—worth alerting on if you operate dashboards.
 
-See [Health](/rest/health) for field-level detail.
+See the [Health](/rest/health) page for field definitions.
 
-Internal operator-only error cases are intentionally not expanded here.
+Admin-only failure modes are **not** listed here; this reference targets **competitor** clients.

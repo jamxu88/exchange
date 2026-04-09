@@ -1,29 +1,29 @@
 ---
 title: "REST API"
-description: "Competitor-facing REST overview and links to the individual endpoint pages."
+description: "Overview of competitor REST endpoints—markets, account, and orders—with links to each page."
 ---
 
-Use REST for bootstrap, recovery, and request-response order management. This is the safest surface to trust after reconnects, sequence uncertainty, or settlement transitions.
+**REST** is the right tool when you need a clear, request–response answer: after a disconnect, when you are unsure of local state, or when a market changes status. Use it alongside WebSocket; many teams use WebSocket for speed and REST for truth.
 
 <Columns cols={3}>
-  <Card title="Public Endpoints" href="#public-endpoints">
-    Connectivity and market metadata with no authentication required.
+  <Card title="Public endpoints" href="#public-endpoints">
+    Health and market list—no API key required.
   </Card>
-  <Card title="Account Endpoints" href="#account-endpoints">
-    Identity, portfolio, positions, fills, open orders, and live leaderboard state.
+  <Card title="Account endpoints" href="#account-endpoints">
+    Who you are, balances, positions, orders, fills, and the live leaderboard.
   </Card>
-  <Card title="Trading Endpoints" href="#trading-endpoints">
-    Submit, amend, and cancel limit and market orders over HTTP.
+  <Card title="Trading endpoints" href="#trading-endpoints">
+    Create, amend, and cancel limit and market orders over HTTP.
   </Card>
 </Columns>
 
-## Typical competitor sequence
+## Suggested first calls
 
-1. Call [Get User](/rest/user) to confirm identity.
-2. Call [Get Markets](/rest/markets) to learn active markets and trading constraints.
-3. Call [Get Portfolio](/rest/portfolio) to bootstrap positions and limits.
-4. Call [Get Open Orders](/rest/open-orders) and [Get Fills](/rest/fills) after reconnects or if your local state is uncertain.
-5. Use [Create Order](/rest/submit-order), [Amend Order](/rest/amend-order), and [Cancel Order](/rest/cancel-order) for order management.
+1. [Get User](/rest/user) — confirm identity.
+2. [Get Markets](/rest/markets) — symbols, status, tick size, minimum size.
+3. [Get Portfolio](/rest/portfolio) — positions and how risk limits apply to you.
+4. After reconnects or doubt, [Get Open Orders](/rest/open-orders) and [Get Fills](/rest/fills).
+5. [Create Order](/rest/submit-order), [Amend Order](/rest/amend-order), [Cancel Order](/rest/cancel-order) when you want HTTP order flow.
 
 ## Public endpoints
 
@@ -46,14 +46,14 @@ Use REST for bootstrap, recovery, and request-response order management. This is
 - [Amend Order](/rest/amend-order)
 - [Cancel Order](/rest/cancel-order)
 
-## Request model
+## Request conventions
 
-- `side` is `BUY` or `SELL`
-- `order_type` is `limit` or `market` and defaults to `limit`
-- `price`, `quantity`, and `remaining` are integer values
-- for market orders, send `price: 0`; the server ignores the field and executes against live opposite-side depth
-- competitors can buy from flat, sell from flat, go long, and go short
-- risk is enforced with a fixed per-market worst-case net limit of `+/-1000`
-- authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, and that budget is shared with authenticated WebSocket trading messages; see [Rate limits](/reference/rate-limits)
-- `open-orders` and `fills` accept an optional `market` query parameter
-- REST is the recommended recovery source of truth after reconnects or user-stream uncertainty
+- **`side`:** `BUY` or `SELL`
+- **`order_type`:** `limit` or `market` (default `limit`)
+- **`price`**, **`quantity`**, **`remaining`:** unsigned integers
+- **Market orders:** send **`price: 0`**; the engine matches against the opposite side of the book
+- **Position style:** you may buy or sell from flat, go long or short, subject to risk limits
+- **Risk:** default worst-case net exposure per market is **±1000** contracts (unless organizers assign a different role)
+- **Rate limit:** authenticated REST + authenticated WebSocket trading share **500 ops / 10s** by default; see [Rate limits](/reference/rate-limits)
+- **Filters:** [Get Open Orders](/rest/open-orders) and [Get Fills](/rest/fills) accept optional **`market`** query parameter
+- **Recovery:** when in doubt, prefer REST to realign your client with the server

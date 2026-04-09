@@ -3,7 +3,7 @@ title: "Server Messages"
 description: "The message types competitors should handle after connecting over WebSocket."
 ---
 
-These are the main message types a competitor client should expect from the server.
+Below are the WebSocket payloads your client should recognize and handle cleanly.
 
 ## `heartbeat`
 
@@ -220,7 +220,7 @@ Treat `market_state` as the live websocket push for market metadata and lifecycl
 }
 ```
 
-Competitors should treat this as operator guidance that may affect trading behavior, such as desk notices, trading halts, or settlement announcements.
+Treat **`admin_message`** as guidance from organizers—trading halts, settlement notes, or other announcements that may change how you should behave even before you refresh REST.
 
 ## `resync_required`
 
@@ -235,15 +235,15 @@ Competitors should treat this as operator guidance that may affect trading behav
 }
 ```
 
-Use [Recovery and resync](/reference/recovery-and-resync) for the recommended client response.
+Step-by-step recovery: [Recovery and resync](/reference/recovery-and-resync).
 
-## Required handling
+## Handling checklist
 
-- `heartbeat` means the connection is still alive.
-- `snapshot` and `delta` are the aggregated `l2` market-data source of truth while that subscription is healthy.
-- `l3_snapshot` and `l3_delta` are the raw per-order market-data source of truth while an authenticated `l3` subscription is healthy.
-- For `delta` and `l3_delta`, verify that `start_sequence` is exactly one greater than your last applied market sequence, then apply all `events` in order and store `sequence` as the new last applied value.
-- `fill` and `order_state` are the user-scoped state feed after authentication.
-- `market_state` is the live market-definition feed for status and metadata changes.
-- `admin_message` can change the practical trading environment even before you refresh REST state.
-- `resync_required` means your local state is no longer trustworthy and must be rebuilt.
+- **`heartbeat`** — connection is alive; you can ignore the body if you only need a liveness signal.
+- **`snapshot` / `delta`** — aggregated **`l2`** book; authoritative while your subscription is healthy.
+- **`l3_snapshot` / `l3_delta`** — raw public **`l3`** book; authoritative while your authenticated **`l3`** subscription is healthy.
+- **`delta` / `l3_delta`** — confirm **`start_sequence`** continues from your last applied sequence, apply **`events`** in order, then save **`sequence`**.
+- **`fill` / `order_state`** — your private activity after authentication.
+- **`market_state`** — live changes to market definitions (`status`, ticks, etc.).
+- **`admin_message`** — organizer announcements; pair with REST refresh when in doubt.
+- **`resync_required`** — drop and rebuild local state using the recovery guide.

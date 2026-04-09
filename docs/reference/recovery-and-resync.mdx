@@ -1,25 +1,21 @@
 ---
-title: "Recovery And Resync"
-description: "How a competitor client should react to sequence gaps, lag, and exchange restarts."
+title: "Recovery and resync"
+description: "Keep your book and account state correct after sequence gaps, slow consumers, or a server restart."
 ---
 
-## Market-data sequencing
+Markets on WebSocket are **sequenced**. When you fall behind or the server detects a gap, you will see **`resync_required`**. After a **restart**, books start fresh even though balances and positions may reload from checkpoint—so REST is your friend.
 
-Every market-data delta carries a per-market sequence range.
+## How market-data sequencing works
 
-Here’s how the flow works:
+- Each **`subscribe`** is followed by a **`snapshot`** (or **`l3_snapshot`**).
+- **`l2`** rebuilds **aggregated** levels; **`l3`** rebuilds the **public per-order** view.
+- Each **`delta`** / **`l3_delta`** includes **`start_sequence`** (first event in the batch) and **`sequence`** (last in the batch).
+- Batches arrive in **order**; one frame may contain **multiple** events.
+- **`resync_required`** means you should **discard** local book state for that stream and **subscribe again**.
 
-- A fresh `subscribe` sends a snapshot.
-- `l2` snapshots rebuild your aggregated price-level book state.
-- `l3_snapshot` rebuilds your raw per-order public book state.
-- Each `delta` or `l3_delta` includes `start_sequence` for the first event in the batch and `sequence` for the last event in the batch.
-- Deltas arrive in contiguous sequence order, even when the server batches several events into one frame.
-- The server emits `resync_required` whenever it detects a gap.
-- The same message fires when your broadcast receiver lags behind.
+## When you see `resync_required` (market data)
 
-## Client action for market-data resync
-
-When this message hits you:
+Example:
 
 ```json
 {
@@ -32,17 +28,17 @@ When this message hits you:
 }
 ```
 
-Do this:
+**What to do**
 
-1. compare your local last-applied sequence for that market against `expected_sequence` from the `resync_required` message (and treat any gap the server reports as authoritative)
-2. discard your local book state for that market
-3. send a new `subscribe` for the same channel and market
-4. replace local state with the returned `snapshot` or `l3_snapshot`
-5. resume processing `delta` / `l3_delta` batches using the new snapshot’s `sequence` as your baseline
+1. Compare your last applied sequence to **`expected_sequence`**; treat the server as source of truth.
+2. Clear **local** book state for that market (and channel).
+3. Send **`subscribe`** again for the same **`channel`** and **`market`**.
+4. Replace state from the new **`snapshot`** or **`l3_snapshot`**.
+5. Continue from the new baseline **`sequence`**.
 
-## User-event lag
+## When the user event stream lags
 
-When the user event stream lags, you get:
+Example:
 
 ```json
 {
@@ -55,18 +51,18 @@ When the user event stream lags, you get:
 }
 ```
 
-Do this:
+**What to do**
 
-1. re-fetch `/api/v1/user`
-2. re-fetch `/api/v1/positions`
-3. re-fetch `/api/v1/balance`
-4. re-fetch `/api/v1/open-orders`
-5. re-fetch `/api/v1/fills`
-6. reconnect the socket if your client cannot confidently recover local order state
+1. `GET /api/v1/user`
+2. `GET /api/v1/positions`
+3. `GET /api/v1/balance`
+4. `GET /api/v1/open-orders`
+5. `GET /api/v1/fills`
+6. **Reconnect** WebSocket if you still cannot trust local order state.
 
-## Market-metadata lag
+## When market metadata lags
 
-When the market-metadata stream lags, you may get:
+Example:
 
 ```json
 {
@@ -79,33 +75,33 @@ When the market-metadata stream lags, you may get:
 }
 ```
 
-Do this:
+**What to do**
 
-1. re-fetch `/api/v1/markets`
-2. replace your cached market definitions
-3. keep using websocket `market_state` pushes after the refresh
+1. `GET /api/v1/markets`
+2. Replace cached definitions in your client.
+3. Keep applying live **`market_state`** messages after you are caught up.
 
-## Restart behavior
+## After a server restart
 
-After a backend restart, the process reloads the JSON checkpoint (when configured) for users, markets, balances, positions, and related metadata. **Resting open orders are not included in that checkpoint**, so the in-memory order books start empty and any previous resting orders are gone from the exchange’s view.
+When the process comes back:
 
-- Positions and balances restored from the checkpoint remain queryable over REST.
-- Market-data sequences are rebuilt from the live engine state (empty books until new orders arrive).
-- No historical market-data or user-event replay is available.
+- **Checkpoint** (if enabled) restores **users**, **markets**, **balances**, **positions**, and related metadata.
+- **Resting open orders are not** in that checkpoint—in-memory books are **empty** and old resting orders are **gone** from the server’s perspective.
+- **Market-data sequences** rebuild from the new live state (empty until new orders arrive).
+- There is **no** replay API for old WebSocket history.
 
-Treat a reconnect after restart as a fresh session: re-fetch [open orders](/rest/open-orders), [portfolio](/rest/portfolio), and [markets](/rest/markets) over REST before trusting cached client state.
+**Treat a restart like a new session:** pull [open orders](/rest/open-orders), [portfolio](/rest/portfolio), and [markets](/rest/markets) over REST before you trust UI or bot memory.
 
-## Current recovery boundary
+## What the platform guarantees today
 
-What you can rely on:
+**You can rely on**
 
-- Checkpoint restore for users, markets, balances, and positions (when `CHECKPOINT_PATH` is set and a file exists).
-- Market-data gap and lag detection via `resync_required`.
-- User-event and market-metadata lag detection via `resync_required`.
+- Checkpoint restore for users, markets, balances, and positions (when configured and a file exists).
+- **`resync_required`** when market-data or metadata streams detect gaps or lag.
 
-Still missing:
+**Not provided yet**
 
-- Durable restore of resting open orders across process restarts.
-- Full settlement replay.
-- Durable sequence continuation across restarts.
-- Historical gap-fill API.
+- Restoring resting orders across restarts.
+- Full settlement history replay.
+- Stable sequence numbers across process restarts.
+- A historical gap-fill HTTP API.

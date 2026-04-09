@@ -1,71 +1,71 @@
 ---
 title: "Exchange API"
-description: "Welcome to the Quant@Illinois Trading Competition! This year, we have added an API to our exchange. This should open up a lot of possibilities and hopefully make the experience more fun and competitive. Make sure to read through all of the docs to fully understand what you can do with this API!"
+description: "Welcome to the Quant@Illinois Trading Competition API. Here you will find everything you need to connect, trade, and stay in sync when markets move or reconnect."
 ---
 
-The Exchange API exposes a compact competitor surface area: bootstrap over REST, trade over REST or WebSocket, choose between batched aggregated `l2` depth or authenticated raw `l3` market data, and recover cleanly when the operator disables or settles a market.
+Welcome. This site documents the exchange **REST** and **WebSocket** APIs you will use during the competition. You can bootstrap and recover over **REST**, stream market data and private events over **WebSocket**, and choose either aggregated **`l2`** depth or authenticated raw **`l3`** public order updates—whichever fits your strategy.
 
 <Columns cols={2}>
-  <Card title="Competition Guide" href="/reference/competition-guide">
-    Event-day flow, trading rules, recovery expectations, and settlement behavior.
+  <Card title="Competition guide" href="/reference/competition-guide">
+    Start here for event-day flow, rules that affect orders, and what to do when markets settle.
   </Card>
 
   <Card title="Authentication" href="/reference/authentication">
-    REST and WebSocket auth, rate limits, and the first calls every competitor should make.
+    How to use your API key on REST and WebSocket, plus the first calls we recommend.
   </Card>
 
   <Card title="Rate limits" href="/reference/rate-limits">
-    Understand the shared REST and WebSocket bucket before you build your trading loop.
+    One shared budget for authenticated REST and WebSocket trading—know what counts before you loop.
   </Card>
 
   <Card title="REST API" href="/reference/rest-api">
-    Bootstrap state, pull account data, and manage orders over HTTP.
+    Account state, health, markets, and order management over HTTP—great for recovery and certainty.
   </Card>
 
   <Card title="WebSocket API" href="/reference/websocket-api">
-    Choose between public `l2` and authenticated `l3`, submit order actions, and handle user-scoped events.
+    Live books, fills, order updates, and fast order actions on a single connection.
   </Card>
 </Columns>
 
 ## Base URLs
 
-- REST: `https://exchange.jamesxu.dev`
-- WebSocket: `wss://exchange.jamesxu.dev/ws`
+- **REST:** `https://exchange.jamesxu.dev`
+- **WebSocket:** `wss://exchange.jamesxu.dev/ws`
 
-## What competitors need to implement
+## What to build
 
-1. Verify identity with [Get User](/rest/user).
-2. Fetch [Get Markets](/rest/markets) and cache market status, tick size, and minimum quantity.
-3. Bootstrap account state with [Get Portfolio](/rest/portfolio).
-4. Subscribe to WebSocket `l2` for compact aggregated depth or authenticated `l3` for raw per-order updates.
-5. Handle `fill`, `order_state`, `admin_message`, and `resync_required`.
-6. Refresh state after reconnects, disablement, or settlement.
+1. Confirm who you are with [Get User](/rest/user).
+2. Load [Get Markets](/rest/markets) and cache `status`, `tick_size`, and `min_order_quantity` for each symbol you trade.
+3. Bootstrap risk and positions with [Get Portfolio](/rest/portfolio).
+4. Subscribe to **`l2`** for compact depth, or authenticate and use **`l3`** if you need per-order public detail.
+5. Handle **`fill`**, **`order_state`**, **`admin_message`**, and **`resync_required`** on WebSocket.
+6. After reconnects, halts, or settlement, refresh state from REST so your client matches the server.
 
-## Core operating rules
+## Rules at a glance
 
-- Prices and quantities are integer values.
-- `side` is always `BUY` or `SELL`.
-- Standard competitor accounts are capped at `+/-1000` worst-case net position per market.
-- `l2` market data is public and aggregated by price level; `l3` is authenticated and exposes the public per-order feed.
-- Authenticated competitor operations are limited by a shared per-user bucket of `500 ops per 10s`, covering REST account/trading calls and authenticated WebSocket trading messages. Use [Rate limits](/reference/rate-limits) for the exact counted operations and error behavior.
-- After settlement, positions are flattened at the market settlement price and final PnL becomes realized for that market.
+- **Prices and quantities** are integers.
+- **`side`** is **`BUY`** or **`SELL`**.
+- **Standard teams** have a worst-case **±1000** net position cap per market (unless organizers assign a different role).
+- **`l2`** is public and aggregated by price; **`l3`** is authenticated and shows the public per-order lifecycle.
+- **Authenticated** REST and WebSocket trading share one bucket: **500 operations per 10 seconds** by default. Details: [Rate limits](/reference/rate-limits).
+- **After settlement**, positions for that market flatten at the settlement price and PnL is realized there.
 
-## Quick links
+## More depth
 
 <Columns cols={2}>
-  <Card title="Market Lifecycle" href="/reference/market-lifecycle">
-    Market states, trading halts, and settlement transitions.
+  <Card title="Market lifecycle" href="/reference/market-lifecycle">
+    Enabled, disabled, and settled—and how that affects what you can send.
   </Card>
 
-  <Card title="Recovery And Resync" href="/reference/recovery-and-resync">
-    The required client response to sequence gaps and lag.
+  <Card title="Recovery and resync" href="/reference/recovery-and-resync">
+    Sequence gaps, stream lag, and restarts—how to get back to a correct book and account view.
   </Card>
 
-  <Card title="Error Codes" href="/reference/error-codes">
-    REST status mapping and WebSocket reject and error codes.
+  <Card title="Error codes" href="/reference/error-codes">
+    REST status codes and WebSocket **`error`** / **`reject`** codes worth handling in your UI.
   </Card>
 
-  <Card title="Server Messages" href="/websocket/server-messages">
-    All WebSocket message types a competitor should handle.
+  <Card title="Server messages" href="/websocket/server-messages">
+    Reference for WebSocket message shapes from the exchange.
   </Card>
 </Columns>

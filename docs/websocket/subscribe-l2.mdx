@@ -3,11 +3,11 @@ title: "Subscribe L2"
 description: "Subscribe to one aggregated price-level market-data stream on the socket."
 ---
 
-Use `subscribe` with channel `l2` to receive a fresh aggregated snapshot and then sequenced price-level deltas for one market.
+Send **`subscribe`** with **`"channel": "l2"`** to receive one **aggregated** book snapshot, then **sequenced** price-level updates for a single market.
 
-`l2` is the browser-oriented market-data feed. It is derived from the canonical order-event stream, aggregated by price level, and flushed in short batches around every `100ms`.
+**`l2`** is ideal when you want compact depth: the server rolls public order activity into **price levels** and batches updates about every **`100ms`**. No API key is required.
 
-API clients can also use `l2` when they want compact, batched depth instead of the raw per-order `l3` feed.
+For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe L3](/websocket/subscribe-l3)).
 
 <RequestExample>
 

@@ -1,117 +1,110 @@
 ---
 title: "Competition guide"
-description: "The practical checklist competitors should follow before trading, during the event, and at settlement."
+description: "A concise checklist for before you trade, during the event, and after settlement."
 ---
 
-This page is the short path to the decisions you actually need to make on event day.
+Use this page as your **event-day map**: what to wire up first, which rules affect orders, and how to refresh state when markets close.
 
 <Columns cols={3}>
-  <Card title="Before Trading" href="#before-trading">
-    Authenticate, fetch markets, bootstrap your portfolio, and bring up any required sockets.
+  <Card title="Before trading" href="#before-trading">
+    Keys, identity, markets, portfolio, and (optional) WebSocket.
   </Card>
-  <Card title="While Trading" href="#while-trading">
-    Respect the position cap, price rules, quantity rules, and recovery model.
+  <Card title="While trading" href="#while-trading">
+    Order rules, REST vs WebSocket split, and what “accepted” really means.
   </Card>
-  <Card title="After Settlement" href="#after-settlement">
-    Refresh state, confirm realized PnL, and distinguish live versus official standings.
+  <Card title="After settlement" href="#after-settlement">
+    Refresh everything and know how live leaderboard relates to final results.
   </Card>
 </Columns>
 
 ## Before trading
 
-1. Grab your assigned API key from the operator.
-2. Call [Get User](/rest/user) to confirm `username`, `trader_id`, and `role`.
-3. Cache every market’s `market_id`, `status`, `tick_size`, `min_order_quantity`, and `reference_price` from [Get Markets](/rest/markets).
-4. Bootstrap positions and limits with [Get Portfolio](/rest/portfolio).
-5. Open a WebSocket if you need live book updates or user-specific events.
+1. Collect your **API key** from the organizers.
+2. Call [Get User](/rest/user) and verify **`username`**, **`trader_id`**, and **`role`**.
+3. From [Get Markets](/rest/markets), cache each **`market_id`**, **`status`**, **`tick_size`**, **`min_order_quantity`**, and **`reference_price`** you rely on.
+4. Call [Get Portfolio](/rest/portfolio) so you know positions and how limits apply.
+5. Open a **WebSocket** if you want live books, fills, or low-latency order messages.
 
 ## While trading
 
-### Rules that affect order entry
+### Order and risk rules
 
-- `price`, `quantity`, and `remaining` are integer values.
-- `side` is always `BUY` or `SELL`.
-- Standard competitors have a fixed worst-case per-market net position limit of `+/-1000`.
-- Prices must align to the market `tick_size`.
-- Quantities must be at least the market `min_order_quantity`.
-- Authenticated competitor operations are limited by a per-user bucket of `500 ops per 10s`. That budget is shared across REST account/trading calls and authenticated WebSocket trading messages. Use [Rate limits](/reference/rate-limits) for the exact counted operations.
+- **`price`**, **`quantity`**, and **`remaining`** are integers.
+- **`side`** is **`BUY`** or **`SELL`**.
+- Default accounts are subject to a **±1000** worst-case net position cap **per market** (unless organizers assign a different role).
+- **`price`** must align to the market **`tick_size`**.
+- **`quantity`** must be at least **`min_order_quantity`**.
+- Authenticated REST and authenticated WebSocket trading share **500 operations / 10 seconds** by default. See [Rate limits](/reference/rate-limits) for the exact list.
 
-### Recommended client split
+### Suggested architecture
 
-Use REST for bootstrap and recovery:
+**REST** — bootstrap and recovery:
 
 - [Get User](/rest/user)
 - [Get Portfolio](/rest/portfolio)
-- [Get Balance](/rest/balance) (optional; per-asset free and locked)
+- [Get Balance](/rest/balance) (optional: per-asset free vs locked)
 - [Get Open Orders](/rest/open-orders)
 - [Get Fills](/rest/fills)
 - [Get Markets](/rest/markets)
 
-Use WebSocket for:
+**WebSocket** — live behavior:
 
-- aggregated price-level market data on `l2`
-- short batched `l2` `delta` updates, usually flushed about every `100ms`
-- authenticated raw per-order public market data on `l3`
-- user `fill` events
-- user `order_state` events
-- low-latency order actions
+- Public aggregated **`l2`** depth (batched ~**100ms**)
+- Authenticated raw public **`l3`** order stream
+- Your **`fill`** and **`order_state`** events
+- **`submit_order`**, **`cancel_order`**, **`amend_order`** when you want socket-based entry
 
-Current limitation:
+**Note:** only **one** market-data subscription per connection today—use extra sockets for more symbols.
 
-- one market-data subscription per connection
+### When the exchange accepts an order
 
-### What a successful order means
-
-When an order is accepted:
-
-- it may fill immediately, rest on the book, or do both
-- the REST response can include immediate `fills`
-- `resting: true` means remaining quantity was posted to the book
-- `order_state` and `fill` messages are the live account-state feed while your socket is healthy
-- the `l2` market-data `snapshot` and `delta` feed is aggregated by price level
-- the `l3_snapshot` and `l3_delta` feed is a public per-order feed for strategy logic
-- use `order_state` for your own exact resting-order detail
-- market-data `delta` messages can carry multiple ordered events, so validate `start_sequence` and then advance your local book sequence to `sequence`
+- The order may **fill**, **rest**, or **partially fill then rest**.
+- The REST response may include immediate **`fills`**.
+- **`resting: true`** means remaining size is on the book.
+- While connected, **`order_state`** and **`fill`** carry your live account-side updates.
+- **`l2`** is price-level aggregated; **`l3`** is per-order **public** data for strategies.
+- For **your** exact resting lines, combine **`order_state`** with REST [open orders](/rest/open-orders).
+- A single **`delta`** or **`l3_delta`** can bundle multiple events—always check **`start_sequence`** and advance to **`sequence`**.
 
 ## Recovery during the event
 
-If you receive `resync_required`:
+If you receive **`resync_required`**:
 
-1. discard local book state for the affected market
-2. resubscribe and replace local state from the next snapshot
-3. refresh account state over REST if your user stream may have lagged
+1. Drop local book state for the affected market.
+2. **Subscribe again** and rebuild from the new snapshot.
+3. If the message concerns **user** events, refresh account data over **REST**.
 
-Use [Recovery And Resync](/reference/recovery-and-resync) as the exact recovery playbook.
+Full detail: [Recovery and resync](/reference/recovery-and-resync).
 
 ## After settlement
 
-When a market settles:
+When a market is **settled**:
 
-- expect trading to stop for that symbol
-- open orders disappear
-- positions flatten at the operator-entered `settlement_price`
-- unrealized PnL for that market becomes realized
+- Trading stops for that symbol.
+- Open orders for that market are cleared.
+- Positions flatten at the **`settlement_price`** organizers set.
+- Unrealized PnL for that market becomes **realized**.
 
-Refresh everything right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Balance](/rest/balance), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), and [Get Leaderboard](/rest/leaderboard).
+Refresh right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Balance](/rest/balance), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), [Get Leaderboard](/rest/leaderboard).
 
-Live `GET /api/v1/leaderboard` shows the event-day standings; ops may publish official final standings later once all relevant markets are settled and locked.
+[Get Leaderboard](/rest/leaderboard) shows **live** event standings. Organizers may publish **official** final rankings after all relevant markets are settled—treat settlement as the moment PnL for that market stabilizes on the server.
 
 ## Related pages
 
 <Columns cols={2}>
   <Card title="Authentication" href="/reference/authentication">
-    REST and WebSocket auth, plus the live REST rate limit.
+    API keys on REST and WebSocket.
   </Card>
   <Card title="Rate limits" href="/reference/rate-limits">
-    Shared REST and WebSocket throttling behavior for each competitor account.
+    Shared throttling for your key.
   </Card>
-  <Card title="Market Lifecycle" href="/reference/market-lifecycle">
-    Market states, competition-wide trading stops, and settlement behavior.
+  <Card title="Market lifecycle" href="/reference/market-lifecycle">
+    Enabled, disabled, settled, and competition-wide halts.
   </Card>
   <Card title="REST API" href="/reference/rest-api">
-    The account bootstrap and trading endpoints competitors actually use.
+    Endpoint index for HTTP.
   </Card>
   <Card title="WebSocket API" href="/reference/websocket-api">
-    Connection flow, market-data subscription, and trading operations.
+    Connection flow and subscriptions.
   </Card>
 </Columns>

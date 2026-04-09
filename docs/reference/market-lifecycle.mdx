@@ -1,66 +1,62 @@
 ---
 title: "Market lifecycle"
-description: "How markets move through enabled, disabled, and settled states, and what those states mean for competitors."
+description: "How market status affects what you can trade—and how to stay in sync when organizers change a market."
 ---
 
-Treat market state as part of your trading logic, not just display metadata.
+**Market `status`** is part of your **trading logic**, not just labels on a screen. Combine periodic [Get Markets](/rest/markets) calls with live **`market_state`** WebSocket messages so you react as soon as something changes.
 
-Refresh via [GET /api/v1/markets](/rest/markets) and apply websocket `market_state` pushes whenever ops changes a market or the event state. `admin_message` remains guidance, but `market_state` is the authoritative live metadata update.
+**`admin_message`** is for human-readable notices; **`market_state`** is the **authoritative** metadata update for the market definition itself.
 
-## Market states
+## Status values
 
-Each market returned by `/api/v1/markets` includes a `status` field.
+Each row from [Get Markets](/rest/markets) includes **`status`**.
 
 ### `enabled`
 
-- the market is live
-- new orders can be submitted
-- existing resting orders can match
-- the market appears in leaderboard and portfolio marking
+- Market is **open** for trading.
+- New orders are accepted; resting orders can match.
+- The symbol participates in leaderboard and portfolio logic.
 
 ### `disabled`
 
-- the market is visible, but new orders are rejected
-- existing state remains queryable
-- competitors should stop sending new orders until the market is enabled again
+- Market is **visible** but **new orders are rejected**.
+- You can still query state.
+- **Pause** new submissions until the market is **`enabled`** again.
 
 ### `settled`
 
-- trading in that market is over
-- operators enter a final per-share settlement value
-- open positions are flattened against that settlement price
-- resting open orders in that market are canceled as part of settlement
-- PnL becomes realized for that market
-- competitors should re-fetch portfolio, positions, fills, and leaderboard after settlement
+- **No more trading** in that symbol.
+- Organizers set a final **`settlement_price`**.
+- Open **positions** flatten against that price; resting **orders** for that market are canceled.
+- **PnL** for that market becomes **realized**.
+- **Refresh** portfolio, positions, fills, and leaderboard from REST.
 
-## Competition-wide trading stop
+## Competition-wide trading halt
 
-Operators can also halt submissions across the entire exchange.
+Organizers can turn off **submissions** for the **whole** exchange. You may still see live quotes while **new** orders are rejected—**always** honor **`reject`** messages from order entry, not only the book.
 
-From your perspective, order rejects may arrive even though a market is still listed. Surface the reject message and don’t assume market data alone determines whether you can trade.
+## Fields to read before you send orders
 
-## Fields that matter before you trade
-
-From `/api/v1/markets`, pay attention to:
+From [Get Markets](/rest/markets), watch at least:
 
 - `market_id`
 - `status`
 - `tick_size`
 - `min_order_quantity`
 - `reference_price`
-- `settlement_price`
+- `settlement_price` (once known)
 
-`tick_size` and `min_order_quantity` directly affect whether order entry is accepted.
+**`tick_size`** and **`min_order_quantity`** decide whether the server accepts your **`price`** and **`quantity`**.
 
-## Recommended client behavior
+## Suggested client behavior
 
-1. Fetch `/api/v1/markets` during startup.
-2. Do not send orders for markets with `status = "disabled"` or `status = "settled"`.
-3. Update local market metadata immediately from websocket `market_state`, and refresh `/api/v1/markets` after a reconnect or `resync_required`.
-4. After settlement, re-bootstrap account state because positions and realized PnL may update instantly.
+1. Load markets at **startup**.
+2. **Do not** place orders when **`status`** is **`disabled`** or **`settled`**.
+3. Apply **`market_state`** immediately; after reconnect or **`resync_required`**, call [Get Markets](/rest/markets) again.
+4. After **settlement**, re-bootstrap **account** state—balances and PnL can change in one tick.
 
-## Official standings
+## Leaderboard and finals
 
-The live [GET /api/v1/leaderboard](/rest/leaderboard) reflects event-day standings.
+[Get Leaderboard](/rest/leaderboard) reflects **live** standings during the event.
 
-Once ops settles the relevant markets, they may freeze the books and publish official final standings later. Treat settlement as the breakpoint where PnL for that market becomes stable.
+After organizers settle and lock the relevant markets, they may publish **official** final results separately. Use settlement as the point where **that market’s** PnL is **stable** on the server.

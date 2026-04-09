@@ -2,10 +2,10 @@
 title: "Health"
 api: "GET /health"
 authMethod: "none"
-description: "Check whether the exchange is reachable and whether dispatch and persistence are healthy."
+description: "Ping the exchange and inspect persistence and dispatch queues—useful for monitors or pre-flight checks."
 ---
 
-Call this endpoint when you want to verify connectivity and check live persistence/dispatch health before or during trading.
+Use **`GET /health`** to confirm the service is up and to see whether checkpoint writing or internal queues are under stress. You do not need an API key.
 
 <RequestExample>
 

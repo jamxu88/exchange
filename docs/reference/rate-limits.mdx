@@ -1,24 +1,21 @@
 ---
 title: "Rate limits"
-description: "How the exchange rate limit works across REST and WebSocket trading, what counts against it, and how to handle limit errors."
+description: "How throttling works for your API key across REST and WebSocket—and how to stay under the limit."
 ---
 
-Use this page as the source of truth for competitor throttling behavior.
+The exchange protects fairness and capacity with a **single shared bucket** per competitor API key. This page is the **authoritative** description of what counts toward that bucket and how errors look.
 
-## Current live limit
+## Default limit
 
-The exchange currently enforces a shared per-user bucket of `500` operations per `10s`.
+By default you get **500 operations per 10 seconds** per key, refilling smoothly (about **50 per second** on average).
 
-That means:
+**In practice:**
 
-- one competitor account gets one shared bucket
-- the bucket is shared across authenticated REST account calls, authenticated REST trading calls, and authenticated WebSocket trading messages
-- the bucket refills continuously, which works out to `50 ops/s`
-- if you have been idle long enough, you can burst up to `500` operations at once before you need refill time
+- One **bucket** per API key—not per IP or per transport.
+- The **same** bucket covers authenticated **REST** (account + trading) and authenticated **WebSocket trading** messages.
+- After idle time you can **burst** up to **500** calls before you need to wait for refill.
 
-## What counts against the bucket
-
-These operations consume one token each.
+## What counts (one token each)
 
 ### Authenticated REST
 
@@ -33,7 +30,7 @@ These operations consume one token each.
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
 
-### Authenticated WebSocket trading
+### Authenticated WebSocket (trading only)
 
 - `submit_order`
 - `cancel_order`
@@ -41,27 +38,27 @@ These operations consume one token each.
 
 ## What does not count
 
-These do not consume the authenticated competitor bucket:
+These are **free** with respect to this bucket:
 
-- public REST endpoints such as [Health](/rest/health) and [Get Markets](/rest/markets)
-- WebSocket connect
-- WebSocket `authenticate`
-- WebSocket market-data subscribe and unsubscribe messages
-- inbound market-data and user-event messages sent by the server
+- [Health](/rest/health) and [Get Markets](/rest/markets)
+- Opening a WebSocket
+- `authenticate`
+- Market-data **subscribe** / **unsubscribe** (`l2` / `l3`)
+- **Inbound** messages from the server (books, fills, heartbeats, etc.)
 
-## Shared-budget examples
+## Why the budget feels “shared”
 
-The bucket is shared across transports, so switching from REST to WebSocket does not avoid the limit.
+Switching from REST to WebSocket **does not** reset your allowance. If you spend **300** tokens polling REST, only about **200** are immediately available for socket trading until time passes.
 
-- If you spend `300` tokens on authenticated REST reads and writes, you only have about `200` immediate tokens left for WebSocket trading until refill catches up.
-- If you burst `500` order actions quickly, you should expect limit errors until enough time passes for refill.
-- If you need sustained trading, design around the refill rate of about `50 ops/s` per competitor account.
+**Tips:**
 
-## Error behavior
+- Space out authenticated **GET**s; do not poll account routes on every tick.
+- Reserve capacity for **cancels** and **amends** in fast markets.
+- If you need sustained throughput, design near the **~50/s** steady refill rate.
 
-### REST
+## When you are over the limit
 
-REST returns `429 Too Many Requests` with this error shape:
+### REST — HTTP `429`
 
 ```json
 {
@@ -69,9 +66,7 @@ REST returns `429 Too Many Requests` with this error shape:
 }
 ```
 
-### WebSocket
-
-WebSocket trading messages return a `reject` with `code = "rate_limit_exceeded"`:
+### WebSocket — `reject`
 
 ```json
 {
@@ -83,17 +78,15 @@ WebSocket trading messages return a `reject` with `code = "rate_limit_exceeded"`
 }
 ```
 
-## Recommended client behavior
+## Client guidance
 
-- Treat REST `429` and WebSocket `rate_limit_exceeded` as retryable throttling, not permanent failures.
-- Avoid polling authenticated account endpoints on every book update.
-- Use WebSocket for live data and order events, and use REST for bootstrap and recovery.
-- Track your own request rate per competitor account so you can back off before the server rejects you.
-- Leave headroom for cancels and amends during fast markets instead of spending the full bucket on reads.
+- Treat **`429`** and **`rate_limit_exceeded`** as **retryable** backoff, not fatal bugs.
+- Prefer WebSocket for **live** state; use REST for **bootstrap** and **reconciliation**.
+- Track your own send rate per key so you slow down **before** the server pushes back.
 
-## Related pages
+## See also
 
 - [Authentication](/reference/authentication)
 - [REST API](/reference/rest-api)
 - [WebSocket API](/reference/websocket-api)
-- [Error Codes](/reference/error-codes)
+- [Error codes](/reference/error-codes)

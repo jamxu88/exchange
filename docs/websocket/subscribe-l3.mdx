@@ -3,11 +3,9 @@ title: "Subscribe L3"
 description: "Subscribe to one authenticated raw per-order market-data stream on the socket."
 ---
 
-Use `subscribe` with channel `l3` to receive a fresh raw per-order snapshot and then sequenced public order-event deltas for one market.
+Send **`subscribe`** with **`"channel": "l3"`** after **[Authenticate](/websocket/authenticate)** to receive a **per-order** public snapshot, then sequenced **canonical** order events for one market.
 
-You must authenticate the socket before subscribing to `l3`.
-
-This is the API-user alternative to batched `l2`: use `l3` when your strategy needs the exact public order lifecycle instead of aggregated price levels.
+**`l3`** is for strategies that need the **exact** public order lifecycle. If you only need aggregated depth, **`l2`** is simpler and does not require auth ([Subscribe L2](/websocket/subscribe-l2)).
 
 <RequestExample>
 

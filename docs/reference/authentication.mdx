@@ -1,57 +1,54 @@
 ---
 title: "Authentication"
-description: "How competitors authenticate REST requests and WebSocket sessions with their assigned API key."
+description: "Use your assigned API key on REST and WebSocket so the exchange knows your team."
 ---
 
-## Assigned API keys
+Your **API key** is your identity for the competition API. Organizers issue one key per competitor or team. Treat it like a password: do not commit it to public repos or share it in screenshots.
 
-Ops hands each competitor or trading team a single API key before the event. That key is the credential you use for every REST request and WebSocket session, so keep it safe.
+We recommend starting every session with [GET /api/v1/user](/rest/user) to confirm **`username`**, **`trader_id`**, and **`role`**, then [GET /api/v1/portfolio](/rest/portfolio) so you know positions and limits before you send orders.
 
-Start your session with [GET /api/v1/user](/rest/user) to confirm your identity, then call [GET /api/v1/portfolio](/rest/portfolio) to understand your positions and hard limits before you trade.
+## REST (competitor routes)
 
-## REST trader auth
-
-Authenticated trader routes require:
+Send your key on every authenticated request:
 
 ```http
 x-api-key: YOUR_API_KEY
 ```
 
-Used for:
+**These routes use the header:**
 
-- `GET /api/v1/leaderboard`
 - `GET /api/v1/user`
-- `GET /api/v1/markets` does not require auth
-- `GET /api/v1/positions`
-- `GET /api/v1/balance`
 - `GET /api/v1/portfolio`
-- `GET /api/v1/fills`
+- `GET /api/v1/balance`
+- `GET /api/v1/positions`
 - `GET /api/v1/open-orders`
+- `GET /api/v1/fills`
+- `GET /api/v1/leaderboard`
 - `POST /api/v1/orders`
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
 
-## Rate limit
+**No key required:** [Get Markets](/rest/markets) and [Health](/rest/health).
 
-Authenticated competitor operations share one per-user bucket of `500 ops per 10s` across authenticated REST account/trading routes and authenticated WebSocket trading messages.
+## Rate limit (reminder)
 
-Use [Rate limits](/reference/rate-limits) for the exact counted operations, what does not count, and the REST versus WebSocket error behavior.
+Authenticated REST calls and authenticated WebSocket trading messages share **one per-key bucket** (default **500 ops / 10s**). See [Rate limits](/reference/rate-limits) for the exact list and error shapes.
 
-## WebSocket auth
+## WebSocket
 
-The WebSocket endpoint is:
+**Endpoint**
 
 ```text
 wss://exchange.jamesxu.dev/ws
 ```
 
-Authenticate by sending:
+**Log in** by sending:
 
 ```json
 {"op":"authenticate","api_key":"YOUR_API_KEY"}
 ```
 
-Successful response:
+**Success** looks like:
 
 ```json
 {
@@ -61,10 +58,10 @@ Successful response:
 }
 ```
 
-## Notes
+## Good to know
 
-- No passwords, JWTs, or OAuth flows are involved—just the API key you were given.
-- Expect `role = "trader"` in your `/api/v1/user` response; if it looks wrong, pause and ping ops.
-- You can watch public market data before authenticating, but only a successful `authenticate` gives you order entry and user events.
-- That `500 ops per 10s` bucket only hits authenticated competitor actions, so public endpoints like `/api/v1/markets` stay unlimited.
-- This guide skips admin-only APIs; focus on the competitor surface area listed above.
+- There are **no** passwords, JWTs, or OAuth flows—only your API key.
+- Most teams see **`role": "trader"`** from [Get User](/rest/user). If that looks wrong, pause trading and contact organizers.
+- You can connect and watch **public `l2`** data **without** authenticating. Authenticating unlocks **`l3`**, order entry, and your private **`fill`** / **`order_state`** stream.
+- Public routes such as [Get Markets](/rest/markets) do **not** consume your authenticated rate limit.
+- Admin-only HTTP routes are **not** documented here; this page covers the **competitor** surface only.
