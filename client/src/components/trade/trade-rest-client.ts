@@ -68,6 +68,24 @@ type MarketResponse = {
   status?: MarketStatus;
 };
 
+type BootstrapRequest = Partial<TradeBootstrapData["loaded"]>;
+
+const EMPTY_BOOTSTRAP_LOAD_STATE: TradeBootstrapData["loaded"] = {
+  markets: false,
+  user: false,
+  positions: false,
+  openOrders: false,
+  fills: false,
+};
+
+const FULL_BOOTSTRAP_REQUEST: TradeBootstrapData["loaded"] = {
+  markets: true,
+  user: true,
+  positions: true,
+  openOrders: true,
+  fills: true,
+};
+
 export class ExchangeApiError extends Error {
   status: number;
 
@@ -147,7 +165,12 @@ export class TradeRestClient {
       Reflect.apply(fetchImpl ?? fetch, globalThis, [input, init])) as FetchLike;
   }
 
-  async bootstrapAccountData(): Promise<TradeBootstrapData> {
+  async bootstrapAccountData(requested: BootstrapRequest = FULL_BOOTSTRAP_REQUEST): Promise<TradeBootstrapData> {
+    const request = {
+      ...EMPTY_BOOTSTRAP_LOAD_STATE,
+      ...requested,
+    };
+
     if (!this.apiKey) {
       return {
         markets: [],
@@ -156,63 +179,82 @@ export class TradeRestClient {
         openOrders: [],
         fills: [],
         warnings: ["No exchange API key configured. Account bootstrap skipped."],
-        loaded: {
-          markets: false,
-          user: false,
-          positions: false,
-          openOrders: false,
-          fills: false,
-        },
+        loaded: EMPTY_BOOTSTRAP_LOAD_STATE,
       };
     }
 
-    const [marketsResult, userResult, positionsResult, openOrdersResult, fillsResult] =
-      await Promise.allSettled([
-        this.request<MarketResponse[]>("/api/v1/markets", { includeAuth: false }),
-        this.request<UserResponse>("/api/v1/user"),
-        this.request<PositionResponse[]>("/api/v1/positions"),
-        this.request<OpenOrderResponse[]>("/api/v1/open-orders"),
-        this.request<FillResponse[]>("/api/v1/fills"),
-      ]);
-
     const warnings: string[] = [];
-    const markets = pickSettledValue(
-      marketsResult,
-      (value) => value.map(normalizeMarket),
-      warnings,
-      "Market bootstrap failed.",
-    );
-    const user = pickSettledValue(userResult, (value) => ({
-      traderId: value.trader_id,
-      username: value.username,
-    }));
-    const positions = pickSettledValue(
-      positionsResult,
-      (value): AccountPosition[] =>
-        value.map((position) => ({
-          market: position.market,
-          netQuantity: position.net_quantity,
-          averageEntryPrice: position.average_entry_price,
-          realizedPnl: position.realized_pnl,
-        })),
-      warnings,
-      "Position bootstrap failed.",
-    );
-    const openOrders = pickSettledValue(
-      openOrdersResult,
-      (value) => value.map(normalizePendingOrder),
-      warnings,
-      "Open order bootstrap failed.",
-    );
-    const fills = pickSettledValue(
-      fillsResult,
-      (value) => value.map(normalizeFill),
-      warnings,
-      "Fill bootstrap failed.",
-    );
+    const loaded = { ...EMPTY_BOOTSTRAP_LOAD_STATE };
+    let markets: MarketDefinition[] = [];
+    let user: TradeBootstrapData["user"] = null;
+    let positions: AccountPosition[] = [];
+    let openOrders: PendingOrder[] = [];
+    let fills: TradeFill[] = [];
+    let userError: unknown = null;
 
-    if (userResult.status === "rejected") {
-      throw userResult.reason;
+    await Promise.all([
+      request.markets
+        ? this.request<MarketResponse[]>("/api/v1/markets", { includeAuth: false })
+            .then((value) => {
+              markets = value.map(normalizeMarket);
+              loaded.markets = true;
+            })
+            .catch((error: unknown) => {
+              warnings.push(buildWarningMessage("Market bootstrap failed.", error));
+            })
+        : Promise.resolve(),
+      request.user
+        ? this.request<UserResponse>("/api/v1/user")
+            .then((value) => {
+              user = {
+                traderId: value.trader_id,
+                username: value.username,
+              };
+              loaded.user = true;
+            })
+            .catch((error: unknown) => {
+              userError = error;
+            })
+        : Promise.resolve(),
+      request.positions
+        ? this.request<PositionResponse[]>("/api/v1/positions")
+            .then((value) => {
+              positions = value.map((position) => ({
+                market: position.market,
+                netQuantity: position.net_quantity,
+                averageEntryPrice: position.average_entry_price,
+                realizedPnl: position.realized_pnl,
+              }));
+              loaded.positions = true;
+            })
+            .catch((error: unknown) => {
+              warnings.push(buildWarningMessage("Position bootstrap failed.", error));
+            })
+        : Promise.resolve(),
+      request.openOrders
+        ? this.request<OpenOrderResponse[]>("/api/v1/open-orders")
+            .then((value) => {
+              openOrders = value.map(normalizePendingOrder);
+              loaded.openOrders = true;
+            })
+            .catch((error: unknown) => {
+              warnings.push(buildWarningMessage("Open order bootstrap failed.", error));
+            })
+        : Promise.resolve(),
+      request.fills
+        ? this.request<FillResponse[]>("/api/v1/fills")
+            .then((value) => {
+              fills = value.map(normalizeFill);
+              loaded.fills = true;
+            })
+            .catch((error: unknown) => {
+              warnings.push(buildWarningMessage("Fill bootstrap failed.", error));
+            })
+        : Promise.resolve(),
+    ]);
+
+    if (userError) {
+      throw userError;
     }
 
     return {
@@ -222,13 +264,7 @@ export class TradeRestClient {
       openOrders,
       fills,
       warnings,
-      loaded: {
-        markets: marketsResult.status === "fulfilled",
-        user: userResult.status === "fulfilled",
-        positions: positionsResult.status === "fulfilled",
-        openOrders: openOrdersResult.status === "fulfilled",
-        fills: fillsResult.status === "fulfilled",
-      },
+      loaded,
     };
   }
 
@@ -316,21 +352,7 @@ export class TradeRestClient {
   }
 }
 
-function pickSettledValue<T, U>(
-  result: PromiseSettledResult<T>,
-  mapper: (value: T) => U,
-  warnings: string[] = [],
-  warningText?: string,
-): U {
-  if (result.status === "fulfilled") {
-    return mapper(result.value);
-  }
-
-  if (warningText) {
-    const reason =
-      result.reason instanceof Error ? result.reason.message : String(result.reason);
-    warnings.push(`${warningText} ${reason}`);
-  }
-
-  return ([] as unknown) as U;
+function buildWarningMessage(prefix: string, error: unknown) {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `${prefix} ${reason}`;
 }

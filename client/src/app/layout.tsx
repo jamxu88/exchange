@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Darker_Grotesque, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { KeybindProvider } from "@/components/providers/keybind-provider";
+import { APP_THEME_INIT_SCRIPT } from "@/lib/app-theme";
 
 const darkerGrotesque = Darker_Grotesque({
   variable: "--font-darker-grotesque",
@@ -29,16 +31,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`${darkerGrotesque.variable} ${geistMono.variable} relative antialiased`}
       >
+        <Script
+          id="exchange-app-theme"
+          strategy="beforeInteractive"
+        >
+          {APP_THEME_INIT_SCRIPT}
+        </Script>
+
         <KeybindProvider>
           {children}
           <div className="pointer-events-none fixed inset-x-0 bottom-2 z-50 flex justify-center px-4">
             <a
-              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[rgba(183,183,189,0.7)] hover:text-white motion-fade-up motion-fade-up-fast motion-delay-4"
-              href="https://github.com/jamxu88/exchange"
+              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[var(--muted)] hover:text-[var(--foreground)] motion-fade-up motion-fade-up-fast motion-delay-4"
+              href="https://jamesxu.dev"
               rel="noreferrer"
               target="_blank"
             >

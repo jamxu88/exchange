@@ -111,6 +111,7 @@ describe("TradeConsoleView", () => {
     expect(screen.getByText("Statistics")).toBeInTheDocument();
     expect(screen.getByText("Exposure")).toBeInTheDocument();
     expect(screen.getByText("Open Orders")).toBeInTheDocument();
+    expect(screen.queryByText("Sharpe")).not.toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Pending")).toBeInTheDocument();
     expect(screen.getByText("+4")).toBeInTheDocument();
@@ -178,6 +179,8 @@ describe("TradeConsoleView", () => {
 
     await user.click(screen.getByRole("button", { name: "Open profile menu" }));
     await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(screen.getByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();
 
     const buyKeybindInput = screen.getByLabelText("Buy keybind");
     buyKeybindInput.focus();
@@ -556,8 +559,8 @@ describe("TradeConsoleView", () => {
       sequence: 1,
       bids: [{ price: 100, quantity: 1 }],
       asks: [
-        { price: 201, quantity: 1 },
-        { price: 205, quantity: 1 },
+        { price: 201.99, quantity: 1 },
+        { price: 205.75, quantity: 1 },
       ],
       lastTradePrice: 201,
       lastTradeQuantity: 1,
@@ -572,8 +575,8 @@ describe("TradeConsoleView", () => {
             summary: {
               bids: [{ price: 100, liquidity: 1, total: 100 }],
               asks: [
-                { price: 201, liquidity: 1, total: 201 },
-                { price: 205, liquidity: 1, total: 205 },
+                { price: 201.99, liquidity: 1, total: 201.99 },
+                { price: 205.75, liquidity: 1, total: 205.75 },
               ],
               bestBid: 100,
               bestAsk: 201,
@@ -605,12 +608,14 @@ describe("TradeConsoleView", () => {
     );
 
     const orderbookText = screen.getByTestId("orderbook-panel").textContent ?? "";
-    const higherAskIndex = orderbookText.indexOf("$205.00");
-    const bestAskIndex = orderbookText.indexOf("$201.00");
+    const higherAskIndex = orderbookText.indexOf("$205");
+    const bestAskIndex = orderbookText.indexOf("$201");
 
     expect(higherAskIndex).toBeGreaterThanOrEqual(0);
     expect(bestAskIndex).toBeGreaterThanOrEqual(0);
     expect(higherAskIndex).toBeLessThan(bestAskIndex);
+    expect(orderbookText).not.toContain("201.99");
+    expect(orderbookText).not.toContain("205.75");
   });
 
   it("cancels a pending order from the positions panel", async () => {

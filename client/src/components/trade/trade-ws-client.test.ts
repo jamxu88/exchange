@@ -324,10 +324,12 @@ describe("TradeWsClient", () => {
       channel: "l2",
       marketId: "BTC-USD",
       reason: "market sequence gap detected",
+      autoHealing: true,
     });
-    expect(socket.sent.at(-1)).toBe(
+    expect(socket.sent.slice(-2)).toEqual([
+      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
       JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
-    );
+    ]);
   });
 
   it("ignores duplicate deltas and resubscribes on client-side sequence gaps", () => {
@@ -408,10 +410,79 @@ describe("TradeWsClient", () => {
       channel: "l2",
       marketId: "BTC-USD",
       reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
+      autoHealing: true,
     });
-    expect(socket.sent.at(-1)).toBe(
+    expect(socket.sent.slice(-2)).toEqual([
+      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
       JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
+    ]);
+  });
+
+  it("accepts a fresh snapshot after resync even when the sequence resets lower", () => {
+    const socket = new MockSocket();
+    const callbacks = {
+      onStatusChange: vi.fn(),
+      onAuthenticated: vi.fn(),
+      onSnapshot: vi.fn(),
+      onDelta: vi.fn(),
+      onReject: vi.fn(),
+      onFill: vi.fn(),
+      onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
+      onResyncRequired: vi.fn(),
+      onAdminMessage: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new TradeWsClient(
+      {
+        wsUrl: "ws://localhost:8080/ws",
+        apiKey: undefined,
+        reconnectDelayMs: 1000,
+        initialMarket: "BTC-USD",
+      },
+      callbacks,
+      () => socket,
     );
+
+    client.connect();
+    socket.readyState = 1;
+    socket.onopen?.();
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "snapshot",
+        channel: "l2",
+        market: "BTC-USD",
+        sequence: 8,
+        bids: [],
+        asks: [],
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "resync_required",
+        channel: "l2",
+        market: "BTC-USD",
+        reason: "market sequence gap detected",
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "snapshot",
+        channel: "l2",
+        market: "BTC-USD",
+        sequence: 2,
+        bids: [],
+        asks: [],
+      }),
+    });
+
+    expect(callbacks.onSnapshot).toHaveBeenNthCalledWith(2, {
+      marketId: "BTC-USD",
+      sequence: 2,
+      bids: [],
+      asks: [],
+    });
   });
 
   it("waits for a fresh snapshot before applying deltas and ignores stale snapshots", () => {

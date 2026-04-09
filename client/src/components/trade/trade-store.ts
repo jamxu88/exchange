@@ -29,6 +29,7 @@ export type TradeState = {
   positions: TradeBootstrapData["positions"];
   positionsByMarket: Record<MarketId, PositionState>;
   pendingOrders: PendingOrder[];
+  knownOrderSides: Record<string, TradeSide>;
   fills: TradeFill[];
   marketBooks: Record<MarketId, MarketBookState>;
   marketTradesByMarket: Record<MarketId, MarketTrade[]>;
@@ -252,6 +253,31 @@ function positionMapFromSnapshots(
   }, {});
 }
 
+function upsertPositionSnapshot(
+  positions: TradeBootstrapData["positions"],
+  marketId: MarketId,
+  nextPosition: PositionState,
+) {
+  const nextSnapshot = {
+    market: marketId,
+    netQuantity: nextPosition.netQuantity,
+    averageEntryPrice: nextPosition.avgCost,
+    realizedPnl: nextPosition.realizedPnl,
+  };
+  const nextPositions = positions.filter((position) => position.market !== marketId);
+  return [...nextPositions, nextSnapshot];
+}
+
+function mergeOrderSides(
+  current: Record<string, TradeSide>,
+  orders: PendingOrder[],
+) {
+  return orders.reduce<Record<string, TradeSide>>((next, order) => {
+    next[order.id] = order.side;
+    return next;
+  }, { ...current });
+}
+
 function syncMarketDefinitions(
   currentState: TradeState,
   markets: MarketDefinition[],
@@ -441,17 +467,17 @@ function fillPriceLabel(fills: TradeFill[], fallbackPrice: number) {
     : formatPrice(executionPrice);
 }
 
-function applyOwnFillToPosition(
+function applyTradeFillToPosition(
   position: PositionState,
-  result: SubmitOrderResult,
+  fill: Pick<TradeFill, "price" | "quantity">,
+  side: TradeSide,
 ): PositionState {
-  const executedQuantity = result.fills.reduce((sum, fill) => sum + fill.quantity, 0);
-  if (executedQuantity <= 0) {
+  if (fill.quantity <= 0) {
     return position;
   }
 
-  const executionPrice = weightedFillPrice(result.fills) ?? result.effectivePrice;
-  const fillDelta = result.side === "buy" ? executedQuantity : -executedQuantity;
+  const executionPrice = fill.price;
+  const fillDelta = side === "buy" ? fill.quantity : -fill.quantity;
   const currentNet = position.netQuantity;
 
   if (currentNet === 0) {
@@ -494,6 +520,28 @@ function applyOwnFillToPosition(
   };
 }
 
+function applyOwnFillToPosition(
+  position: PositionState,
+  result: SubmitOrderResult,
+): PositionState {
+  return result.fills.reduce(
+    (nextPosition, fill) => applyTradeFillToPosition(nextPosition, fill, result.side),
+    position,
+  );
+}
+
+function sideForFill(
+  knownOrderSides: Record<string, TradeSide>,
+  fill: Pick<TradeFill, "makerOrderId" | "takerOrderId">,
+): TradeSide | null {
+  const makerOrderSide = knownOrderSides[fill.makerOrderId];
+  if (makerOrderSide) {
+    return makerOrderSide;
+  }
+
+  return knownOrderSides[fill.takerOrderId] ?? null;
+}
+
 export function createInitialTradeState(markets: MarketDefinition[]): TradeState {
   const marketBooks = markets.reduce<Record<MarketId, MarketBookState>>((next, market) => {
     next[market.id] = createEmptyMarketBook(market.id);
@@ -514,6 +562,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
     positions: [],
     positionsByMarket,
     pendingOrders: [],
+    knownOrderSides: {},
     fills: [],
     marketBooks,
     marketTradesByMarket: createEmptyMarketTrades(markets),
@@ -543,6 +592,9 @@ function applyBootstrapDataToState(
     user: data.loaded.user ? data.user : currentState.user,
     positions: nextPositions,
     pendingOrders: data.loaded.openOrders ? data.openOrders : currentState.pendingOrders,
+    knownOrderSides: data.loaded.openOrders
+      ? mergeOrderSides(currentState.knownOrderSides, data.openOrders)
+      : currentState.knownOrderSides,
     fills: data.loaded.fills ? data.fills : currentState.fills,
     marketBooks: synced.marketBooks,
     marketTradesByMarket: seedMarketTrades(
@@ -774,10 +826,34 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         }),
       };
 
-    case "ws-fill":
+    case "ws-fill": {
+      if (state.fills.some((fill) => fill.fillId === action.fill.fillId)) {
+        return state;
+      }
+
+      const wsFillSide = sideForFill(state.knownOrderSides, action.fill);
+      const currentPosition =
+        state.positionsByMarket[action.fill.market] ?? {
+          netQuantity: 0,
+          avgCost: null,
+          realizedPnl: 0,
+        };
+      const nextPosition = wsFillSide
+        ? applyTradeFillToPosition(currentPosition, action.fill, wsFillSide)
+        : currentPosition;
+
       return {
         ...state,
         fills: upsertFill(state.fills, action.fill),
+        positions: wsFillSide
+          ? upsertPositionSnapshot(state.positions, action.fill.market, nextPosition)
+          : state.positions,
+        positionsByMarket: wsFillSide
+          ? {
+              ...state.positionsByMarket,
+              [action.fill.market]: nextPosition,
+            }
+          : state.positionsByMarket,
         messages: pushMessage(state.messages, {
           id: action.id,
           time: action.time,
@@ -785,6 +861,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           text: `Fill ${action.fill.market} ${action.fill.quantity} @ ${formatPrice(action.fill.price)}.`,
         }),
       };
+    }
 
     case "ws-order-state": {
       const pendingOrders =
@@ -801,6 +878,10 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
       return {
         ...state,
         pendingOrders,
+        knownOrderSides: {
+          ...state.knownOrderSides,
+          [action.order.id]: action.order.side,
+        },
         messages: pushMessage(state.messages, {
           id: action.id,
           time: action.time,
@@ -891,6 +972,11 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           avgCost: null,
           realizedPnl: 0,
         };
+      const nextPosition = applyOwnFillToPosition(currentPosition, action.result);
+      const nextFills = action.result.fills.reduce(
+        (currentFills, fill) => upsertFill(currentFills, fill),
+        state.fills,
+      );
 
       return {
         ...state,
@@ -898,13 +984,15 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         submittedOrders: state.submittedOrders + 1,
         filledOrders: state.filledOrders + (action.result.fills.length > 0 ? 1 : 0),
         pendingOrders: ensurePendingOrder(state.pendingOrders, action.result),
-        fills: [...state.fills, ...action.result.fills].slice(-50),
+        knownOrderSides: {
+          ...state.knownOrderSides,
+          [action.result.orderId]: action.result.side,
+        },
+        fills: nextFills,
+        positions: upsertPositionSnapshot(state.positions, action.result.marketId, nextPosition),
         positionsByMarket: {
           ...state.positionsByMarket,
-          [action.result.marketId]: applyOwnFillToPosition(
-            currentPosition,
-            action.result,
-          ),
+          [action.result.marketId]: nextPosition,
         },
         messages: nextMessages,
       };
@@ -1062,7 +1150,6 @@ export function selectPnlMetrics(state: TradeState): PnlMetric[] {
       ? 100
       : (state.filledOrders / state.submittedOrders) * 100;
   const netPnl = totals.unrealized + totals.realized;
-  const sharpe = totals.exposure === 0 ? 0 : (netPnl / totals.exposure) * 12;
   const openOrders = state.pendingOrders.length;
 
   return [
@@ -1100,11 +1187,6 @@ export function selectPnlMetrics(state: TradeState): PnlMetric[] {
       label: "Open Orders",
       value: String(openOrders),
       tone: openOrders > 0 ? "primary" : "neutral",
-    },
-    {
-      label: "Sharpe",
-      value: sharpe.toFixed(2),
-      tone: "neutral",
     },
     {
       label: "Fill Rate",

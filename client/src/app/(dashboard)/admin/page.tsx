@@ -1,12 +1,16 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
+  MAX_BULK_BOT_COUNT,
+} from "@/app/(dashboard)/admin/bulk-bot-config";
+import {
   deleteBotAction,
   deleteMarketAction,
   ensureAdminDeskAction,
   loadConfigAction,
   pauseBotAction,
   resetAllUsersAction,
+  saveBotBatchAction,
   saveBotAction,
   sendMessageAction,
   settleMarketAction,
@@ -61,10 +65,10 @@ function formatTimestamp(value: string) {
 
 function toneClass(level: "info" | "warning" | "critical") {
   if (level === "critical") {
-    return "text-[#ffb2b2]";
+    return "text-[color:var(--red-strong)]";
   }
   if (level === "warning") {
-    return "text-[#ffd37a]";
+    return "text-[color:var(--amber)]";
   }
   return "text-[var(--green)]";
 }
@@ -72,7 +76,7 @@ function toneClass(level: "info" | "warning" | "critical") {
 function botStatusClass(status: "paused" | "running") {
   return status === "running"
     ? "border-[#2f6b37] bg-[#102015] text-[#b8ffbd]"
-    : "border-[#31343a] bg-[#101114] text-white";
+    : "border-[var(--surface-stroke)] bg-[var(--surface-soft)] text-[var(--text-primary)]";
 }
 
 function formatPositionLimit(value: number | null) {
@@ -91,6 +95,177 @@ const inputClass = "ops-input";
 const selectClass = "ops-select";
 const textareaClass = "ops-textarea";
 const cardClass = "ops-panel-soft px-4 py-4 text-[15px] text-[var(--muted-strong)]";
+
+type BotFormMarket = {
+  market_id: string;
+};
+
+type BotConfigurationFieldsProps = {
+  markets: BotFormMarket[];
+  mode: "single" | "batch";
+};
+
+function BotConfigurationFields({ markets, mode }: BotConfigurationFieldsProps) {
+  const isBatch = mode === "batch";
+
+  return (
+    <>
+      {isBatch ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <input
+            className={inputClass}
+            name="botIdPrefix"
+            placeholder="Bot ID prefix, for example depth-maker"
+            required
+          />
+          <input
+            className={inputClass}
+            name="displayNamePrefix"
+            placeholder="Display name prefix"
+          />
+          <input
+            className={inputClass}
+            defaultValue="10"
+            max={MAX_BULK_BOT_COUNT}
+            min="1"
+            name="botCount"
+            placeholder="Bot count"
+            required
+            type="number"
+          />
+          <input
+            className={inputClass}
+            defaultValue="1"
+            min="1"
+            name="botStartIndex"
+            placeholder="Start index"
+            required
+            type="number"
+          />
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          <input
+            className={inputClass}
+            name="botId"
+            placeholder="Bot ID, for example depth-maker-1"
+            required
+          />
+          <input
+            className={inputClass}
+            name="displayName"
+            placeholder="Display name"
+          />
+        </div>
+      )}
+      <div className="grid gap-3 md:grid-cols-3">
+        <select
+          className={selectClass}
+          defaultValue=""
+          name="marketId"
+          required
+        >
+          <option disabled value="">
+            Select market
+          </option>
+          {markets.map((market) => (
+            <option key={market.market_id} value={market.market_id}>
+              {market.market_id}
+            </option>
+          ))}
+        </select>
+        <select
+          className={selectClass}
+          defaultValue=""
+          name="sideMode"
+          required
+        >
+          <option disabled value="">
+            Select side mode
+          </option>
+          <option value="both">Both sides</option>
+          <option value="buy">Buy only</option>
+          <option value="sell">Sell only</option>
+        </select>
+        <select
+          className={selectClass}
+          defaultValue=""
+          name="orderType"
+          required
+        >
+          <option disabled value="">
+            Select order type
+          </option>
+          <option value="limit">Limit</option>
+          <option value="market">Market</option>
+        </select>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <input
+          className={inputClass}
+          min="1"
+          name="minQuantity"
+          placeholder="Min qty"
+          required
+          type="number"
+        />
+        <input
+          className={inputClass}
+          min="1"
+          name="maxQuantity"
+          placeholder="Max qty"
+          required
+          type="number"
+        />
+        <input
+          className={inputClass}
+          min="100"
+          name="intervalMs"
+          placeholder="Interval ms"
+          required
+          type="number"
+        />
+      </div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <input
+          className={inputClass}
+          min="1"
+          name="maxOpenOrders"
+          placeholder="Open order cap"
+          required
+          type="number"
+        />
+        <input
+          className={inputClass}
+          min="0"
+          name="priceOffsetTicks"
+          placeholder="Offset ticks"
+          required
+          type="number"
+        />
+        <input
+          className={inputClass}
+          min="0"
+          name="walkStepTicks"
+          placeholder="Walk ticks"
+          required
+          type="number"
+        />
+        <input
+          className={inputClass}
+          min="0"
+          name="fallbackPrice"
+          placeholder="Fallback price"
+          type="number"
+        />
+      </div>
+      <label className="flex items-center gap-3 text-sm text-[var(--muted-strong)]">
+        <input className="ops-check" name="startImmediately" type="checkbox" />
+        Start immediately after saving
+      </label>
+    </>
+  );
+}
 
 export default async function AdminPage({ searchParams }: AdminPageProps) {
   const cookieStore = await cookies();
@@ -142,12 +317,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
       </section>
 
       {notice ? (
-        <p className="ops-note border-[rgba(66,204,78,0.35)] bg-[rgba(66,204,78,0.08)] px-4 py-3 text-base text-[#b8ffbd]">
+        <p className="ops-note border-[rgba(66,204,78,0.35)] bg-[rgba(66,204,78,0.08)] px-4 py-3 text-base text-[var(--green-strong)]">
           {notice}
         </p>
       ) : null}
       {error ? (
-        <p className="ops-note border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.08)] px-4 py-3 text-base text-[#ffb2b2]">
+        <p className="ops-note border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.08)] px-4 py-3 text-base text-[color:var(--red-strong)]">
           {error}
         </p>
       ) : null}
@@ -159,7 +334,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               <h2 className="ops-section-title">Exchange controls</h2>
               <p className="mt-2 text-base text-[var(--muted-strong)]">
                 Trading is currently{" "}
-                <span className="font-semibold text-white">
+                <span className="font-semibold text-[var(--text-primary)]">
                   {adminState.controls.trading_enabled ? "enabled" : "stopped"}
                 </span>
                 .
@@ -195,19 +370,19 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           <div className="mt-4 grid gap-3 md:grid-cols-3 text-base text-[var(--muted-strong)]">
             <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
               <span className="ops-kicker">Queue depth</span>
-              <span className="text-xl font-semibold text-white">
+              <span className="text-xl font-semibold text-[var(--text-primary)]">
                 {adminState.persistence.queue_depth}
               </span>
             </div>
             <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
               <span className="ops-kicker">Last flush</span>
-              <span className="text-xl font-semibold text-white">
+              <span className="text-xl font-semibold text-[var(--text-primary)]">
                 {adminState.persistence.last_flush_latency_ms} ms
               </span>
             </div>
             <div className="ops-panel-soft flex items-center justify-between px-4 py-4">
               <span className="ops-kicker">Tracked markets</span>
-              <span className="text-xl font-semibold text-white">
+              <span className="text-xl font-semibold text-[var(--text-primary)]">
                 {adminState.markets.length}
               </span>
             </div>
@@ -223,11 +398,20 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               name="title"
               placeholder="Optional title"
             />
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
+              <select
+                className={selectClass}
+                defaultValue="single"
+                name="audience"
+              >
+                <option value="single">One user</option>
+                <option value="list">User list</option>
+                <option value="all">All users</option>
+              </select>
               <input
                 className={inputClass}
                 name="targetUsername"
-                placeholder="Target username"
+                placeholder="Single username"
               />
               <input
                 className={inputClass}
@@ -245,9 +429,17 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </select>
             </div>
             <textarea
+              className={`${textareaClass} min-h-20`}
+              name="targetUsernames"
+              placeholder="User list: alice, bob, carol"
+            />
+            <p className="text-sm text-[var(--muted)]">
+              Choose one user, all users, or paste a list separated by commas, spaces, or new lines.
+            </p>
+            <textarea
               className={`${textareaClass} min-h-28`}
               name="body"
-              placeholder="Broadcast or user-specific message"
+              placeholder="Broadcast or targeted message"
               required
             />
             <button
@@ -369,132 +561,41 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             how far that anchor can drift on each cycle. Fallback price is used only when the book
             is empty and the market has no usable reference price.
           </p>
-          <form action={saveBotAction} className="mt-4 grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <input
-                className={inputClass}
-                name="botId"
-                placeholder="Bot ID, for example depth-maker-1"
-                required
-              />
-              <input
-                className={inputClass}
-                name="displayName"
-                placeholder="Display name"
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <select
-                className={selectClass}
-                defaultValue=""
-                name="marketId"
-                required
+          <div className="mt-4 grid gap-4 2xl:grid-cols-2">
+            <form action={saveBotAction} className="ops-panel-soft grid gap-3 px-4 py-4">
+              <div>
+                <p className="ops-kicker">Single bot</p>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  Save one bot config with an explicit id.
+                </p>
+              </div>
+              <BotConfigurationFields markets={adminState.markets} mode="single" />
+              <button
+                className={primaryButtonClass}
+                type="submit"
               >
-                <option disabled value="">
-                  Select market
-                </option>
-                {adminState.markets.map((market) => (
-                  <option key={market.market_id} value={market.market_id}>
-                    {market.market_id}
-                  </option>
-                ))}
-              </select>
-              <select
-                className={selectClass}
-                defaultValue=""
-                name="sideMode"
-                required
+                Save bot
+              </button>
+            </form>
+
+            <form action={saveBotBatchAction} className="ops-panel-soft grid gap-3 px-4 py-4">
+              <div>
+                <p className="ops-kicker">Bot batch</p>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  Stamp out a numbered range like <code>depth-maker-1</code> through{" "}
+                  <code>depth-maker-10</code>. Batch creation is capped at {MAX_BULK_BOT_COUNT} bots
+                  per submit.
+                </p>
+              </div>
+              <BotConfigurationFields markets={adminState.markets} mode="batch" />
+              <button
+                className={primaryButtonClass}
+                type="submit"
               >
-                <option disabled value="">
-                  Select side mode
-                </option>
-                <option value="both">Both sides</option>
-                <option value="buy">Buy only</option>
-                <option value="sell">Sell only</option>
-              </select>
-              <select
-                className={selectClass}
-                defaultValue=""
-                name="orderType"
-                required
-              >
-                <option disabled value="">
-                  Select order type
-                </option>
-                <option value="limit">Limit</option>
-                <option value="market">Market</option>
-              </select>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <input
-                className={inputClass}
-                min="1"
-                name="minQuantity"
-                placeholder="Min qty"
-                required
-                type="number"
-              />
-              <input
-                className={inputClass}
-                min="1"
-                name="maxQuantity"
-                placeholder="Max qty"
-                required
-                type="number"
-              />
-              <input
-                className={inputClass}
-                min="100"
-                name="intervalMs"
-                placeholder="Interval ms"
-                required
-                type="number"
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-4">
-              <input
-                className={inputClass}
-                min="1"
-                name="maxOpenOrders"
-                placeholder="Open order cap"
-                required
-                type="number"
-              />
-              <input
-                className={inputClass}
-                min="0"
-                name="priceOffsetTicks"
-                placeholder="Offset ticks"
-                required
-                type="number"
-              />
-              <input
-                className={inputClass}
-                min="0"
-                name="walkStepTicks"
-                placeholder="Walk ticks"
-                required
-                type="number"
-              />
-              <input
-                className={inputClass}
-                min="0"
-                name="fallbackPrice"
-                placeholder="Fallback price"
-                type="number"
-              />
-            </div>
-            <label className="flex items-center gap-3 text-sm text-[var(--muted-strong)]">
-              <input className="ops-check" name="startImmediately" type="checkbox" />
-              Start immediately after saving
-            </label>
-            <button
-              className={primaryButtonClass}
-              type="submit"
-            >
-              Save bot
-            </button>
-          </form>
+                Create bot batch
+              </button>
+            </form>
+          </div>
 
           <div className="mt-5 grid gap-3">
             {bots.length === 0 ? (

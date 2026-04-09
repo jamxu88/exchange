@@ -29,7 +29,12 @@ import {
   type TradeWsSnapshot,
   type WebSocketFactory,
 } from "@/components/trade/trade-ws-client";
-import type { ConnectionStatus, MarketDefinition, TradeSide } from "@/components/trade/trade-types";
+import type {
+  ConnectionStatus,
+  MarketDefinition,
+  TradeBootstrapData,
+  TradeSide,
+} from "@/components/trade/trade-types";
 
 type RestClientFactory = (config: Pick<TradeRuntimeConfig, "httpUrl" | "apiKey">) => TradeRestClient;
 type WsClientFactory = (
@@ -47,6 +52,16 @@ type UseTradeControllerOptions = {
   webSocketFactory?: WebSocketFactory;
 };
 
+type AccountSyncRequest = Partial<TradeBootstrapData["loaded"]>;
+
+const EMPTY_ACCOUNT_SYNC_REQUEST: TradeBootstrapData["loaded"] = {
+  markets: false,
+  user: false,
+  positions: false,
+  openOrders: false,
+  fills: false,
+};
+
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "2-digit",
   minute: "2-digit",
@@ -62,6 +77,23 @@ function createStamp() {
   };
 }
 
+function mergeAccountSyncRequests(
+  current: TradeBootstrapData["loaded"],
+  next: AccountSyncRequest,
+): TradeBootstrapData["loaded"] {
+  return {
+    markets: current.markets || Boolean(next.markets),
+    user: current.user || Boolean(next.user),
+    positions: current.positions || Boolean(next.positions),
+    openOrders: current.openOrders || Boolean(next.openOrders),
+    fills: current.fills || Boolean(next.fills),
+  };
+}
+
+function hasAccountSyncRequest(request: TradeBootstrapData["loaded"]) {
+  return Object.values(request).some(Boolean);
+}
+
 export function useTradeController(options: UseTradeControllerOptions = {}) {
   const runtime = useMemo(
     () => options.runtime ?? createTradeRuntimeConfig(),
@@ -74,8 +106,12 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     createInitialTradeState,
   );
   const socketRef = useRef<TradeWsClient | null>(null);
-  const accountSyncRef = useRef({ inFlight: false, queued: false });
+  const accountSyncRef = useRef({
+    inFlight: false,
+    queued: { ...EMPTY_ACCOUNT_SYNC_REQUEST },
+  });
   const disposedRef = useRef(false);
+  const hasAuthenticatedOnceRef = useRef(false);
   const hasHydratedMessageHistoryRef = useRef(false);
   const skipNextMessageHistorySaveRef = useRef(true);
 
@@ -103,6 +139,16 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
           ...createStamp(),
         });
       });
+
+      if (hasAuthenticatedOnceRef.current) {
+        void refreshAccountState({
+          positions: true,
+          openOrders: true,
+          fills: true,
+        });
+      } else {
+        hasAuthenticatedOnceRef.current = true;
+      }
     },
   );
 
@@ -124,24 +170,28 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     });
   });
 
-  async function refreshAccountState() {
+  async function refreshAccountState(request: AccountSyncRequest) {
+    accountSyncRef.current.queued = mergeAccountSyncRequests(
+      accountSyncRef.current.queued,
+      request,
+    );
     if (accountSyncRef.current.inFlight) {
-      accountSyncRef.current.queued = true;
       return;
     }
 
     accountSyncRef.current.inFlight = true;
     try {
-      do {
-        accountSyncRef.current.queued = false;
-        const data = await restClient.bootstrapAccountData();
+      while (hasAccountSyncRequest(accountSyncRef.current.queued)) {
+        const nextRequest = accountSyncRef.current.queued;
+        accountSyncRef.current.queued = { ...EMPTY_ACCOUNT_SYNC_REQUEST };
+        const data = await restClient.bootstrapAccountData(nextRequest);
         if (disposedRef.current) {
           return;
         }
         startTransition(() => {
           dispatch({ type: "account-sync", data });
         });
-      } while (accountSyncRef.current.queued);
+      }
     } catch (error) {
       if (disposedRef.current) {
         return;
@@ -182,7 +232,6 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       startTransition(() => {
         dispatch({ type: "ws-fill", fill, ...createStamp() });
       });
-      void refreshAccountState();
     },
   );
 
@@ -203,7 +252,6 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       startTransition(() => {
         dispatch({ type: "ws-order-state", ...payload, ...createStamp() });
       });
-      void refreshAccountState();
     },
   );
 
@@ -214,12 +262,25 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
   });
 
   const handleResyncRequired = useEffectEvent(
-    (payload: { channel: string; marketId?: string; reason: string }) => {
-      startTransition(() => {
-        dispatch({ type: "ws-resync-required", ...payload, ...createStamp() });
-      });
-      if (payload.channel !== "l2") {
-        void refreshAccountState();
+    (payload: {
+      channel: string;
+      marketId?: string;
+      reason: string;
+      autoHealing?: boolean;
+    }) => {
+      if (!payload.autoHealing) {
+        startTransition(() => {
+          dispatch({ type: "ws-resync-required", ...payload, ...createStamp() });
+        });
+      }
+      if (payload.channel === "markets") {
+        void refreshAccountState({ markets: true });
+      } else if (payload.channel === "user") {
+        void refreshAccountState({
+          positions: true,
+          openOrders: true,
+          fills: true,
+        });
       }
     },
   );
@@ -265,7 +326,11 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
   useEffect(() => {
     let cancelled = false;
     disposedRef.current = false;
-    accountSyncRef.current = { inFlight: false, queued: false };
+    accountSyncRef.current = {
+      inFlight: false,
+      queued: { ...EMPTY_ACCOUNT_SYNC_REQUEST },
+    };
+    hasAuthenticatedOnceRef.current = false;
 
     startTransition(() => {
       dispatch({ type: "bootstrap-start", ...createStamp() });
@@ -437,7 +502,6 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       startTransition(() => {
         dispatch({ type: "cancel-success", orderId, ...createStamp() });
       });
-      await refreshAccountState();
     } catch (error) {
       startTransition(() => {
         dispatch({

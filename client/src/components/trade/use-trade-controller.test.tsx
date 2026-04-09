@@ -2,6 +2,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { TRADE_MESSAGE_HISTORY_STORAGE_KEY } from "@/components/trade/trade-message-history";
 import { useTradeController } from "@/components/trade/use-trade-controller";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
+import type { TradeWsCallbacks } from "@/components/trade/trade-ws-client";
 
 const runtime: TradeRuntimeConfig = {
   httpUrl: "http://localhost:8080",
@@ -391,7 +392,7 @@ describe("useTradeController", () => {
     expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels a pending order and refreshes account state", async () => {
+  it("cancels a pending order without forcing a full account refresh", async () => {
     const bootstrapAccountData = vi
       .fn()
       .mockResolvedValueOnce({
@@ -480,7 +481,7 @@ describe("useTradeController", () => {
     });
 
     expect(cancelOrder).toHaveBeenCalledWith("order-1");
-    expect(bootstrapAccountData).toHaveBeenCalledTimes(2);
+    expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
   });
 
   it("keeps other pending orders visible when the post-cancel open-orders refresh is degraded", async () => {
@@ -579,5 +580,198 @@ describe("useTradeController", () => {
     await waitFor(() => {
       expect(result.current.state.pendingOrders.map((order) => order.id)).toEqual(["order-2"]);
     });
+  });
+
+  it("suppresses auto-healed L2 resync chatter and refreshes account state after re-authentication", async () => {
+    const bootstrapAccountData = vi
+      .fn()
+      .mockResolvedValue({
+        markets: runtime.markets,
+        user: { traderId: "trader-1", username: "alice" },
+        positions: [],
+        openOrders: [],
+        fills: [],
+        warnings: [],
+        loaded: {
+          markets: true,
+          user: true,
+          positions: true,
+          openOrders: true,
+          fills: true,
+        },
+      });
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+        cancelOrder: vi.fn(),
+      }) as never;
+    let wsCallbacks: TradeWsCallbacks | undefined;
+    const wsClientFactory = (_config: unknown, callbacks: TradeWsCallbacks) => {
+      wsCallbacks = callbacks;
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      } as never;
+    };
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+      expect(wsCallbacks).toBeDefined();
+    });
+
+    act(() => {
+      wsCallbacks?.onAuthenticated({ traderId: "trader-1", username: "alice" });
+      wsCallbacks?.onResyncRequired({
+        channel: "l2",
+        marketId: "BTC-USD",
+        reason: "market sequence gap detected",
+        autoHealing: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      result.current.state.messages.some((message) => message.text.includes("market sequence gap detected")),
+    ).toBe(false);
+
+    act(() => {
+      wsCallbacks?.onAuthenticated({ traderId: "trader-1", username: "alice" });
+    });
+
+    await waitFor(() => {
+      expect(bootstrapAccountData).toHaveBeenCalledTimes(2);
+    });
+    expect(bootstrapAccountData).toHaveBeenNthCalledWith(2, {
+      markets: false,
+      user: false,
+      positions: true,
+      openOrders: true,
+      fills: true,
+    });
+
+    act(() => {
+      wsCallbacks?.onResyncRequired({
+        channel: "l2",
+        marketId: "BTC-USD",
+        reason: "manual intervention required",
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.state.messages.some((message) => message.text.includes("manual intervention required")),
+      ).toBe(true);
+    });
+  });
+
+  it("applies private fill and order-state updates without a full account resync", async () => {
+    const bootstrapAccountData = vi.fn().mockResolvedValue({
+      markets: runtime.markets,
+      user: { traderId: "trader-1", username: "alice" },
+      positions: [],
+      openOrders: [
+        {
+          id: "order-1",
+          createdAt: "2026-03-17T09:30:00Z",
+          marketId: "BTC-USD",
+          marketName: "BTC-USD",
+          side: "buy",
+          shares: 2,
+          limitPrice: 101,
+          status: "open",
+        },
+      ],
+      fills: [],
+      warnings: [],
+      loaded: {
+        markets: true,
+        user: true,
+        positions: true,
+        openOrders: true,
+        fills: true,
+      },
+    });
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+        cancelOrder: vi.fn(),
+      }) as never;
+    let wsCallbacks: TradeWsCallbacks | undefined;
+    const wsClientFactory = (_config: unknown, callbacks: TradeWsCallbacks) => {
+      wsCallbacks = callbacks;
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket: vi.fn(),
+      } as never;
+    };
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+      expect(wsCallbacks).toBeDefined();
+    });
+
+    act(() => {
+      wsCallbacks?.onFill({
+        fillId: "fill-1",
+        market: "BTC-USD",
+        makerOrderId: "order-1",
+        takerOrderId: "aggressor-1",
+        price: 101,
+        quantity: 1,
+        occurredAt: "2026-03-17T09:31:00Z",
+      });
+      wsCallbacks?.onOrderState({
+        order: {
+          id: "order-1",
+          createdAt: "2026-03-17T09:30:00Z",
+          marketId: "BTC-USD",
+          marketName: "BTC-USD",
+          side: "buy",
+          shares: 1,
+          limitPrice: 101,
+          status: "partial",
+        },
+        status: "open",
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.positionsByMarket["BTC-USD"]).toEqual({
+        netQuantity: 1,
+        avgCost: 101,
+        realizedPnl: 0,
+      });
+      expect(result.current.state.pendingOrders).toEqual([
+        expect.objectContaining({
+          id: "order-1",
+          shares: 1,
+          status: "partial",
+        }),
+      ]);
+    });
+
+    expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
   });
 });

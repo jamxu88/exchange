@@ -18,7 +18,7 @@ export default async function TradePage() {
   };
 
   return (
-    <main className="h-screen overflow-hidden bg-black">
+    <main className="h-screen overflow-hidden bg-[var(--trade-shell-bg)]">
       <TradeConsole runtime={runtime} />
     </main>
   );

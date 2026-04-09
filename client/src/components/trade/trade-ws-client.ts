@@ -131,7 +131,12 @@ export type TradeWsCallbacks = {
     status: "open" | "filled" | "canceled";
   }) => void;
   onMarketState: (payload: MarketDefinition) => void;
-  onResyncRequired: (payload: { channel: string; marketId?: string; reason: string }) => void;
+  onResyncRequired: (payload: {
+    channel: string;
+    marketId?: string;
+    reason: string;
+    autoHealing?: boolean;
+  }) => void;
   onAdminMessage: (payload: {
     level: "info" | "warning" | "critical";
     title?: string;
@@ -275,6 +280,7 @@ export class TradeWsClient {
     const previousMarket = this.selectedMarket;
     this.selectedMarket = nextMarket;
     this.pendingSnapshots.delete(previousMarket);
+    this.marketSequences.delete(previousMarket);
 
     if (this.socket?.readyState === 1) {
       this.send({
@@ -282,7 +288,7 @@ export class TradeWsClient {
         channel: "l2",
         market: previousMarket,
       });
-      this.subscribeCurrentMarket();
+      this.requestSnapshot(nextMarket);
     }
   }
 
@@ -296,7 +302,7 @@ export class TradeWsClient {
       if (this.apiKey) {
         this.send({ op: "authenticate", api_key: this.apiKey });
       }
-      this.subscribeCurrentMarket();
+      this.requestSnapshot(this.selectedMarket);
     };
 
     socket.onmessage = (event) => {
@@ -390,15 +396,19 @@ export class TradeWsClient {
         });
         return;
       case "resync_required":
+        {
+          const autoHealing = message.channel === "l2" && typeof message.market === "string";
         this.callbacks.onResyncRequired({
           channel: message.channel,
           marketId: message.market ?? undefined,
           reason: message.reason,
+          autoHealing,
         });
-        if (message.channel === "l2" && message.market === this.selectedMarket) {
-          this.subscribeCurrentMarket();
+        if (message.channel === "l2" && message.market) {
+          this.resubscribeMarket(message.market);
         }
         return;
+        }
       case "unsubscribed":
         return;
       case "error":
@@ -407,12 +417,28 @@ export class TradeWsClient {
     }
   }
 
-  private subscribeCurrentMarket() {
-    this.pendingSnapshots.add(this.selectedMarket);
+  private requestSnapshot(marketId: MarketId) {
+    this.marketSequences.delete(marketId);
+    this.pendingSnapshots.add(marketId);
     this.send({
       op: "subscribe",
       channel: "l2",
-      market: this.selectedMarket,
+      market: marketId,
+    });
+  }
+
+  private resubscribeMarket(marketId: MarketId) {
+    this.marketSequences.delete(marketId);
+    this.pendingSnapshots.add(marketId);
+    this.send({
+      op: "unsubscribe",
+      channel: "l2",
+      market: marketId,
+    });
+    this.send({
+      op: "subscribe",
+      channel: "l2",
+      market: marketId,
     });
   }
 
@@ -443,10 +469,9 @@ export class TradeWsClient {
           channel: message.channel,
           marketId: message.market,
           reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
+          autoHealing: true,
         });
-        if (message.market === this.selectedMarket) {
-          this.subscribeCurrentMarket();
-        }
+        this.resubscribeMarket(message.market);
         return false;
       }
     }

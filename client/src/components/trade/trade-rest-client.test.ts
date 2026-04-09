@@ -70,6 +70,54 @@ describe("TradeRestClient", () => {
     });
   });
 
+  it("can refresh only user-stream state without refetching markets or user", async () => {
+    const responses = [
+      [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }],
+      [],
+      [],
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      text: async () => JSON.stringify(responses.shift()),
+    }));
+    const client = new TradeRestClient(
+      { httpUrl: "http://localhost:8080", apiKey: "secret" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const snapshot = await client.bootstrapAccountData({
+      positions: true,
+      openOrders: true,
+      fills: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8080/api/v1/positions",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8080/api/v1/open-orders",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://localhost:8080/api/v1/fills",
+      expect.any(Object),
+    );
+    expect(snapshot.loaded).toEqual({
+      markets: false,
+      user: false,
+      positions: true,
+      openOrders: true,
+      fills: true,
+    });
+    expect(snapshot.user).toBeNull();
+    expect(snapshot.markets).toEqual([]);
+  });
+
   it("marks open orders as not loaded when that specific bootstrap request fails", async () => {
     const responses = [
       { ok: true, payload: [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }] },

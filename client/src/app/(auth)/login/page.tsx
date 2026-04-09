@@ -52,7 +52,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <label className="block">
             <input
               autoComplete="off"
-              className="block w-full rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-xl text-white outline-none"
+              className="block w-full rounded-2xl border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-4 py-3 text-xl text-[var(--text-primary)] outline-none"
               name="apiKey"
               placeholder="API key"
               spellCheck={false}
@@ -63,12 +63,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             Use key &quot;trader&quot; for demo access.
           </p>
           {errorMessage ? (
-            <p className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-4 py-3 text-lg text-[#ffb2b2]">
+            <p className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-4 py-3 text-lg text-[color:var(--red-strong)]">
               {errorMessage}
             </p>
           ) : null}
           <button
-            className="w-full rounded-2xl bg-[var(--green)] px-4 py-3 text-xl font-bold text-white shadow-[0_0_24px_rgba(66,204,78,0.25)] hover:translate-y-[-1px] hover:bg-[#4dd859]"
+            className="w-full rounded-2xl bg-[var(--green)] px-4 py-3 text-xl font-bold text-[var(--background)] shadow-[0_0_24px_rgba(66,204,78,0.25)] hover:translate-y-[-1px] hover:brightness-[1.04]"
             type="submit"
           >
             Start session

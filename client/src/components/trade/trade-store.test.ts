@@ -261,6 +261,12 @@ describe("tradeReducer", () => {
 
     expect(state.isSubmitting).toBe(false);
     expect(state.positionsByMarket["BTC-USD"].netQuantity).toBe(6);
+    expect(state.positions.find((position) => position.market === "BTC-USD")).toEqual({
+      market: "BTC-USD",
+      netQuantity: 6,
+      averageEntryPrice: 97.83333333333333,
+      realizedPnl: 10,
+    });
     expect(state.pendingOrders.find((order) => order.id === "order-2")?.shares).toBe(1);
     expect(state.pendingOrders.find((order) => order.id === "order-2")?.limitPrice).toBe(105);
     expect(state.filledOrders).toBe(1);
@@ -268,6 +274,84 @@ describe("tradeReducer", () => {
     expect(state.messages.at(-1)?.text).toBe(
       "Accepted buy BTC-USD for 4 shares. Filled 3 at avg $100.67 and 1 remain resting at $105.00.",
     );
+  });
+
+  it("applies websocket fills to positions when the resting order side is known", () => {
+    let state = createInitialTradeState(markets);
+    state = tradeReducer(state, {
+      type: "bootstrap-success",
+      data: bootstrapData(),
+      id: 1,
+      time: "09:30:00",
+    });
+
+    state = tradeReducer(state, {
+      type: "ws-fill",
+      fill: {
+        fillId: "fill-1",
+        market: "BTC-USD",
+        makerOrderId: "order-1",
+        takerOrderId: "aggressor-1",
+        price: 101,
+        quantity: 1,
+        occurredAt: "2026-03-17T09:31:00Z",
+      },
+      id: 2,
+      time: "09:31:00",
+    });
+
+    expect(state.positionsByMarket["BTC-USD"]).toEqual({
+      netQuantity: 4,
+      avgCost: 96.5,
+      realizedPnl: 10,
+    });
+    expect(state.positions.find((position) => position.market === "BTC-USD")).toEqual({
+      market: "BTC-USD",
+      netQuantity: 4,
+      averageEntryPrice: 96.5,
+      realizedPnl: 10,
+    });
+  });
+
+  it("preserves locally updated positions across market-state updates", () => {
+    let state = createInitialTradeState(markets);
+    state = tradeReducer(state, {
+      type: "bootstrap-success",
+      data: bootstrapData(),
+      id: 1,
+      time: "09:30:00",
+    });
+
+    state = tradeReducer(state, {
+      type: "ws-fill",
+      fill: {
+        fillId: "fill-1",
+        market: "BTC-USD",
+        makerOrderId: "order-1",
+        takerOrderId: "aggressor-1",
+        price: 101,
+        quantity: 1,
+        occurredAt: "2026-03-17T09:31:00Z",
+      },
+      id: 2,
+      time: "09:31:00",
+    });
+    state = tradeReducer(state, {
+      type: "ws-market-state",
+      market: {
+        id: "ETH-USD",
+        name: "Ether",
+        baseAsset: "ETH",
+        quoteAsset: "USD",
+        status: "disabled",
+      },
+    });
+
+    expect(state.positionsByMarket["BTC-USD"]).toEqual({
+      netQuantity: 4,
+      avgCost: 96.5,
+      realizedPnl: 10,
+    });
   });
 
   it("preserves existing pending orders when account sync cannot reload open orders", () => {

@@ -3,10 +3,14 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
+  resolveBulkBotDefinitions,
+} from "@/app/(dashboard)/admin/bulk-bot-config";
+import {
   deriveCompetitionBaseAsset,
   COMPETITION_QUOTE_ASSET,
   deriveCompetitionMarketId,
 } from "@/app/(dashboard)/admin/market-utils";
+import { resolveAdminMessageTargets } from "@/app/(dashboard)/admin/message-targets";
 import { readSessionFromCookieValue, SESSION_COOKIE } from "@/lib/auth";
 import {
   ExchangeAdminDeskOrderResponse,
@@ -36,6 +40,33 @@ function asOptionalString(formData: FormData, key: string) {
 function parseNumberField(formData: FormData, key: string) {
   const raw = String(formData.get(key) ?? "").trim();
   return raw.length > 0 ? Number(raw) : null;
+}
+
+function readSharedBotMutationFields(formData: FormData) {
+  return {
+    market_id: String(formData.get("marketId") ?? "").trim(),
+    order_type: String(formData.get("orderType") ?? "limit"),
+    side_mode: String(formData.get("sideMode") ?? "both"),
+    min_quantity: Number(formData.get("minQuantity") ?? 0),
+    max_quantity: Number(formData.get("maxQuantity") ?? 0),
+    interval_ms: Number(formData.get("intervalMs") ?? 0),
+    max_open_orders: Number(formData.get("maxOpenOrders") ?? 0),
+    price_offset_ticks: Number(formData.get("priceOffsetTicks") ?? 0),
+    walk_step_ticks: Number(formData.get("walkStepTicks") ?? 0),
+    fallback_price: parseNumberField(formData, "fallbackPrice"),
+    start_immediately: String(formData.get("startImmediately") ?? "") === "on",
+  };
+}
+
+function buildBotMutationRequest(
+  formData: FormData,
+  overrides: { botId: string; displayName: string | null },
+) {
+  return {
+    bot_id: overrides.botId,
+    display_name: overrides.displayName,
+    ...readSharedBotMutationFields(formData),
+  };
 }
 
 async function runMutation<T>(
@@ -157,41 +188,144 @@ export async function loadConfigAction(formData: FormData) {
 }
 
 export async function sendMessageAction(formData: FormData) {
-  await runMutation(
-    "/api/v1/admin/messages",
-    "POST",
-    {
-      target_username: asOptionalString(formData, "targetUsername"),
-      market: asOptionalString(formData, "market"),
-      level: String(formData.get("level") ?? "info"),
-      title: asOptionalString(formData, "title"),
-      body: String(formData.get("body") ?? "").trim(),
-    },
-    "Admin message sent.",
-  );
+  const audience = String(formData.get("audience") ?? "single").trim();
+  const targetUsername = asOptionalString(formData, "targetUsername");
+  const targetUsernames = String(formData.get("targetUsernames") ?? "");
+  const payload = {
+    market: asOptionalString(formData, "market"),
+    level: String(formData.get("level") ?? "info"),
+    title: asOptionalString(formData, "title"),
+    body: String(formData.get("body") ?? "").trim(),
+  };
+
+  const resolved = (() => {
+    try {
+      return resolveAdminMessageTargets(audience, targetUsername, targetUsernames);
+    } catch (error) {
+      adminRedirect({
+        error: error instanceof Error ? error.message : "Admin action failed.",
+      });
+      throw new Error("unreachable");
+    }
+  })();
+
+  const apiKey = await requireAdminApiKey();
+  let sentCount = 0;
+  let lastTarget: string | null = null;
+  let successNotice = "Admin message sent.";
+
+  try {
+    if (resolved.audience === "all") {
+      await sendAdminMutation(apiKey, "/api/v1/admin/messages", "POST", {
+        ...payload,
+        target_username: null,
+      });
+      successNotice = "Broadcast sent to all users.";
+    } else {
+      for (const username of resolved.targets) {
+        lastTarget = username;
+        await sendAdminMutation(apiKey, "/api/v1/admin/messages", "POST", {
+          ...payload,
+          target_username: username,
+        });
+        sentCount += 1;
+      }
+
+      successNotice =
+        sentCount === 1
+          ? `Admin message sent to ${resolved.targets[0]}.`
+          : `Admin message sent to ${sentCount} users.`;
+    }
+  } catch (error) {
+    if (error instanceof ExchangeServerError && error.status === 401) {
+      redirect("/login?error=session-expired");
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Admin action failed.";
+
+    if (sentCount > 0 && lastTarget) {
+      adminRedirect({
+        error: `Sent to ${sentCount} users before failing on ${lastTarget}. ${message}`,
+      });
+    }
+
+    adminRedirect({ error: message });
+  }
+
+  adminRedirect({ notice: successNotice });
 }
 
 export async function saveBotAction(formData: FormData) {
   await runMutation(
     "/api/v1/admin/bots",
     "POST",
-    {
-      bot_id: String(formData.get("botId") ?? "").trim(),
-      display_name: asOptionalString(formData, "displayName"),
-      market_id: String(formData.get("marketId") ?? "").trim(),
-      order_type: String(formData.get("orderType") ?? "limit"),
-      side_mode: String(formData.get("sideMode") ?? "both"),
-      min_quantity: Number(formData.get("minQuantity") ?? 0),
-      max_quantity: Number(formData.get("maxQuantity") ?? 0),
-      interval_ms: Number(formData.get("intervalMs") ?? 0),
-      max_open_orders: Number(formData.get("maxOpenOrders") ?? 0),
-      price_offset_ticks: Number(formData.get("priceOffsetTicks") ?? 0),
-      walk_step_ticks: Number(formData.get("walkStepTicks") ?? 0),
-      fallback_price: parseNumberField(formData, "fallbackPrice"),
-      start_immediately: String(formData.get("startImmediately") ?? "") === "on",
-    },
+    buildBotMutationRequest(formData, {
+      botId: String(formData.get("botId") ?? "").trim(),
+      displayName: asOptionalString(formData, "displayName"),
+    }),
     "Bot configuration saved.",
   );
+}
+
+export async function saveBotBatchAction(formData: FormData) {
+  const definitions = (() => {
+    try {
+      return resolveBulkBotDefinitions({
+        botIdPrefix: String(formData.get("botIdPrefix") ?? ""),
+        displayNamePrefix: asOptionalString(formData, "displayNamePrefix"),
+        count: Number(formData.get("botCount") ?? 0),
+        startIndex: Number(formData.get("botStartIndex") ?? 1),
+      });
+    } catch (error) {
+      adminRedirect({
+        error: error instanceof Error ? error.message : "Admin action failed.",
+      });
+      throw new Error("unreachable");
+    }
+  })();
+
+  const apiKey = await requireAdminApiKey();
+  let savedCount = 0;
+  let lastBotId: string | null = null;
+
+  try {
+    for (const definition of definitions) {
+      lastBotId = definition.botId;
+      await sendAdminMutation(apiKey, "/api/v1/admin/bots", "POST", buildBotMutationRequest(
+        formData,
+        {
+          botId: definition.botId,
+          displayName: definition.displayName,
+        },
+      ));
+      savedCount += 1;
+    }
+  } catch (error) {
+    if (error instanceof ExchangeServerError && error.status === 401) {
+      redirect("/login?error=session-expired");
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Admin action failed.";
+
+    if (savedCount > 0 && lastBotId) {
+      adminRedirect({
+        error: `Saved ${savedCount} bots before failing on ${lastBotId}. ${message}`,
+      });
+    }
+
+    adminRedirect({ error: message });
+  }
+
+  const firstBotId = definitions[0]?.botId;
+  const lastCreatedBotId = definitions[definitions.length - 1]?.botId;
+  adminRedirect({
+    notice:
+      definitions.length === 1
+        ? `Saved bot ${firstBotId}.`
+        : `Saved ${definitions.length} bots from ${firstBotId} through ${lastCreatedBotId}.`,
+  });
 }
 
 export async function startBotAction(formData: FormData) {

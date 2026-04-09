@@ -1,20 +1,146 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   --background: #040405;
   --foreground: #f4f4f5;
   --surface: rgba(20, 20, 22, 0.92);
   --surface-raised: rgba(24, 24, 28, 0.95);
   --surface-stroke: #26272b;
   --surface-soft: #111114;
+  --surface-soft-alt: #0d0f12;
   --muted: #96969d;
   --muted-strong: #b7b7bd;
+  --text-primary: #f5f5f5;
+  --text-secondary: #d9d9dc;
+  --text-muted: #8a8a92;
+  --text-muted-soft: #7f8289;
+  --text-subtle: #989ba6;
+  --text-faint: #6f6f76;
   --green: #42cc4e;
+  --green-strong: #70ff6c;
   --green-soft: rgba(66, 204, 78, 0.14);
-  --red: #ff7a7a;
+  --red: #d85b5b;
+  --red-strong: #ff6c6c;
   --red-soft: rgba(255, 122, 122, 0.14);
   --cyan: #40d9ff;
+  --amber: #f0c15b;
+  --overlay: rgba(0, 0, 0, 0.52);
+  --panel-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  --card-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  --card-shadow-hover:
+    0 16px 32px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(66, 204, 78, 0.12);
+  --accent-hover-border: rgba(66, 204, 78, 0.42);
+  --input-border: #666;
+  --avatar-background: #efebe3;
+  --avatar-foreground: #000000;
+  --trade-shell-bg: #000000;
+  --trade-panel: #141416;
+  --trade-panel-soft: #111114;
+  --trade-panel-soft-alt: #0f1013;
+  --trade-panel-elevated: #18181b;
+  --trade-panel-ghost: rgba(24, 24, 27, 0.82);
+  --trade-border: #26272b;
+  --trade-border-strong: #2c2d31;
+  --trade-border-soft: #32333a;
+  --trade-border-soft-hover: #50515a;
+  --trade-text-primary: #f5f5f5;
+  --trade-text-secondary: #d9d9dc;
+  --trade-text-muted: #8a8a92;
+  --trade-text-muted-soft: #7f8289;
+  --trade-text-subtle: #989ba6;
+  --trade-text-faint: #b8b8bc;
+  --trade-text-quiet: #a4a4a4;
+  --trade-text-ticker: #8f929b;
+  --trade-positive: #42cc4e;
+  --trade-positive-strong: #70ff6c;
+  --trade-negative: #d85b5b;
+  --trade-negative-strong: #ff6c6c;
+  --trade-selection: #d5d5d5;
+  --trade-status-connected: #40d9ff;
+  --trade-status-reconnecting: #f0c15b;
+  --trade-status-disconnected: #ff6c6c;
+  --trade-status-connecting: #8a8a92;
+  --trade-chart-grid-soft: rgba(38, 39, 43, 0.28);
+  --trade-chart-grid-strong: rgba(38, 39, 43, 0.46);
+  --trade-chart-crosshair: rgba(255, 255, 255, 0.08);
+  --ui-focus-border: rgba(64, 217, 255, 0.5);
+  --ui-focus-ring: rgba(64, 217, 255, 0.14);
   --ui-radius: 2px;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --background: #f6f1e7;
+  --foreground: #172026;
+  --surface: rgba(255, 251, 245, 0.94);
+  --surface-raised: rgba(255, 255, 255, 0.98);
+  --surface-stroke: #d7cfc1;
+  --surface-soft: #ece5d8;
+  --surface-soft-alt: #e4dccf;
+  --muted: #786f62;
+  --muted-strong: #2b3439;
+  --text-primary: #172026;
+  --text-secondary: #354048;
+  --text-muted: #72685d;
+  --text-muted-soft: #7e766c;
+  --text-subtle: #817567;
+  --text-faint: #897e71;
+  --green: #1f9d55;
+  --green-strong: #167d43;
+  --green-soft: rgba(31, 157, 85, 0.12);
+  --red: #c65b5b;
+  --red-strong: #b54d4d;
+  --red-soft: rgba(198, 91, 91, 0.12);
+  --cyan: #197daf;
+  --amber: #c68b23;
+  --overlay: rgba(27, 23, 18, 0.24);
+  --panel-shadow:
+    0 16px 36px rgba(92, 77, 46, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  --card-shadow: 0 14px 32px rgba(92, 77, 46, 0.1);
+  --card-shadow-hover:
+    0 20px 40px rgba(92, 77, 46, 0.14),
+    0 0 0 1px rgba(31, 157, 85, 0.1);
+  --accent-hover-border: rgba(31, 157, 85, 0.42);
+  --input-border: #b9aa95;
+  --avatar-background: #223643;
+  --avatar-foreground: #f8f4ed;
+  --trade-shell-bg: #f7f2e8;
+  --trade-panel: #fffaf2;
+  --trade-panel-soft: #f4ede1;
+  --trade-panel-soft-alt: #fbf6ed;
+  --trade-panel-elevated: #ffffff;
+  --trade-panel-ghost: rgba(255, 255, 255, 0.78);
+  --trade-border: #d8cfc1;
+  --trade-border-strong: #d1c7b8;
+  --trade-border-soft: #c7baa7;
+  --trade-border-soft-hover: #a89883;
+  --trade-text-primary: #172026;
+  --trade-text-secondary: #354048;
+  --trade-text-muted: #70675d;
+  --trade-text-muted-soft: #7c7369;
+  --trade-text-subtle: #84796a;
+  --trade-text-faint: #5a6168;
+  --trade-text-quiet: #6f6d68;
+  --trade-text-ticker: #756c61;
+  --trade-positive: #1f9d55;
+  --trade-positive-strong: #167d43;
+  --trade-negative: #c65b5b;
+  --trade-negative-strong: #b54d4d;
+  --trade-selection: #5f6b74;
+  --trade-status-connected: #197daf;
+  --trade-status-reconnecting: #c68b23;
+  --trade-status-disconnected: #c65b5b;
+  --trade-status-connecting: #8a8177;
+  --trade-chart-grid-soft: rgba(183, 168, 145, 0.35);
+  --trade-chart-grid-strong: rgba(183, 168, 145, 0.52);
+  --trade-chart-crosshair: rgba(53, 64, 72, 0.12);
+  --ui-focus-border: rgba(25, 125, 175, 0.42);
+  --ui-focus-ring: rgba(25, 125, 175, 0.12);
 }
 
 @theme inline {
@@ -35,12 +161,22 @@ html {
     linear-gradient(180deg, #080809 0%, #040405 100%);
 }
 
+html[data-theme="light"] {
+  background:
+    radial-gradient(circle at top, rgba(31, 157, 85, 0.12), transparent 26%),
+    radial-gradient(circle at 82% 0%, rgba(25, 125, 175, 0.1), transparent 22%),
+    linear-gradient(180deg, #fbf6ed 0%, #f6f1e7 100%);
+}
+
 body {
   min-height: 100vh;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-darker-grotesque), sans-serif;
   letter-spacing: 0.01em;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 @keyframes ui-fade-up {
@@ -157,48 +293,51 @@ button {
   color: #ffffff;
 }
 
+html[data-theme="light"] ::selection {
+  background: rgba(31, 157, 85, 0.22);
+  color: #ffffff;
+}
+
 .surface-panel {
   border: 1px solid var(--surface-stroke);
   background:
-    linear-gradient(180deg, rgba(24, 24, 28, 0.96), rgba(18, 18, 20, 0.94)),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 98%, transparent), color-mix(in srgb, var(--surface-soft) 92%, transparent)),
     var(--surface);
   border-radius: var(--ui-radius);
-  box-shadow:
-    0 18px 42px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  box-shadow: var(--panel-shadow);
   backdrop-filter: blur(18px);
 }
 
 .surface-panel-soft {
-  border: 1px solid rgba(45, 45, 50, 0.9);
-  background: rgba(15, 15, 17, 0.86);
+  border: 1px solid color-mix(in srgb, var(--surface-stroke) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
   border-radius: var(--ui-radius);
 }
 
 .surface-title {
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 1.375rem;
   font-weight: 700;
   line-height: 1;
 }
 
 .ops-panel {
-  border: 1px solid #26272b;
-  background: #121317;
+  border: 1px solid var(--surface-stroke);
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--background));
   border-radius: var(--ui-radius);
   box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.015);
+    0 10px 22px color-mix(in srgb, var(--background) 36%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 40%, transparent);
 }
 
 .ops-panel-soft {
-  border: 1px solid #2b2d32;
-  background: #0f1013;
+  border: 1px solid color-mix(in srgb, var(--surface-stroke) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 92%, var(--background));
   border-radius: var(--ui-radius);
 }
 
 .ops-section-title {
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 1.125rem;
   font-weight: 700;
   line-height: 1;
@@ -217,10 +356,10 @@ button {
 .ops-select,
 .ops-textarea {
   width: 100%;
-  border: 1px solid #2b2d32;
-  background: #0d0f12;
+  border: 1px solid var(--surface-stroke);
+  background: var(--surface-soft-alt);
   border-radius: var(--ui-radius);
-  color: #ffffff;
+  color: var(--text-primary);
   padding: 0.75rem 0.9rem;
   font-size: 1rem;
   line-height: 1.2;
@@ -233,14 +372,14 @@ button {
 
 .ops-input::placeholder,
 .ops-textarea::placeholder {
-  color: #7f8289;
+  color: var(--text-muted-soft);
 }
 
 .ops-input:focus,
 .ops-select:focus,
 .ops-textarea:focus {
-  border-color: rgba(64, 217, 255, 0.5);
-  box-shadow: 0 0 0 1px rgba(64, 217, 255, 0.14);
+  border-color: var(--ui-focus-border);
+  box-shadow: 0 0 0 1px var(--ui-focus-ring);
 }
 
 .ops-button {
@@ -258,26 +397,26 @@ button {
 }
 
 .ops-button-primary {
-  background: #41c34c;
-  color: #071108;
+  background: var(--green);
+  color: color-mix(in srgb, var(--background) 78%, #081108);
 }
 
 .ops-button-neutral {
-  border-color: #2b2d32;
-  background: #101114;
-  color: #ffffff;
+  border-color: var(--surface-stroke);
+  background: var(--surface-soft);
+  color: var(--text-primary);
 }
 
 .ops-button-danger {
   border-color: rgba(216, 91, 91, 0.38);
   background: rgba(216, 91, 91, 0.12);
-  color: #ffd6d6;
+  color: color-mix(in srgb, var(--red-strong) 72%, white);
 }
 
 .ops-button-warning {
   border-color: rgba(255, 211, 122, 0.34);
   background: rgba(255, 211, 122, 0.12);
-  color: #ffe5ab;
+  color: color-mix(in srgb, var(--amber) 76%, white);
 }
 
 .ops-button:hover {
@@ -287,7 +426,7 @@ button {
 .ops-badge {
   display: inline-flex;
   align-items: center;
-  border: 1px solid #31343a;
+  border: 1px solid color-mix(in srgb, var(--surface-stroke) 92%, transparent);
   border-radius: var(--ui-radius);
   padding: 0.32rem 0.7rem;
   font-size: 0.68rem;
@@ -303,8 +442,8 @@ button {
 
 .ops-note {
   border-radius: var(--ui-radius);
-  border: 1px solid #2b2d32;
-  background: #0f1012;
+  border: 1px solid color-mix(in srgb, var(--surface-stroke) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 94%, var(--background));
 }
 
 .surface-muted {
@@ -315,20 +454,195 @@ button {
   border: 1px solid var(--surface-stroke);
   border-radius: var(--ui-radius);
   background:
-    linear-gradient(180deg, rgba(26, 26, 29, 0.96), rgba(17, 17, 20, 0.94)),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 96%, transparent), color-mix(in srgb, var(--surface-soft) 92%, transparent)),
     var(--surface);
   color: var(--foreground);
   font-weight: 700;
   padding: 1.25rem;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--card-shadow);
 }
 
 .card-link:hover {
-  border-color: rgba(66, 204, 78, 0.52);
-  box-shadow:
-    0 16px 32px rgba(0, 0, 0, 0.3),
-    0 0 0 1px rgba(66, 204, 78, 0.12);
+  border-color: color-mix(in srgb, var(--green) 52%, transparent);
+  box-shadow: var(--card-shadow-hover);
   transform: translateY(-1px);
+}
+
+.trade-message-card-neutral {
+  border-color: var(--trade-border);
+  background: var(--trade-panel-soft);
+}
+
+.trade-message-card-positive {
+  border-color: color-mix(in srgb, var(--trade-positive) 28%, var(--trade-border));
+  background: color-mix(in srgb, var(--trade-positive) 10%, var(--trade-panel-soft));
+}
+
+.trade-message-card-negative {
+  border-color: color-mix(in srgb, var(--trade-negative) 34%, var(--trade-border));
+  background: color-mix(in srgb, var(--trade-negative) 10%, var(--trade-panel-soft));
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] {
+  background: var(--trade-shell-bg);
+  color: var(--trade-text-primary);
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-black"] {
+  background-color: var(--trade-shell-bg) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#141416]"] {
+  background-color: var(--trade-panel) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#111114]"] {
+  background-color: var(--trade-panel-soft) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#0f1013]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#0d0f12]"] {
+  background-color: var(--trade-panel-soft-alt) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#18181b]"] {
+  background-color: var(--trade-panel-elevated) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[rgba(24,24,27,0.82)]"] {
+  background-color: var(--trade-panel-ghost) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[rgba(0,0,0,0.52)]"] {
+  background-color: var(--overlay) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#26272b]"] {
+  background-color: var(--trade-panel-soft) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#42cc4e]"] {
+  background-color: var(--trade-positive) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#d85b5b]"] {
+  background-color: var(--trade-negative) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="bg-[#efebe3]"] {
+  background-color: var(--avatar-background) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#26272b]"] {
+  border-color: var(--trade-border) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#2c2d31]"] {
+  border-color: var(--trade-border-strong) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#32333a]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#2b2d32]"] {
+  border-color: var(--trade-border-soft) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#666]"] {
+  border-color: var(--input-border) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="border-[#d5d5d5]"] {
+  border-color: var(--trade-selection) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-white"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#f5f5f5]"] {
+  color: var(--trade-text-primary) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#d9d9dc]"] {
+  color: var(--trade-text-secondary) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#b8b8bc]"] {
+  color: var(--trade-text-faint) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#8a8a92]"] {
+  color: var(--trade-text-muted) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#8f9098]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#8f929b]"] {
+  color: var(--trade-text-muted-soft) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#7f8289]"] {
+  color: var(--trade-text-muted-soft) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#989ba6]"] {
+  color: var(--trade-text-subtle) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#9d9da4]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#b6b6bc]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#c7c7cb]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#d8d8dc]"] {
+  color: var(--trade-text-secondary) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#6f6f76]"] {
+  color: var(--trade-text-faint) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#7d7d84]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#949494]"],
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#bababa]"] {
+  color: var(--trade-text-faint) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#a4a4a4]"] {
+  color: var(--trade-text-quiet) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#aaa]"] {
+  color: var(--trade-text-quiet) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#d5d5d5]"] {
+  color: var(--trade-selection) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#70ff6c]"] {
+  color: var(--trade-positive-strong) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#ff6c6c]"] {
+  color: var(--trade-negative-strong) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="text-[#ffb2b2]"] {
+  color: var(--trade-negative-strong) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="hover:border-[#50515a]"]:hover {
+  border-color: var(--trade-border-soft-hover) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="hover:border-[rgba(66,204,78,0.42)]"]:hover {
+  border-color: var(--accent-hover-border) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="hover:text-white"]:hover {
+  color: var(--trade-text-primary) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="focus:border-[rgba(64,217,255,0.5)]"]:focus {
+  border-color: var(--ui-focus-border) !important;
+}
+
+html[data-theme="light"] [data-testid="trade-console-root"] [class*="focus:shadow-[0_0_0_1px_rgba(64,217,255,0.14)]"]:focus {
+  box-shadow: 0 0 0 1px var(--ui-focus-ring) !important;
 }
 
 [class*="rounded"] {

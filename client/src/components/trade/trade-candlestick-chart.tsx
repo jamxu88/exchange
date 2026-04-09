@@ -26,14 +26,94 @@ type TradeCandlestickChartProps = {
 };
 
 type ChartHandle = {
+  applyOptions: (options: Record<string, unknown>) => void;
   remove: () => void;
   resize: (width: number, height: number) => void;
   timeScale: () => { fitContent: () => void };
 };
 
 type SeriesHandle = {
+  applyOptions: (options: Record<string, unknown>) => void;
   setData: (data: CandleDatum[]) => void;
 };
+
+type ChartPalette = {
+  gridSoft: string;
+  gridStrong: string;
+  crosshair: string;
+  panel: string;
+  border: string;
+  textMuted: string;
+  textQuiet: string;
+  textFaint: string;
+  textPrimary: string;
+  positive: string;
+  negative: string;
+  overlay: string;
+};
+
+function readThemeValue(name: string, fallback: string) {
+  if (typeof document === "undefined") {
+    return fallback;
+  }
+
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value.length > 0 ? value : fallback;
+}
+
+function readChartPalette(): ChartPalette {
+  return {
+    gridSoft: readThemeValue("--trade-chart-grid-soft", "rgba(38, 39, 43, 0.28)"),
+    gridStrong: readThemeValue("--trade-chart-grid-strong", "rgba(38, 39, 43, 0.46)"),
+    crosshair: readThemeValue("--trade-chart-crosshair", "rgba(255, 255, 255, 0.08)"),
+    panel: readThemeValue("--trade-panel-elevated", "#18181b"),
+    border: readThemeValue("--trade-border", "#26272b"),
+    textMuted: readThemeValue("--trade-text-muted", "#8a8a92"),
+    textQuiet: readThemeValue("--trade-text-quiet", "#a7a7ae"),
+    textFaint: readThemeValue("--trade-text-faint", "#6f6f76"),
+    textPrimary: readThemeValue("--trade-text-primary", "#f5f5f5"),
+    positive: readThemeValue("--trade-positive", "#42cc4e"),
+    negative: readThemeValue("--trade-negative", "#d85b5b"),
+    overlay: readThemeValue("--overlay", "rgba(20, 20, 22, 0.84)"),
+  };
+}
+
+function applyChartTheme(chart: ChartHandle, series: SeriesHandle) {
+  const palette = readChartPalette();
+  chart.applyOptions({
+    layout: {
+      textColor: palette.textMuted,
+    },
+    grid: {
+      vertLines: { color: palette.gridSoft },
+      horzLines: { color: palette.gridStrong },
+    },
+    rightPriceScale: {
+      borderColor: palette.border,
+    },
+    timeScale: {
+      borderColor: palette.border,
+    },
+    crosshair: {
+      vertLine: {
+        color: palette.crosshair,
+        labelBackgroundColor: palette.panel,
+      },
+      horzLine: {
+        color: palette.crosshair,
+        labelBackgroundColor: palette.panel,
+      },
+    },
+  });
+  series.applyOptions({
+    upColor: palette.positive,
+    downColor: palette.negative,
+    borderUpColor: palette.positive,
+    borderDownColor: palette.negative,
+    wickUpColor: palette.positive,
+    wickDownColor: palette.negative,
+  });
+}
 
 export function buildCandlestickData(trades: MarketTrade[]) {
   const candles: CandleDatum[] = [];
@@ -88,6 +168,7 @@ export function TradeCandlestickChart({
   useEffect(() => {
     let mounted = true;
     let resizeObserver: ResizeObserver | null = null;
+    let themeObserver: MutationObserver | null = null;
 
     async function loadChart() {
       const container = containerRef.current;
@@ -101,33 +182,35 @@ export function TradeCandlestickChart({
           return;
         }
 
+        const palette = readChartPalette();
+
         const chart = library.createChart(container, {
           width: Math.max(container.clientWidth, 320),
           height: Math.max(container.clientHeight, 260),
           layout: {
             background: { type: library.ColorType.Solid, color: "transparent" },
-            textColor: "#8f9098",
+            textColor: palette.textMuted,
           },
           grid: {
-            vertLines: { color: "rgba(38, 39, 43, 0.28)" },
-            horzLines: { color: "rgba(38, 39, 43, 0.46)" },
+            vertLines: { color: palette.gridSoft },
+            horzLines: { color: palette.gridStrong },
           },
           rightPriceScale: {
-            borderColor: "#26272b",
+            borderColor: palette.border,
           },
           timeScale: {
-            borderColor: "#26272b",
+            borderColor: palette.border,
             timeVisible: true,
             secondsVisible: true,
           },
           crosshair: {
             vertLine: {
-              color: "rgba(255,255,255,0.08)",
-              labelBackgroundColor: "#18181b",
+              color: palette.crosshair,
+              labelBackgroundColor: palette.panel,
             },
             horzLine: {
-              color: "rgba(255,255,255,0.08)",
-              labelBackgroundColor: "#18181b",
+              color: palette.crosshair,
+              labelBackgroundColor: palette.panel,
             },
           },
           localization: {
@@ -152,17 +235,18 @@ export function TradeCandlestickChart({
         };
 
         const series = chart.addSeries(library.CandlestickSeries, {
-          upColor: "#42cc4e",
-          downColor: "#d85b5b",
+          upColor: palette.positive,
+          downColor: palette.negative,
           borderVisible: true,
-          borderUpColor: "#42cc4e",
-          borderDownColor: "#d85b5b",
-          wickUpColor: "#42cc4e",
-          wickDownColor: "#d85b5b",
+          borderUpColor: palette.positive,
+          borderDownColor: palette.negative,
+          wickUpColor: palette.positive,
+          wickDownColor: palette.negative,
           priceLineVisible: false,
           lastValueVisible: false,
         });
 
+        applyChartTheme(chart, series);
         series.setData(candlesRef.current);
         chart.timeScale().fitContent();
 
@@ -181,6 +265,20 @@ export function TradeCandlestickChart({
           });
           resizeObserver.observe(container);
         }
+
+        if (typeof MutationObserver !== "undefined") {
+          themeObserver = new MutationObserver(() => {
+            if (!chartRef.current || !seriesRef.current) {
+              return;
+            }
+
+            applyChartTheme(chartRef.current, seriesRef.current);
+          });
+          themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-theme"],
+          });
+        }
       } catch {
         if (mounted) {
           setChartError(true);
@@ -193,6 +291,7 @@ export function TradeCandlestickChart({
     return () => {
       mounted = false;
       resizeObserver?.disconnect();
+      themeObserver?.disconnect();
       chartRef.current?.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -210,22 +309,22 @@ export function TradeCandlestickChart({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="candlestick-view">
-      <div className="grid grid-cols-3 gap-[10px] border-b border-[#26272b] px-[20px] py-[14px] text-[13px] font-medium text-[#a7a7ae]">
-        <div className="rounded-[6px] border border-[#26272b] bg-[#111114] px-[12px] py-[10px]">
-          <p className="uppercase tracking-[0.18em] text-[10px] text-[#6f6f76]">Last</p>
-          <p className="mt-[6px] text-[18px] font-bold leading-none text-white">
+      <div className="grid grid-cols-3 gap-[10px] border-b border-[var(--trade-border)] px-[20px] py-[14px] text-[13px] font-medium text-[var(--trade-text-quiet)]">
+        <div className="rounded-[6px] border border-[var(--trade-border)] bg-[var(--trade-panel-soft)] px-[12px] py-[10px]">
+          <p className="uppercase tracking-[0.18em] text-[10px] text-[var(--trade-text-faint)]">Last</p>
+          <p className="mt-[6px] text-[18px] font-bold leading-none text-[var(--trade-text-primary)]">
             {formatMaybePrice(lastPrice)}
           </p>
         </div>
-        <div className="rounded-[6px] border border-[#26272b] bg-[#111114] px-[12px] py-[10px]">
-          <p className="uppercase tracking-[0.18em] text-[10px] text-[#6f6f76]">Mid</p>
-          <p className="mt-[6px] text-[18px] font-bold leading-none text-white">
+        <div className="rounded-[6px] border border-[var(--trade-border)] bg-[var(--trade-panel-soft)] px-[12px] py-[10px]">
+          <p className="uppercase tracking-[0.18em] text-[10px] text-[var(--trade-text-faint)]">Mid</p>
+          <p className="mt-[6px] text-[18px] font-bold leading-none text-[var(--trade-text-primary)]">
             {formatMaybePrice(midPrice)}
           </p>
         </div>
-        <div className="rounded-[6px] border border-[#26272b] bg-[#111114] px-[12px] py-[10px]">
-          <p className="uppercase tracking-[0.18em] text-[10px] text-[#6f6f76]">Spread</p>
-          <p className="mt-[6px] text-[18px] font-bold leading-none text-white">
+        <div className="rounded-[6px] border border-[var(--trade-border)] bg-[var(--trade-panel-soft)] px-[12px] py-[10px]">
+          <p className="uppercase tracking-[0.18em] text-[10px] text-[var(--trade-text-faint)]">Spread</p>
+          <p className="mt-[6px] text-[18px] font-bold leading-none text-[var(--trade-text-primary)]">
             {formatMaybePrice(spread)}
           </p>
         </div>
@@ -237,13 +336,13 @@ export function TradeCandlestickChart({
         </div>
 
         {candles.length === 0 ? (
-          <div className="absolute inset-0 flex items-center justify-center px-[36px] text-center text-[16px] leading-[1.25] text-[#8a8a92]">
+          <div className="absolute inset-0 flex items-center justify-center px-[36px] text-center text-[16px] leading-[1.25] text-[var(--trade-text-muted)]">
             Waiting for market trades to draw 10s candles for {marketName}.
           </div>
         ) : null}
 
         {chartError ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-[rgba(20,20,22,0.84)] px-[36px] text-center text-[16px] leading-[1.25] text-[#b8b8bc]">
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay)] px-[36px] text-center text-[16px] leading-[1.25] text-[var(--trade-text-faint)]">
             Candlestick rendering is unavailable in this environment.
           </div>
         ) : null}

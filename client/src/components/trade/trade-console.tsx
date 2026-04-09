@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { ThemeToggle } from "@/components/providers/theme-toggle";
 import {
   DEFAULT_TRADE_KEYBINDS,
   DEFAULT_TRADE_PREFERENCES,
@@ -17,7 +18,6 @@ import {
 import { useTradeController } from "@/components/trade/use-trade-controller";
 import type { TradeRuntimeConfig } from "@/components/trade/trade-runtime";
 import {
-  formatBookTotal,
   formatMaybePrice,
   formatPrice,
   initialsForUser,
@@ -38,6 +38,12 @@ const leftColumnRows = "minmax(0, 500fr) minmax(0, 360fr)";
 const rightColumnRows = "minmax(0, 430fr) minmax(0, 430fr)";
 const panelBaseClass = "rounded-[10px] border border-[#26272b] bg-[#141416]";
 const quickAdjustments = [-100, -10, 10, 100];
+const orderBookPriceFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+});
 const ticketInputEditingKeys = new Set([
   "Backspace",
   "Delete",
@@ -166,6 +172,16 @@ function TradeSettingsPanel({
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[18px] py-[16px]">
           <div className="grid gap-[18px]">
+          <section className="grid gap-[10px]">
+            <p className="text-[14px] font-semibold uppercase tracking-[0.14em] text-[#8f9098]">
+              Appearance
+            </p>
+            <p className="text-[13px] leading-[1.2] text-[#7f8289]">
+              Switch the client between dark and light mode for this browser.
+            </p>
+            <ThemeToggle className="w-full justify-between rounded-[8px] border-[#2b2d32] bg-[#0f1013] px-[12px] py-[11px] text-[12px] shadow-none hover:border-[#50515a]" />
+          </section>
+
           <section className="grid gap-[10px]">
             <div className="flex items-center justify-between">
               <p className="text-[14px] font-semibold uppercase tracking-[0.14em] text-[#8f9098]">
@@ -308,26 +324,26 @@ function metricToneClass(tone: PnlMetric["tone"]) {
 
 function messageToneClass(tone: MessageTone) {
   if (tone === "positive") {
-    return "text-[#70ff6c]";
+    return "text-[var(--trade-positive-strong)]";
   }
 
   if (tone === "negative") {
-    return "text-[#ff6c6c]";
+    return "text-[var(--trade-negative-strong)]";
   }
 
-  return "text-[#c7c7cb]";
+  return "text-[var(--trade-text-secondary)]";
 }
 
 function messageCardToneClass(tone: MessageTone) {
   if (tone === "positive") {
-    return "border-[#24452a] bg-[#101611]";
+    return "trade-message-card trade-message-card-positive";
   }
 
   if (tone === "negative") {
-    return "border-[#4c2626] bg-[#171011]";
+    return "trade-message-card trade-message-card-negative";
   }
 
-  return "border-[#222327] bg-[#111114]";
+  return "trade-message-card trade-message-card-neutral";
 }
 
 function resolveMarketStatus(status?: MarketStatus): MarketStatus {
@@ -365,8 +381,8 @@ function marketTabClass(status: MarketStatus | undefined, isSelected: boolean) {
 
   if (resolvedStatus === "enabled") {
     return isSelected
-      ? "inline-flex items-center gap-[7px] rounded-[6px] bg-white px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-black motion-hover-soft"
-      : "inline-flex items-center gap-[7px] rounded-[6px] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:bg-[rgba(255,255,255,0.04)] hover:text-white motion-hover-soft";
+      ? "inline-flex items-center gap-[7px] rounded-[6px] border border-[var(--trade-border)] bg-[var(--trade-panel-elevated)] px-[16px] py-[10px] text-[15px] font-bold leading-none whitespace-nowrap text-[var(--trade-text-primary)] motion-hover-soft"
+      : "inline-flex items-center gap-[7px] rounded-[6px] px-[16px] py-[10px] text-[15px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:bg-[rgba(255,255,255,0.04)] hover:text-[var(--trade-text-primary)] motion-hover-soft";
   }
 
   if (resolvedStatus === "disabled") {
@@ -390,13 +406,13 @@ function OrderBookRow({
   return (
     <div className="grid grid-cols-[1fr_1fr_1fr] items-center text-[14px] leading-[18px] font-medium font-mono tabular-nums">
       <span className={level ? priceClass : "text-transparent"}>
-        {level ? formatPrice(level.price) : "--"}
+        {level ? orderBookPriceFormatter.format(Math.trunc(level.price)) : "--"}
       </span>
       <span className="justify-self-center text-white">
         {level ? level.liquidity : ""}
       </span>
       <span className="justify-self-end text-[#a4a4a4]">
-        {level ? formatBookTotal(level.total) : ""}
+        {level ? orderBookPriceFormatter.format(Math.trunc(level.total)) : ""}
       </span>
     </div>
   );
@@ -830,7 +846,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   title={`${profileName} · ${profileTeam}`}
                   type="button"
                 >
-                  <span className="flex h-[32px] w-[32px] items-center justify-center rounded-[8px] bg-[#efebe3] text-[13px] font-semibold leading-none text-black">
+                  <span className="flex h-[32px] w-[32px] items-center justify-center rounded-[8px] bg-[var(--avatar-background)] text-[13px] font-semibold leading-none text-[var(--avatar-foreground)]">
                     {initials}
                   </span>
                   <span className="h-[6px] w-[6px] rounded-full bg-[var(--muted)]" />
@@ -1181,7 +1197,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                       onClick={() => actions.setSide("buy")}
                       type="button"
                     >
-                      <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
+                      <span className="inline-flex items-center gap-[4px] text-[var(--trade-text-secondary)]">
                         <span>Buy</span>
                         <ShortcutHint keys={tradePreferences.keybinds.buy} tone="button" />
                       </span>{" "}
@@ -1196,7 +1212,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                       onClick={() => actions.setSide("sell")}
                       type="button"
                     >
-                      <span className="inline-flex items-center gap-[4px] text-[#e2e2e2]">
+                      <span className="inline-flex items-center gap-[4px] text-[var(--trade-text-secondary)]">
                         <span>Sell</span>
                         <ShortcutHint keys={tradePreferences.keybinds.sell} tone="button" />
                       </span>{" "}
@@ -1334,7 +1350,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                         key={message.id}
                         style={{ animationDelay: `${Math.min(index, 4) * 35}ms` }}
                       >
-                        <div className="text-[11px] font-medium leading-none text-[#7d7d84]">
+                        <div className="text-[11px] font-medium leading-none text-[var(--trade-text-muted-soft)]">
                           <span>{message.time}</span>
                         </div>
                         <p className={`mt-[8px] text-[14px] font-medium leading-[1.15] ${messageToneClass(message.tone)}`}>
