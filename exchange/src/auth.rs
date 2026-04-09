@@ -12,6 +12,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 const API_KEY_HEADER: &str = "x-api-key";
+const RESERVED_TRADER_API_KEY: &str = "trader";
+const RESERVED_TRADER_USERNAME: &str = "trader";
+const RESERVED_TRADER_ID: u128 = 0x74726164657200000000000000000001;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
@@ -144,15 +147,18 @@ impl AuthService {
         state: &AppState,
         api_key: &str,
     ) -> Result<AuthenticatedUser, AuthError> {
-        let user = state
-            .storage
-            .get_user_by_api_key(api_key)
-            .ok_or(AuthError::InvalidApiKey)?;
-        Ok(AuthenticatedUser {
-            trader_id: user.profile.trader_id,
-            username: user.profile.username,
-            role: user.profile.role,
-        })
+        if let Some(user) = state.storage.get_user_by_api_key(api_key) {
+            return Ok(authenticated_user_from_record(user));
+        }
+
+        if api_key == RESERVED_TRADER_API_KEY {
+            Self::ensure_reserved_trader_user(state)?;
+            if let Some(user) = state.storage.get_user_by_api_key(api_key) {
+                return Ok(authenticated_user_from_record(user));
+            }
+        }
+
+        Err(AuthError::InvalidApiKey)
     }
 
     pub fn authenticate_request(
@@ -200,6 +206,53 @@ impl AuthService {
             "admin audit event"
         );
         state.storage.append_admin_audit_log(entry);
+    }
+
+    fn ensure_reserved_trader_user(state: &AppState) -> Result<(), AuthError> {
+        if state
+            .storage
+            .get_user_by_api_key(RESERVED_TRADER_API_KEY)
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let record = UserRecord {
+            profile: UserProfile {
+                trader_id: Uuid::from_u128(RESERVED_TRADER_ID),
+                username: RESERVED_TRADER_USERNAME.to_string(),
+                api_key: RESERVED_TRADER_API_KEY.to_string(),
+                role: UserRole::Trader,
+                created_at: Utc::now(),
+            },
+        };
+
+        match state.storage.create_user(record) {
+            Ok(()) => {
+                state.request_checkpoint_save();
+                Ok(())
+            }
+            Err(StorageError::ApiKeyTaken) => Ok(()),
+            Err(StorageError::UsernameTaken) => {
+                if state
+                    .storage
+                    .get_user_by_api_key(RESERVED_TRADER_API_KEY)
+                    .is_some()
+                {
+                    Ok(())
+                } else {
+                    Err(AuthError::InvalidApiKey)
+                }
+            }
+        }
+    }
+}
+
+fn authenticated_user_from_record(user: UserRecord) -> AuthenticatedUser {
+    AuthenticatedUser {
+        trader_id: user.profile.trader_id,
+        username: user.profile.username,
+        role: user.profile.role,
     }
 }
 
@@ -314,6 +367,22 @@ mod tests {
             .await
             .expect("auth should parse");
         assert_eq!(auth.username, "bob");
+    }
+
+    #[test]
+    fn reserved_trader_api_key_auto_provisions_on_first_auth() {
+        let state = test_state();
+
+        let auth = AuthService::authenticate_api_key(&state, RESERVED_TRADER_API_KEY)
+            .expect("reserved trader auth should succeed");
+
+        assert_eq!(auth.username, RESERVED_TRADER_USERNAME);
+        let stored = state
+            .storage
+            .get_user_by_api_key(RESERVED_TRADER_API_KEY)
+            .expect("reserved trader should be stored");
+        assert_eq!(stored.profile.username, RESERVED_TRADER_USERNAME);
+        assert_eq!(stored.profile.role, UserRole::Trader);
     }
 
     #[tokio::test]
