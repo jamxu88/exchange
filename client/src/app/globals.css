@@ -2,6 +2,8 @@
 
 :root {
   color-scheme: dark;
+  --font-darker-grotesque: "Darker Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-geist-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
   --background: #040405;
   --foreground: #f4f4f5;
   --surface: rgba(20, 20, 22, 0.92);
