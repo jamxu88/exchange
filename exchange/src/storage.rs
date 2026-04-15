@@ -131,7 +131,10 @@ pub trait StorageBackend: Send + Sync {
     fn upsert_position(&self, trader_id: Uuid, position: Position);
     fn delete_position(&self, trader_id: Uuid, market: &str) -> Option<Position>;
     fn replace_positions(&self, trader_id: Uuid, positions: Vec<Position>);
+    /// Secondary durable ledger row (e.g. SQL `orders` table). In-memory backends already store
+    /// open orders and fills on the account partition; this hook may be a no-op there.
     fn upsert_order_ledger(&self, order: Order);
+    /// Companion to `upsert_order_ledger` when an order closes or shrinks.
     fn close_order_ledger(&self, trader_id: Uuid, order_id: Uuid, remaining: u64);
     fn list_all_open_orders(&self) -> Vec<Order>;
     fn list_open_orders(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Order>;
@@ -140,6 +143,7 @@ pub trait StorageBackend: Send + Sync {
     fn delete_open_order(&self, trader_id: Uuid, order_id: Uuid) -> Option<Order>;
     fn close_open_orders_for_market(&self, market: &str) -> usize;
     fn append_fill(&self, trader_id: Uuid, fill: Fill);
+    /// Extra durable fill record beyond per-account `append_fill`; may be a no-op in memory.
     fn persist_fill(&self, fill: Fill);
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill>;
     fn reset_all_trading_state(&self);
@@ -679,9 +683,13 @@ impl StorageBackend for InMemoryRepository {
         });
     }
 
-    fn upsert_order_ledger(&self, _order: Order) {}
+    fn upsert_order_ledger(&self, _order: Order) {
+        // Intentionally empty: open orders and fills live on `AccountData` only (see `upsert_open_order` / `append_fill`).
+    }
 
-    fn close_order_ledger(&self, _trader_id: Uuid, _order_id: Uuid, _remaining: u64) {}
+    fn close_order_ledger(&self, _trader_id: Uuid, _order_id: Uuid, _remaining: u64) {
+        // Intentionally empty: same as `upsert_order_ledger`.
+    }
 
     fn list_all_open_orders(&self) -> Vec<Order> {
         let mut orders = Vec::new();
@@ -739,7 +747,9 @@ impl StorageBackend for InMemoryRepository {
         });
     }
 
-    fn persist_fill(&self, _fill: Fill) {}
+    fn persist_fill(&self, _fill: Fill) {
+        // Intentionally empty: `append_fill` is authoritative for in-memory fills.
+    }
 
     fn list_fills(&self, trader_id: Uuid, market: Option<&str>) -> Vec<Fill> {
         let mut fills = self.with_account(trader_id, |account| {

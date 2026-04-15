@@ -25,6 +25,16 @@ pub enum SettlementError {
     Overflow,
 }
 
+/// Integer average `numerator / denominator` with half-up rounding (`denominator` > 0).
+fn u64_average_half_up(numerator: u128, denominator: u64) -> Result<u64, SettlementError> {
+    if denominator == 0 {
+        return Err(SettlementError::Overflow);
+    }
+    let d = denominator as u128;
+    let q = (numerator + d / 2) / d;
+    u64::try_from(q).map_err(|_| SettlementError::Overflow)
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SettlementJournalReason {
@@ -354,7 +364,7 @@ pub(crate) fn apply_fill_to_position(
         position.net_quantity = current_net
             .checked_add(fill_delta)
             .ok_or(SettlementError::Overflow)?;
-        position.average_entry_price = Some(weighted / next_abs);
+        position.average_entry_price = Some(u64_average_half_up(weighted as u128, next_abs)?);
         return Ok(());
     }
 

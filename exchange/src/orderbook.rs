@@ -75,6 +75,18 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
+    fn checked_add_u64(value: u64, delta: u64, context: &str) -> u64 {
+        value.checked_add(delta).expect(context)
+    }
+
+    fn checked_sub_u64(value: u64, delta: u64, context: &str) -> u64 {
+        value.checked_sub(delta).expect(context)
+    }
+
+    fn checked_sub_usize(value: usize, delta: usize, context: &str) -> usize {
+        value.checked_sub(delta).expect(context)
+    }
+
     pub fn add_order(&mut self, order: Order) {
         self.insert_order(order);
     }
@@ -176,9 +188,17 @@ impl OrderBook {
         };
 
         if new_remaining > old_remaining {
-            level.total_qty = level.total_qty.saturating_add(delta);
+            level.total_qty = Self::checked_add_u64(
+                level.total_qty,
+                delta,
+                "order book: level total_qty add (amend)",
+            );
         } else {
-            level.total_qty = level.total_qty.saturating_sub(delta);
+            level.total_qty = Self::checked_sub_u64(
+                level.total_qty,
+                delta,
+                "order book: level total_qty sub (amend)",
+            );
         }
 
         let node = self.node_mut(locator.handle)?;
@@ -213,7 +233,11 @@ impl OrderBook {
         ) = {
             let node = self.node_mut(head_handle)?;
             let traded_qty = node.order.remaining.min(max_qty);
-            node.order.remaining = node.order.remaining.saturating_sub(traded_qty);
+            node.order.remaining = Self::checked_sub_u64(
+                node.order.remaining,
+                traded_qty,
+                "order book: remaining after match",
+            );
             (
                 node.order.id,
                 node.order.trader_id,
@@ -230,7 +254,11 @@ impl OrderBook {
             Side::Buy => self.bids.get_mut(&price)?,
             Side::Sell => self.asks.get_mut(&price)?,
         };
-        level.total_qty = level.total_qty.saturating_sub(traded_qty);
+        level.total_qty = Self::checked_sub_u64(
+            level.total_qty,
+            traded_qty,
+            "order book: level total_qty sub (execute)",
+        );
 
         if is_filled {
             self.unlink_node(side, price, head_handle)?;
@@ -277,7 +305,11 @@ impl OrderBook {
             level.head = Some(handle);
             level.tail = Some(handle);
         }
-        level.total_qty = level.total_qty.saturating_add(remaining);
+        level.total_qty = Self::checked_add_u64(
+            level.total_qty,
+            remaining,
+            "order book: level total_qty add (insert)",
+        );
         level.len += 1;
 
         self.order_index.insert(
@@ -392,8 +424,12 @@ impl OrderBook {
             if level.tail == Some(handle) {
                 level.tail = prev;
             }
-            level.total_qty = level.total_qty.saturating_sub(order_remaining);
-            level.len = level.len.saturating_sub(1);
+            level.total_qty = Self::checked_sub_u64(
+                level.total_qty,
+                order_remaining,
+                "order book: level total_qty sub (unlink)",
+            );
+            level.len = Self::checked_sub_usize(level.len, 1, "order book: level len sub (unlink)");
         }
 
         self.remove_level_if_empty(side, price);
@@ -492,5 +528,41 @@ mod tests {
         assert!(!book.order_index.contains_key(&middle.id));
         assert!(book.get_order(middle.id).is_none());
         assert_eq!(book.top_order_id_at_price(Side::Buy, 100), Some(first_id));
+    }
+
+    #[test]
+    fn amend_order_remaining_updates_level_quantity_totals() {
+        let mut book = OrderBook::default();
+        let order = make_order(Side::Buy, 100, 10);
+        let order_id = order.id;
+        book.add_order(order);
+
+        assert_eq!(book.level_quantity(Side::Buy, 100), 10);
+        book.amend_order_remaining(order_id, 4)
+            .expect("amend should succeed");
+        assert_eq!(book.level_quantity(Side::Buy, 100), 4);
+        book.amend_order_remaining(order_id, 9)
+            .expect("amend should succeed");
+        assert_eq!(book.level_quantity(Side::Buy, 100), 9);
+    }
+
+    #[test]
+    fn execute_against_best_updates_level_totals_and_removes_empty_level() {
+        let mut book = OrderBook::default();
+        let maker = make_order(Side::Sell, 101, 7);
+        book.add_order(maker.clone());
+
+        let first = book
+            .execute_against_best(Side::Buy, 3)
+            .expect("first execution");
+        assert_eq!(first.7, 3);
+        assert_eq!(book.level_quantity(Side::Sell, 101), 4);
+
+        let second = book
+            .execute_against_best(Side::Buy, 4)
+            .expect("second execution");
+        assert_eq!(second.7, 4);
+        assert_eq!(book.level_quantity(Side::Sell, 101), 0);
+        assert!(book.best_ask_price().is_none());
     }
 }

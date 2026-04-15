@@ -603,15 +603,14 @@ impl AppState {
             return engine.clone();
         }
 
-        let handle = MarketEngineHandle::spawn(
-            self.clone(),
-            market.to_string(),
-            recover_orderbook(self.storage.list_all_open_orders(), market),
-        );
-
         match self.market_engines.entry(market.to_string()) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
+                let handle = MarketEngineHandle::spawn(
+                    self.clone(),
+                    market.to_string(),
+                    recover_orderbook(self.storage.list_all_open_orders(), market),
+                );
                 entry.insert(handle.clone());
                 handle
             }
@@ -744,8 +743,7 @@ impl AppState {
             self.market_sequences.entry(market_id.clone()).or_insert(0);
             self.market_event_sequences.entry(market_id).or_insert(0);
         }
-        let open_orders = self.storage.list_all_open_orders();
-        let recovered = recover_orderbooks(open_orders.clone());
+        let recovered = recover_orderbooks(self.storage.list_all_open_orders());
         for (market, orderbook) in recovered {
             self.market_engines.insert(
                 market.clone(),
@@ -757,7 +755,7 @@ impl AppState {
     }
 }
 
-fn recover_orderbooks(orders: Vec<Order>) -> BTreeMap<String, OrderBook> {
+fn recover_orderbooks(orders: impl IntoIterator<Item = Order>) -> BTreeMap<String, OrderBook> {
     let mut orderbooks = BTreeMap::new();
     for order in orders {
         orderbooks
@@ -768,7 +766,7 @@ fn recover_orderbooks(orders: Vec<Order>) -> BTreeMap<String, OrderBook> {
     orderbooks
 }
 
-fn recover_orderbook(orders: Vec<Order>, market: &str) -> OrderBook {
+fn recover_orderbook(orders: impl IntoIterator<Item = Order>, market: &str) -> OrderBook {
     let mut orderbook = OrderBook::default();
     for order in orders {
         if order.market == market {

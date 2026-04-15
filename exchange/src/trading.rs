@@ -948,6 +948,16 @@ fn process_submit_order(
 
         let mut latest_positions = HashMap::new();
         for execution in &executions {
+            if execution.maker_trader_id == trader_id {
+                // Self-trade: consuming your own resting liquidity should not change inventory or PnL.
+                // We still remove pending maker exposure below so position limit accounting remains consistent.
+                exposure_book.remove_pending(
+                    execution.maker_trader_id,
+                    execution.maker_side,
+                    execution.quantity,
+                )?;
+                continue;
+            }
             let taker_position = exposure_book.apply_fill(
                 trader_id,
                 &order.market,
@@ -979,13 +989,17 @@ fn process_submit_order(
         for (execution, fill) in executions.iter().zip(fills.iter()) {
             state.persist_fill(fill.clone());
             state.queue_append_fill(trader_id, fill.clone());
-            state.queue_append_fill(execution.maker_trader_id, fill.clone());
+            if execution.maker_trader_id != trader_id {
+                state.queue_append_fill(execution.maker_trader_id, fill.clone());
+            }
             publish_user_event(state, trader_id, ServerMessage::Fill { fill: fill.clone() });
-            publish_user_event(
-                state,
-                execution.maker_trader_id,
-                ServerMessage::Fill { fill: fill.clone() },
-            );
+            if execution.maker_trader_id != trader_id {
+                publish_user_event(
+                    state,
+                    execution.maker_trader_id,
+                    ServerMessage::Fill { fill: fill.clone() },
+                );
+            }
 
             let maker_resting_state = maker_orders
                 .get(&execution.maker_order_id)
@@ -1093,7 +1107,8 @@ fn weighted_fill_price(fills: &[Fill]) -> Option<u64> {
         .iter()
         .map(|fill| fill.price as u128 * fill.quantity as u128)
         .sum::<u128>();
-    Some((weighted_sum / total_quantity) as u64)
+    let rounded = (weighted_sum + total_quantity / 2) / total_quantity;
+    u64::try_from(rounded).ok()
 }
 
 fn process_cancel_order(
@@ -1351,6 +1366,48 @@ mod tests {
         assert_eq!(state.storage.list_open_orders(maker_id, None).len(), 0);
         assert_eq!(state.storage.list_fills(maker_id, None).len(), 1);
         assert_eq!(state.storage.list_fills(taker_id, None).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn self_cross_does_not_change_position_or_double_record_fills() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+
+        TradingService::submit_limit_order(
+            &state,
+            trader_id,
+            SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 100,
+                quantity: 2,
+            },
+        )
+        .await
+        .expect("maker order should rest");
+
+        let before = position_for(&state, trader_id, "BTC-USD");
+        let response = TradingService::submit_limit_order(
+            &state,
+            trader_id,
+            SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 105,
+                quantity: 2,
+            },
+        )
+        .await
+        .expect("self taker order should match");
+        let after = position_for(&state, trader_id, "BTC-USD");
+
+        assert!(!response.resting);
+        assert_eq!(response.fills.len(), 1);
+        assert_eq!(after, before);
+        assert_eq!(state.storage.list_open_orders(trader_id, None).len(), 0);
+        assert_eq!(state.storage.list_fills(trader_id, None).len(), 1);
     }
 
     #[tokio::test]
