@@ -816,6 +816,70 @@ async fn market_bot_can_use_taker_price_bounds() {
 }
 
 #[tokio::test]
+async fn taker_bot_skips_market_order_when_best_price_outside_bounds() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "liquidity-maker-outside");
+
+    let resting_sell = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 200,
+                quantity: 5,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(resting_sell.status(), StatusCode::CREATED);
+
+    let save_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/bots",
+            "test-admin-token",
+            &UpsertAdminBotRequest {
+                bot_id: "bounded-taker-skip".to_string(),
+                display_name: None,
+                market_id: "BTC-USD".to_string(),
+                strategy: BotStrategy::Taker,
+                side_mode: BotSideMode::Buy,
+                min_quantity: 1,
+                max_quantity: 1,
+                interval_ms: 50,
+                max_open_orders: 4,
+                min_price: 105,
+                max_price: 110,
+                start_immediately: true,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(save_response.status(), StatusCode::CREATED);
+
+    sleep(Duration::from_millis(300)).await;
+
+    let bot_user = state
+        .storage
+        .get_user_by_username("bot-bounded-taker-skip")
+        .expect("bot user");
+    let fills = state
+        .storage
+        .list_fills(bot_user.profile.trader_id, Some("BTC-USD"));
+    assert!(
+        fills.is_empty(),
+        "taker should not market-buy when best ask is outside min/max band"
+    );
+}
+
+#[tokio::test]
 async fn admin_provision_requires_valid_admin_token() {
     let app = build_app(test_state());
     let response = app

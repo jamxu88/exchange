@@ -648,7 +648,7 @@ async fn run_bot_loop(
 
         let side = select_side(config.side_mode, &mut side_toggle);
         let quantity = rng.range_u64(config.min_quantity, config.max_quantity);
-        let request = build_bot_order_request(
+        let Some(request) = build_bot_order_request(
             &state,
             &config,
             &market.market_id,
@@ -657,10 +657,14 @@ async fn run_bot_loop(
             quantity,
             &mut rng,
         )
-        .await;
+        .await
+        else {
+            continue;
+        };
 
         match TradingService::submit_order(&state, config.trader_id, request).await {
             Ok(_) => manager.record_submission(&bot_id),
+            Err(TradingError::NoLiquidity) if config.strategy == BotStrategy::Taker => {}
             Err(error) => manager.record_error(&bot_id, error.to_string()),
         }
     }
@@ -676,21 +680,47 @@ async fn build_bot_order_request(
     side: Side,
     quantity: u64,
     rng: &mut BotRng,
-) -> SubmitOrderRequest {
-    let random_price = bounded_price(config.min_price, config.max_price, tick_size, rng);
-    let price = match config.strategy {
-        BotStrategy::Maker => {
-            maker_price_within_bounds(state, config, side, tick_size, random_price).await
+) -> Option<SubmitOrderRequest> {
+    match config.strategy {
+        BotStrategy::Taker => {
+            if !taker_opposite_best_in_price_range(state, config, side).await {
+                return None;
+            }
+            Some(SubmitOrderRequest {
+                market: market_id.to_string(),
+                side,
+                order_type: OrderType::Market,
+                price: 0,
+                quantity,
+            })
         }
-        BotStrategy::Taker => random_price,
-    };
+        BotStrategy::Maker => {
+            let random_price = bounded_price(config.min_price, config.max_price, tick_size, rng);
+            let price =
+                maker_price_within_bounds(state, config, side, tick_size, random_price).await;
+            Some(SubmitOrderRequest {
+                market: market_id.to_string(),
+                side,
+                order_type: OrderType::Limit,
+                price,
+                quantity,
+            })
+        }
+    }
+}
 
-    SubmitOrderRequest {
-        market: market_id.to_string(),
-        side,
-        order_type: OrderType::Limit,
-        price,
-        quantity,
+/// For taker (market) bots: only act when the book's best opposite price lies in
+/// `[min_price, max_price]`. Otherwise we skip this tick (no resting limits).
+async fn taker_opposite_best_in_price_range(
+    state: &AppState,
+    config: &AdminBotState,
+    side: Side,
+) -> bool {
+    let (best_bid, best_ask) = state.market_best_prices(&config.market_id).await;
+    let in_range = |price: u64| price >= config.min_price && price <= config.max_price;
+    match side {
+        Side::Buy => best_ask.map(in_range).unwrap_or(false),
+        Side::Sell => best_bid.map(in_range).unwrap_or(false),
     }
 }
 

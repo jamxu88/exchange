@@ -654,7 +654,7 @@ export function AdminMarketBotManager({
             </div>
           </div>
           <p className="mt-3 text-sm text-[var(--muted)]">
-            Maker bots rest depth inside the configured price band. Taker bots submit aggressive limit orders inside the same band, so they only fill within the prices you allow.
+            Maker bots rest limit orders inside the configured price band. Taker bots submit market orders only when the best bid (sells) or best ask (buys) is inside that band; otherwise they wait. They never post resting limits.
           </p>
           <div className="mt-4 grid gap-4">
             <form className="ops-panel-soft grid gap-3 px-4 py-4" onSubmit={(event) => void handleSaveBot(event)}>
