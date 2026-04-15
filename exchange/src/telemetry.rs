@@ -38,16 +38,14 @@ pub struct WebSocketTelemetrySnapshot {
     pub connections_total: u64,
     pub authenticated_current: u64,
     pub authenticated_total: u64,
-    pub l2_subscribers_current: u64,
-    pub l3_subscribers_current: u64,
+    pub data_stream_subscribers_current: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ResyncTelemetrySnapshot {
     pub user: CounterTelemetrySnapshot,
     pub system: CounterTelemetrySnapshot,
-    pub l2: CounterTelemetrySnapshot,
-    pub l3: CounterTelemetrySnapshot,
+    pub data_stream: CounterTelemetrySnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -71,14 +69,12 @@ pub struct OperatorTelemetry {
     rate_limit_rejections: CounterMetric,
     user_resyncs: CounterMetric,
     system_resyncs: CounterMetric,
-    l2_resyncs: CounterMetric,
-    l3_resyncs: CounterMetric,
+    data_stream_resyncs: CounterMetric,
     ws_connections_current: Arc<AtomicU64>,
     ws_connections_total: Arc<AtomicU64>,
     ws_authenticated_current: Arc<AtomicU64>,
     ws_authenticated_total: Arc<AtomicU64>,
-    l2_subscribers_current: Arc<AtomicU64>,
-    l3_subscribers_current: Arc<AtomicU64>,
+    data_stream_subscribers_current: Arc<AtomicU64>,
     snapshot_cache: Arc<Mutex<Option<CachedOperatorTelemetrySnapshot>>>,
 }
 
@@ -147,20 +143,13 @@ impl OperatorTelemetry {
         decrement_atomic(&self.ws_authenticated_current);
     }
 
-    pub fn record_l2_subscriber_open(&self) {
-        self.l2_subscribers_current.fetch_add(1, Ordering::Relaxed);
+    pub fn record_data_stream_subscriber_open(&self) {
+        self.data_stream_subscribers_current
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_l2_subscriber_close(&self) {
-        decrement_atomic(&self.l2_subscribers_current);
-    }
-
-    pub fn record_l3_subscriber_open(&self) {
-        self.l3_subscribers_current.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_l3_subscriber_close(&self) {
-        decrement_atomic(&self.l3_subscribers_current);
+    pub fn record_data_stream_subscriber_close(&self) {
+        decrement_atomic(&self.data_stream_subscribers_current);
     }
 
     pub fn record_user_resync(&self) {
@@ -171,12 +160,8 @@ impl OperatorTelemetry {
         self.system_resyncs.record(1);
     }
 
-    pub fn record_l2_resync(&self) {
-        self.l2_resyncs.record(1);
-    }
-
-    pub fn record_l3_resync(&self) {
-        self.l3_resyncs.record(1);
+    pub fn record_data_stream_resync(&self) {
+        self.data_stream_resyncs.record(1);
     }
 
     pub fn snapshot(&self) -> OperatorTelemetrySnapshot {
@@ -208,14 +193,14 @@ impl OperatorTelemetry {
                 connections_total: self.ws_connections_total.load(Ordering::Relaxed),
                 authenticated_current: self.ws_authenticated_current.load(Ordering::Relaxed),
                 authenticated_total: self.ws_authenticated_total.load(Ordering::Relaxed),
-                l2_subscribers_current: self.l2_subscribers_current.load(Ordering::Relaxed),
-                l3_subscribers_current: self.l3_subscribers_current.load(Ordering::Relaxed),
+                data_stream_subscribers_current: self
+                    .data_stream_subscribers_current
+                    .load(Ordering::Relaxed),
             },
             resyncs: ResyncTelemetrySnapshot {
                 user: self.user_resyncs.snapshot(),
                 system: self.system_resyncs.snapshot(),
-                l2: self.l2_resyncs.snapshot(),
-                l3: self.l3_resyncs.snapshot(),
+                data_stream: self.data_stream_resyncs.snapshot(),
             },
         };
 
@@ -390,10 +375,10 @@ mod tests {
         let telemetry = OperatorTelemetry::default();
 
         telemetry.record_ws_connection_close();
-        telemetry.record_l2_subscriber_close();
+        telemetry.record_data_stream_subscriber_close();
 
         let snapshot = telemetry.snapshot();
         assert_eq!(snapshot.websocket.connections_current, 0);
-        assert_eq!(snapshot.websocket.l2_subscribers_current, 0);
+        assert_eq!(snapshot.websocket.data_stream_subscribers_current, 0);
     }
 }

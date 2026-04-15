@@ -1,18 +1,16 @@
 ---
-title: "Subscribe L2"
-description: "Subscribe to one aggregated price-level market-data stream on the socket."
+title: "Subscribe Data Stream"
+description: "Subscribe to the aggregated public market-data stream on the socket."
 ---
 
-Send **`subscribe`** with **`"channel": "l2"`** to receive one **aggregated** book snapshot, then **sequenced** price-level updates for a single market.
+Send **`subscribe`** with **`"channel": "data"`** to receive one aggregated book snapshot, then sequenced price-level updates for a single market.
 
-**`l2`** is ideal when you want compact depth: the server rolls public order activity into **price levels** and batches updates about every **`100ms`**. No API key is required.
-
-For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe L3](/websocket/subscribe-l3)).
+The public **`data`** stream is ideal when you want compact depth. The server rolls public order activity into **price levels** and flushes updates every **100ms**. No API key is required.
 
 <RequestExample>
 
 ```json Client Message
-{"op":"subscribe","channel":"l2","market":"BTC-USD"}
+{"op":"subscribe","channel":"data","market":"BTC-USD"}
 ```
 
 </RequestExample>
@@ -22,7 +20,7 @@ For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe 
 ```json First Response
 {
   "type": "snapshot",
-  "channel": "l2",
+  "channel": "data",
   "market": "BTC-USD",
   "sequence": 0,
   "bids": [
@@ -41,7 +39,7 @@ For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe 
 ## Client fields
 
 - `op` must be `subscribe`.
-- `channel` must be `l2`.
+- `channel` must be `data`.
 - `market` is the market you want to subscribe to.
 
 ## What happens next
@@ -49,7 +47,7 @@ For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe 
 - The server first sends a `snapshot`.
 - `bids` and `asks` in that snapshot are aggregated price levels, not raw order rows.
 - After the snapshot, the server sends `delta` messages with contiguous `start_sequence` to `sequence` ranges.
-- The exchange batches those price-level updates per market and flushes them roughly every `100ms`, so one `delta` can carry several ordered events.
+- The exchange batches those price-level updates per market and flushes them every `100ms`, so one `delta` can carry several ordered events.
 - A `level_updated` delta sets the total visible quantity for one side and one price.
 - `quantity: 0` means that price level should be removed from your local book.
 - `trade` deltas carry executed price and quantity only.
@@ -60,5 +58,4 @@ For **per-order** public detail, use authenticated **`l3`** instead ([Subscribe 
 - The current implementation supports one market-data subscription per connection.
 - If you need multiple markets, open multiple sockets.
 - Use `start_sequence` to validate the first event in a batched `delta`, then store `sequence` as your new last applied market sequence.
-- Use `order_state` messages for your own exact resting-order state. The `l2` market-data stream is intentionally aggregated.
-- Older clients may still send `last_sequence`; the server ignores it and always starts with a fresh snapshot.
+- Use `order_state` messages for your own exact resting-order state. The public `data` stream is intentionally aggregated.

@@ -1,6 +1,6 @@
 use crate::marketdata::MarketEventEnvelope;
-use crate::marketdata_ipc::{MarketDataRequest, MarketDataResponse};
-use crate::orderbook::BookLevel;
+use crate::marketdata_ipc::{MarketBootstrapState, MarketDataRequest, MarketDataResponse};
+use crate::orderbook::{BookLevel, Order};
 use crate::state::AppState;
 use std::collections::HashMap;
 use std::io;
@@ -29,6 +29,10 @@ pub(crate) struct BridgeSnapshot {
 
 enum BridgeCommand {
     Publish(MarketEventEnvelope),
+    Bootstrap {
+        markets: Vec<MarketBootstrapState>,
+        open_orders: Vec<Order>,
+    },
     Snapshot {
         request_id: u64,
         market: String,
@@ -72,6 +76,22 @@ impl MarketDataBridgeHandle {
             return false;
         }
         self.tx.send(BridgeCommand::Publish(envelope)).is_ok()
+    }
+
+    pub(crate) fn sync_state(
+        &self,
+        markets: Vec<MarketBootstrapState>,
+        open_orders: Vec<Order>,
+    ) -> bool {
+        if !self.is_connected() {
+            return false;
+        }
+        self.tx
+            .send(BridgeCommand::Bootstrap {
+                markets,
+                open_orders,
+            })
+            .is_ok()
     }
 
     pub(crate) async fn request_snapshot(&self, market: &str) -> Option<BridgeSnapshot> {
@@ -161,6 +181,9 @@ async fn bridge_connection_loop(
                 match command {
                     BridgeCommand::Publish(envelope) => {
                         write_request(&mut write_half, &MarketDataRequest::MarketEvent { envelope }).await?;
+                    }
+                    BridgeCommand::Bootstrap { markets, open_orders } => {
+                        write_request(&mut write_half, &MarketDataRequest::Bootstrap { markets, open_orders }).await?;
                     }
                     BridgeCommand::Snapshot { request_id, market, respond_to } => {
                         pending_snapshots.insert(request_id, respond_to);

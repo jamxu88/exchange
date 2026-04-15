@@ -1,0 +1,10 @@
+{
+  "name": "multi-key-market-order-clients-js",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Runs one market-order client per API key at 500 ops/10s",
+  "type": "module",
+  "scripts": {
+    "start": "node run.mjs"
+  }
+}

@@ -19,7 +19,7 @@ function leaderboardToCsv(
 ) {
   const header = [
     "rank",
-    "username",
+    "team_number",
     "trader_id",
     "net_pnl",
     "realized_pnl",
@@ -29,7 +29,7 @@ function leaderboardToCsv(
   const lines = rows.map((row) =>
     [
       row.rank,
-      row.username,
+      row.team_number,
       row.trader_id,
       row.net_pnl,
       row.realized_pnl,

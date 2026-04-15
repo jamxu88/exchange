@@ -806,6 +806,7 @@ mod tests {
             profile: UserProfile {
                 trader_id: Uuid::new_v4(),
                 username: username.to_string(),
+                team_number: username.to_string(),
                 api_key: api_key.to_string(),
                 role: UserRole::Trader,
                 created_at: Utc::now(),
@@ -992,5 +993,4 @@ mod tests {
 
         assert_eq!(repository.list_fills(trader_id, None).len(), 1);
     }
-
 }

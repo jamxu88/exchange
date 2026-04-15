@@ -1,20 +1,11 @@
-use crate::marketdata::{BookDelta, MarketEvent, MarketEventEnvelope, MarketL3Order};
+use crate::marketdata::{BookDelta, MarketEvent, MarketEventEnvelope};
 use crate::orderbook::{BookLevel, Order, Side};
 use crate::trading::MarketBookSnapshot;
-use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 const MARKET_EVENT_REPLAY_LIMIT: usize = 4_096;
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarketL3Snapshot {
-    pub sequence: u64,
-    pub bids: Vec<MarketL3Order>,
-    pub asks: Vec<MarketL3Order>,
-}
 
 #[derive(Clone, Default)]
 pub(crate) struct DerivedMarketDataHandle {
@@ -27,7 +18,6 @@ struct DerivedOrder {
     side: Side,
     price: u64,
     remaining: u64,
-    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -64,7 +54,6 @@ impl DerivedMarketDataHandle {
                 side: order.side,
                 price: order.price,
                 remaining: order.remaining,
-                created_at: order.created_at,
             });
         }
 
@@ -119,22 +108,6 @@ impl DerivedMarketDataHandle {
             .map(DerivedMarketState::best_prices)
             .unwrap_or((None, None))
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn l3_snapshot(&self, market: &str) -> MarketL3Snapshot {
-        let markets = self
-            .inner
-            .read()
-            .expect("derived market data lock poisoned during l3 snapshot");
-        markets
-            .get(market)
-            .map(DerivedMarketState::l3_snapshot)
-            .unwrap_or(MarketL3Snapshot {
-                sequence: 0,
-                bids: Vec::new(),
-                asks: Vec::new(),
-            })
-    }
 }
 
 impl DerivedMarketState {
@@ -148,14 +121,13 @@ impl DerivedMarketState {
                 side,
                 price,
                 remaining,
-                created_at,
+                created_at: _,
             } => {
                 self.insert_order(DerivedOrder {
                     order_id,
                     side,
                     price,
                     remaining,
-                    created_at,
                 });
                 vec![BookDelta::LevelUpdated {
                     side,
@@ -169,17 +141,11 @@ impl DerivedMarketState {
                 price,
                 remaining,
             } => {
-                let created_at = self
-                    .orders
-                    .get(&order_id)
-                    .map(|order| order.created_at)
-                    .unwrap_or(envelope.recorded_at);
                 self.upsert_order(DerivedOrder {
                     order_id,
                     side,
                     price,
                     remaining,
-                    created_at,
                 });
                 vec![BookDelta::LevelUpdated {
                     side,
@@ -237,47 +203,6 @@ impl DerivedMarketState {
             self.bids.iter().next_back().map(|(price, _)| *price),
             self.asks.iter().next().map(|(price, _)| *price),
         )
-    }
-
-    #[allow(dead_code)]
-    fn l3_snapshot(&self) -> MarketL3Snapshot {
-        let mut bids = self
-            .orders
-            .values()
-            .filter(|order| order.side == Side::Buy)
-            .map(|order| MarketL3Order {
-                order_id: order.order_id,
-                price: order.price,
-                remaining: order.remaining,
-                created_at: order.created_at,
-            })
-            .collect::<Vec<_>>();
-        bids.sort_by_key(|order| {
-            (
-                std::cmp::Reverse(order.price),
-                order.created_at,
-                order.order_id,
-            )
-        });
-
-        let mut asks = self
-            .orders
-            .values()
-            .filter(|order| order.side == Side::Sell)
-            .map(|order| MarketL3Order {
-                order_id: order.order_id,
-                price: order.price,
-                remaining: order.remaining,
-                created_at: order.created_at,
-            })
-            .collect::<Vec<_>>();
-        asks.sort_by_key(|order| (order.price, order.created_at, order.order_id));
-
-        MarketL3Snapshot {
-            sequence: self.sequence,
-            bids,
-            asks,
-        }
     }
 
     fn level_quantity(&self, side: Side, price: u64) -> u64 {
@@ -347,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn derived_market_data_builds_book_and_l3_state_from_canonical_events() {
+    fn derived_market_data_builds_book_state_from_canonical_events() {
         let handle = DerivedMarketDataHandle::default();
         let order_id = Uuid::from_u128(1);
 
@@ -381,12 +306,6 @@ mod tests {
         );
         assert!(snapshot.asks.is_empty());
 
-        let l3_snapshot = handle.l3_snapshot("BTC-USD");
-        assert_eq!(l3_snapshot.sequence, 1);
-        assert_eq!(l3_snapshot.bids.len(), 1);
-        assert_eq!(l3_snapshot.bids[0].order_id, order_id);
-        assert_eq!(l3_snapshot.bids[0].remaining, 5);
-
         let deltas = handle.apply_market_event(event(
             2,
             "BTC-USD",
@@ -405,8 +324,6 @@ mod tests {
                 quantity: 2,
             }]
         );
-        assert_eq!(handle.l3_snapshot("BTC-USD").bids[0].remaining, 2);
-
         let deltas = handle.apply_market_event(event(
             3,
             "BTC-USD",
@@ -426,9 +343,6 @@ mod tests {
             }]
         );
 
-        let l3_snapshot = handle.l3_snapshot("BTC-USD");
-        assert_eq!(l3_snapshot.sequence, 3);
-        assert!(l3_snapshot.bids.is_empty());
         assert!(handle.book_snapshot("BTC-USD").bids.is_empty());
     }
 
@@ -480,7 +394,5 @@ mod tests {
                 quantity: 3,
             }]
         );
-        assert_eq!(handle.l3_snapshot("BTC-USD").sequence, 4);
-        assert_eq!(handle.l3_snapshot("ETH-USD").sequence, 9);
     }
 }

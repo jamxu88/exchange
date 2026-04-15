@@ -11,7 +11,10 @@ yarn-error.log*
 .pnpm-debug.log*
 
 *.pem
+allocated-api-keys-*.txt
 trade-page*.png
+node_modules/
+.playwright-mcp/
 
 client/node_modules/
 client/.next/
@@ -20,6 +23,8 @@ client/build/
 client/coverage/
 
 exchange/target/
+
+tools/trader-stress-bot-go/traderstressbot
 
 .env
 .env.local

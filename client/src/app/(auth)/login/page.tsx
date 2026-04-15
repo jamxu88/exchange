@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { defaultRouteForRole, readSessionFromCookieValue, SESSION_COOKIE } from "@/lib/auth";
 
@@ -61,6 +62,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </label>
           <p className="text-center text-base text-[var(--muted-strong)]">
             Use key &quot;trader&quot; for demo access.
+          </p>
+          <p className="text-center text-base text-[var(--muted-strong)]">
+            <Link
+              className="underline decoration-[var(--surface-stroke)] underline-offset-4"
+              href="/lookup-key"
+            >
+              Need your assigned key? Look it up by identifier.
+            </Link>
           </p>
           {errorMessage ? (
             <p className="rounded-2xl border border-[rgba(216,91,91,0.42)] bg-[rgba(216,91,91,0.1)] px-4 py-3 text-lg text-[color:var(--red-strong)]">

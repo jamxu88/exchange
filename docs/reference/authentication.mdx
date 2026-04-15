@@ -5,7 +5,7 @@ description: "Use your assigned API key on REST and WebSocket so the exchange kn
 
 Your **API key** is your identity for the competition API. Organizers issue one key per competitor or team. Treat it like a password: do not commit it to public repos or share it in screenshots.
 
-We recommend starting every session with [GET /api/v1/user](/rest/user) to confirm **`username`**, **`trader_id`**, and **`role`**, then [GET /api/v1/portfolio](/rest/portfolio) so you know positions and limits before you send orders.
+We recommend starting every session with [GET /api/v1/user](/rest/user) to confirm **`team_number`** and **`trader_id`**, then [GET /api/v1/portfolio](/rest/portfolio) so you know positions and limits before you send orders.
 
 ## REST (competitor routes)
 
@@ -23,7 +23,6 @@ x-api-key: YOUR_API_KEY
 - `GET /api/v1/positions`
 - `GET /api/v1/open-orders`
 - `GET /api/v1/fills`
-- `GET /api/v1/leaderboard`
 - `POST /api/v1/orders`
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
@@ -54,14 +53,13 @@ wss://exchange.jamesxu.dev/ws
 {
   "type": "authenticated",
   "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-  "username": "team-alpha"
+  "team_number": "TEAM-042"
 }
 ```
 
 ## Good to know
 
 - There are **no** passwords, JWTs, or OAuth flows—only your API key.
-- Most teams see **`role": "trader"`** from [Get User](/rest/user). If that looks wrong, pause trading and contact organizers.
-- You can connect and watch **public `l2`** data **without** authenticating. Authenticating unlocks **`l3`**, order entry, and your private **`fill`** / **`order_state`** stream.
+- You can connect and watch the public **`data`** stream **without** authenticating. Authenticating unlocks order entry and your private **`fill`** / **`order_state`** stream.
 - Public routes such as [Get Markets](/rest/markets) do **not** consume your authenticated rate limit.
 - Admin-only HTTP routes are **not** documented here; this page covers the **competitor** surface only.

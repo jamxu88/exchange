@@ -23,7 +23,7 @@ describe("useTradeController", () => {
   it("bootstraps state and updates websocket subscriptions on market changes", async () => {
     const bootstrapAccountData = vi.fn().mockResolvedValue({
       markets: runtime.markets,
-      user: { traderId: "trader-1", username: "alice" },
+      user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
       positions: [{ market: "BTC-USD", netQuantity: 2, averageEntryPrice: 100, realizedPnl: 0 }],
       openOrders: [],
       fills: [],
@@ -70,13 +70,81 @@ describe("useTradeController", () => {
     });
 
     expect(connect).toHaveBeenCalled();
-    expect(result.current.state.user?.username).toBe("alice");
+    expect(result.current.state.user?.teamNumber).toBe("TEAM-ALICE");
 
     act(() => {
       result.current.actions.selectMarket("ETH-USD");
     });
 
     expect(updateMarket).toHaveBeenCalledWith("ETH-USD");
+  });
+
+  it("removes deleted markets from state and resubscribes when the selected market is deleted", async () => {
+    const bootstrapAccountData = vi.fn().mockResolvedValue({
+      markets: runtime.markets,
+      user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
+      positions: [],
+      openOrders: [],
+      fills: [],
+      warnings: [],
+      loaded: {
+        markets: true,
+        user: true,
+        positions: true,
+        openOrders: true,
+        fills: true,
+      },
+    });
+    const updateMarket = vi.fn();
+    let wsCallbacks: TradeWsCallbacks | undefined;
+    const restClientFactory = () =>
+      ({
+        bootstrapAccountData,
+        submitOrder: vi.fn(),
+        cancelOrder: vi.fn(),
+      }) as never;
+    const wsClientFactory = (_config: unknown, callbacks: TradeWsCallbacks) => {
+      wsCallbacks = callbacks;
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        updateMarket,
+      } as never;
+    };
+
+    const { result } = renderHook(() =>
+      useTradeController({
+        runtime,
+        restClientFactory,
+        wsClientFactory,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.state.bootstrapStatus).toBe("ready");
+      expect(wsCallbacks).toBeDefined();
+    });
+
+    act(() => {
+      result.current.actions.selectMarket("ETH-USD");
+    });
+
+    await waitFor(() => {
+      expect(updateMarket).toHaveBeenCalledWith("ETH-USD");
+    });
+
+    act(() => {
+      wsCallbacks?.onMarketDeleted({ marketId: "ETH-USD" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.availableMarkets.map((market) => market.id)).toEqual([
+        "BTC-USD",
+      ]);
+      expect(result.current.state.selectedMarketId).toBe("BTC-USD");
+    });
+
+    expect(updateMarket).toHaveBeenLastCalledWith("BTC-USD");
   });
 
   it("submits orders through the rest client and updates local state", async () => {
@@ -397,7 +465,7 @@ describe("useTradeController", () => {
       .fn()
       .mockResolvedValueOnce({
         markets: runtime.markets,
-        user: { traderId: "trader-1", username: "alice" },
+        user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
         positions: [],
         openOrders: [
           {
@@ -423,7 +491,7 @@ describe("useTradeController", () => {
       })
       .mockResolvedValueOnce({
         markets: runtime.markets,
-        user: { traderId: "trader-1", username: "alice" },
+        user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
         positions: [],
         openOrders: [],
         fills: [],
@@ -489,7 +557,7 @@ describe("useTradeController", () => {
       .fn()
       .mockResolvedValueOnce({
         markets: runtime.markets,
-        user: { traderId: "trader-1", username: "alice" },
+        user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
         positions: [],
         openOrders: [
           {
@@ -525,7 +593,7 @@ describe("useTradeController", () => {
       })
       .mockResolvedValueOnce({
         markets: runtime.markets,
-        user: { traderId: "trader-1", username: "alice" },
+        user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
         positions: [],
         openOrders: [],
         fills: [],
@@ -587,7 +655,7 @@ describe("useTradeController", () => {
       .fn()
       .mockResolvedValue({
         markets: runtime.markets,
-        user: { traderId: "trader-1", username: "alice" },
+        user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
         positions: [],
         openOrders: [],
         fills: [],
@@ -630,9 +698,15 @@ describe("useTradeController", () => {
     });
 
     act(() => {
-      wsCallbacks?.onAuthenticated({ traderId: "trader-1", username: "alice" });
+      wsCallbacks?.onSnapshot({
+        marketId: "BTC-USD",
+        sequence: 4,
+        bids: [{ price: 100, quantity: 3 }],
+        asks: [{ price: 101, quantity: 2 }],
+      });
+      wsCallbacks?.onAuthenticated({ traderId: "trader-1", teamNumber: "TEAM-ALICE" });
       wsCallbacks?.onResyncRequired({
-        channel: "l2",
+        channel: "data",
         marketId: "BTC-USD",
         reason: "market sequence gap detected",
         autoHealing: true,
@@ -642,12 +716,14 @@ describe("useTradeController", () => {
     await waitFor(() => {
       expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
     });
+    expect(result.current.derived.summary.bids).toEqual([]);
+    expect(result.current.derived.summary.asks).toEqual([]);
     expect(
       result.current.state.messages.some((message) => message.text.includes("market sequence gap detected")),
     ).toBe(false);
 
     act(() => {
-      wsCallbacks?.onAuthenticated({ traderId: "trader-1", username: "alice" });
+      wsCallbacks?.onAuthenticated({ traderId: "trader-1", teamNumber: "TEAM-ALICE" });
     });
 
     await waitFor(() => {
@@ -663,7 +739,7 @@ describe("useTradeController", () => {
 
     act(() => {
       wsCallbacks?.onResyncRequired({
-        channel: "l2",
+        channel: "data",
         marketId: "BTC-USD",
         reason: "manual intervention required",
       });
@@ -679,7 +755,7 @@ describe("useTradeController", () => {
   it("applies private fill and order-state updates without a full account resync", async () => {
     const bootstrapAccountData = vi.fn().mockResolvedValue({
       markets: runtime.markets,
-      user: { traderId: "trader-1", username: "alice" },
+      user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
       positions: [],
       openOrders: [
         {

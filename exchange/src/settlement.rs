@@ -13,7 +13,7 @@ use uuid::Uuid;
 pub enum SettlementError {
     #[error("invalid market symbol")]
     InvalidMarket,
-    #[error("settlement price must be greater than zero")]
+    #[error("settlement price must be zero or greater")]
     InvalidSettlementPrice,
     #[error("projected net position for {market} would be {projected}; limit is +/-{limit}")]
     PositionLimitExceeded {
@@ -240,9 +240,6 @@ impl SettlementEngine {
         settlement_price: u64,
     ) -> Result<MarketSettlementSummary, SettlementError> {
         validate_market_symbol(market)?;
-        if settlement_price == 0 {
-            return Err(SettlementError::InvalidSettlementPrice);
-        }
 
         let mut summary = MarketSettlementSummary {
             affected_traders: 0,
@@ -458,6 +455,8 @@ mod tests {
             quote_asset: "USD".to_string(),
             tick_size: 1,
             min_order_quantity: 1,
+            min_price: None,
+            max_price: None,
             reference_price: Some(100),
             settlement_price: None,
             status: MarketStatus::Enabled,
@@ -550,6 +549,7 @@ mod tests {
             profile: UserProfile {
                 trader_id: Uuid::new_v4(),
                 username: "desk-admin".to_string(),
+                team_number: "desk-admin".to_string(),
                 api_key: "exch_admin".to_string(),
                 role: UserRole::Admin,
                 created_at: Utc::now(),

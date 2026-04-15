@@ -56,6 +56,7 @@ async fn balance_endpoint_p95_latency_smoke() {
         &state,
         ProvisionUserRequest {
             username: "latency-user".to_string(),
+            team_number: None,
             role: None,
         },
     )

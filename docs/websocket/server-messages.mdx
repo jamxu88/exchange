@@ -17,7 +17,7 @@ Below are the WebSocket payloads your client should recognize and handle cleanly
 {
   "type": "authenticated",
   "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-  "username": "team-alpha"
+  "team_number": "TEAM-042"
 }
 ```
 
@@ -26,7 +26,7 @@ Below are the WebSocket payloads your client should recognize and handle cleanly
 ```json
 {
   "type": "snapshot",
-  "channel": "l2",
+  "channel": "data",
   "market": "BTC-USD",
   "sequence": 0,
   "bids": [
@@ -40,14 +40,14 @@ Below are the WebSocket payloads your client should recognize and handle cleanly
 }
 ```
 
-`snapshot` is the aggregated `l2` view. `bids` and `asks` are price levels, not per-order rows.
+`snapshot` is the aggregated `data` stream view. `bids` and `asks` are price levels, not per-order rows.
 
 ## `delta`
 
 ```json
 {
   "type": "delta",
-  "channel": "l2",
+  "channel": "data",
   "market": "BTC-USD",
   "start_sequence": 1,
   "sequence": 1,
@@ -72,66 +72,6 @@ Below are the WebSocket payloads your client should recognize and handle cleanly
 `level_updated` sets the full visible quantity for one side and one price. `quantity: 0` means remove that level from your local book. These are price-level updates, not per-order add, amend, or remove events.
 
 The exchange derives browser-facing market data from the canonical order-event stream, batches contiguous market-data events per market, and flushes them roughly every `100ms`, so a single `delta` can contain multiple ordered events.
-
-## `l3_snapshot`
-
-```json
-{
-  "type": "l3_snapshot",
-  "channel": "l3",
-  "market": "BTC-USD",
-  "sequence": 12,
-  "bids": [
-    {
-      "order_id": "4d6c28f4-b349-4a4d-8927-8141c36eb6eb",
-      "price": 100,
-      "remaining": 2,
-      "created_at": "2026-03-18T15:28:01.342510Z"
-    }
-  ],
-  "asks": [
-    {
-      "order_id": "66377526-7b98-485a-8c40-7024e68fa3c5",
-      "price": 101,
-      "remaining": 1,
-      "created_at": "2026-03-18T15:28:04.132958Z"
-    }
-  ]
-}
-```
-
-`l3_snapshot` is the true public per-order view. It is available only after authenticating the socket and subscribing to channel `l3`.
-
-## `l3_delta`
-
-```json
-{
-  "type": "l3_delta",
-  "channel": "l3",
-  "market": "BTC-USD",
-  "start_sequence": 13,
-  "sequence": 13,
-  "events": [
-    {
-      "kind": "order_added",
-      "order_id": "97c1b277-19e6-4d28-8419-4cc26feec495",
-      "side": "BUY",
-      "price": 100,
-      "remaining": 3,
-      "created_at": "2026-03-18T15:29:00.000000Z"
-    }
-  ]
-}
-```
-
-`l3_delta` carries raw public order events:
-
-- `order_added`
-- `order_updated`
-- `order_removed`
-- `trade`
-
-Unlike `delta`, these are not aggregated by price level.
 
 ## `fill`
 
@@ -191,6 +131,8 @@ For market orders, accepted taker flow is terminal. You should expect `status: "
     "quote_asset": "USD",
     "tick_size": 1,
     "min_order_quantity": 1,
+    "min_price": 90000,
+    "max_price": 110000,
     "reference_price": 100000,
     "settlement_price": null,
     "status": "disabled",
@@ -201,6 +143,17 @@ For market orders, accepted taker flow is terminal. You should expect `status: "
 ```
 
 Treat `market_state` as the live websocket push for market metadata and lifecycle status. Apply it immediately so tabs, ticket gating, and other market-aware UI stays current without waiting for a REST refresh.
+
+## `market_deleted`
+
+```json
+{
+  "type": "market_deleted",
+  "market_id": "BTC-USD"
+}
+```
+
+Treat `market_deleted` as the authoritative signal that the market no longer exists in the active market list. Remove it from tabs, switch away if it was selected, and stop treating any cached metadata for that symbol as live.
 
 ## `admin_message`
 
@@ -227,7 +180,7 @@ Treat **`admin_message`** as guidance from organizers—trading halts, settlemen
 ```json
 {
   "type": "resync_required",
-  "channel": "l2",
+  "channel": "data",
   "market": "BTC-USD",
   "expected_sequence": 5,
   "current_sequence": 9,
@@ -240,10 +193,11 @@ Step-by-step recovery: [Recovery and resync](/reference/recovery-and-resync).
 ## Handling checklist
 
 - **`heartbeat`** — connection is alive; you can ignore the body if you only need a liveness signal.
-- **`snapshot` / `delta`** — aggregated **`l2`** book; authoritative while your subscription is healthy.
-- **`l3_snapshot` / `l3_delta`** — raw public **`l3`** book; authoritative while your authenticated **`l3`** subscription is healthy.
-- **`delta` / `l3_delta`** — confirm **`start_sequence`** continues from your last applied sequence, apply **`events`** in order, then save **`sequence`**.
+- **`authenticated`** — binds the socket to your private user stream and returns your `team_number`.
+- **`snapshot` / `delta`** — aggregated public **`data`** stream; authoritative while your subscription is healthy.
+- **`delta`** — confirm **`start_sequence`** continues from your last applied sequence, apply **`events`** in order, then save **`sequence`**.
 - **`fill` / `order_state`** — your private activity after authentication.
 - **`market_state`** — live changes to market definitions (`status`, ticks, etc.).
+- **`market_deleted`** — remove the market from your live market list immediately.
 - **`admin_message`** — organizer announcements; pair with REST refresh when in doubt.
 - **`resync_required`** — drop and rebuild local state using the recovery guide.

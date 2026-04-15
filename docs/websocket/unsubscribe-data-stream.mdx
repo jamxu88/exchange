@@ -1,14 +1,14 @@
 ---
-title: "Unsubscribe L3"
-description: "Stop receiving a raw L3 market-data stream on the current socket."
+title: "Unsubscribe Data Stream"
+description: "Stop receiving the aggregated public market-data stream on the current socket."
 ---
 
-Use `unsubscribe` when you want to stop receiving raw per-order market data for the current subscription.
+Use `unsubscribe` when you want to stop receiving public market data for the current subscription.
 
 <RequestExample>
 
 ```json Client Message
-{"op":"unsubscribe","channel":"l3","market":"BTC-USD"}
+{"op":"unsubscribe","channel":"data","market":"BTC-USD"}
 ```
 
 </RequestExample>
@@ -16,7 +16,7 @@ Use `unsubscribe` when you want to stop receiving raw per-order market data for 
 ## Client fields
 
 - `op` must be `unsubscribe`.
-- `channel` must be `l3`.
+- `channel` must be `data`.
 - `market` is the subscribed market you want to stop receiving.
 
 ## Notes

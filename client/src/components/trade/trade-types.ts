@@ -16,6 +16,8 @@ export type MarketDefinition = {
   name: string;
   baseAsset: string;
   quoteAsset: string;
+  minPrice?: number | null;
+  maxPrice?: number | null;
   status?: MarketStatus;
 };
 
@@ -74,7 +76,7 @@ export type MessageEntry = {
 
 export type TradeUser = {
   traderId: string;
-  username: string;
+  teamNumber: string;
 };
 
 export type AccountPosition = {

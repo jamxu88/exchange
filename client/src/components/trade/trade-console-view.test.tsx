@@ -26,7 +26,7 @@ describe("TradeConsoleView", () => {
   it("renders live connection, market data, and messages from controller state", async () => {
     const state = createInitialTradeState(runtime.markets);
     state.connectionStatus = "connected";
-    state.user = { traderId: "trader-1", username: "alice" };
+    state.user = { traderId: "trader-1", teamNumber: "TEAM-ALICE" };
     state.marketTradesByMarket["BTC-USD"] = [
       { marketId: "BTC-USD", price: 100, quantity: 1, occurredAt: "2026-03-17T09:28:00Z" },
       { marketId: "BTC-USD", price: 101, quantity: 2, occurredAt: "2026-03-17T09:29:00Z" },
@@ -126,7 +126,7 @@ describe("TradeConsoleView", () => {
 
     await user.click(screen.getByRole("button", { name: "Open profile menu" }));
 
-    expect(screen.getByText("alice")).toBeInTheDocument();
+    expect(screen.getByText("TEAM-ALICE")).toBeInTheDocument();
     expect(screen.getByText("Team 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
@@ -405,6 +405,62 @@ describe("TradeConsoleView", () => {
     expect(screen.getByRole("button", { name: /ETH-USD.*Disabled/i })).toBeInTheDocument();
     expect(screen.getByText("This market is disabled. New orders are unavailable.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Market Disabled/i })).toBeDisabled();
+  });
+
+  it("shows an explicit empty state when no markets are configured", () => {
+    const state = createInitialTradeState([]);
+    state.connectionStatus = "connected";
+    const submitOrder = vi.fn();
+
+    render(
+      <TradeConsoleView
+        controller={{
+          runtime: {
+            ...runtime,
+            markets: [],
+          },
+          state,
+          derived: {
+            summary: {
+              bids: [],
+              asks: [],
+              bestBid: null,
+              bestAsk: null,
+              buyQuote: null,
+              sellQuote: null,
+              lastPrice: null,
+              midPrice: null,
+              spread: null,
+            },
+            estimated: {
+              shares: 20,
+              derivedPrice: 0,
+              estimatedCost: 0,
+            },
+          },
+          actions: {
+            selectMarket: vi.fn(),
+            setSide: vi.fn(),
+            setPositionFilter: vi.fn(),
+            setOrderType: vi.fn(),
+            setLimitPrice: vi.fn(),
+            setShares: vi.fn(),
+            adjustShares: vi.fn(),
+            cancelPendingOrder: vi.fn(),
+            submitOrder,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("No live markets")).toBeInTheDocument();
+    expect(screen.getByText("No active market")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "No markets are available yet. Waiting for the exchange to publish market definitions.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /No Market Available/i })).toBeDisabled();
   });
 
   it("supports trade ticket keybinds", async () => {

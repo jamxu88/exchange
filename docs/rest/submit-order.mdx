@@ -134,6 +134,7 @@ curl \
 
 - `order_type` defaults to `limit` when omitted.
 - `price` must be greater than zero and aligned to the market `tick_size` for limit orders.
+- If the market defines `min_price` or `max_price`, limit prices must stay within that inclusive band.
 - Send `price: 0` for market orders. The server ignores the field.
 - `quantity` must be greater than zero and at least the market `min_order_quantity`.
 - The order must keep your worst-case per-market net position within `+/-1000` unless the API key belongs to an admin trader.
@@ -147,6 +148,8 @@ curl \
 - `market is disabled`
 - `market has already been settled`
 - `price must align to tick size ...`
+- `price must be at least ...`
+- `price must be at most ...`
 - `quantity must be at least ...`
 - `market order could not be filled because no opposite-side liquidity is available`
 - `projected net position for ... would be ...; limit is +/-1000`

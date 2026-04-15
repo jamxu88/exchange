@@ -3,7 +3,7 @@ title: "Exchange API"
 description: "Welcome to the Quant@Illinois Trading Competition API. Here you will find everything you need to connect, trade, and stay in sync when markets move or reconnect."
 ---
 
-Welcome. This site documents the exchange **REST** and **WebSocket** APIs you will use during the competition. You can bootstrap and recover over **REST**, stream market data and private events over **WebSocket**, and choose either aggregated **`l2`** depth or authenticated raw **`l3`** public order updates—whichever fits your strategy.
+Welcome. This site documents the exchange **REST** and **WebSocket** APIs you will use during the competition. You can bootstrap and recover over **REST**, stream aggregated market data and private events over **WebSocket**, and keep your client in sync with a single public **data stream** channel.
 
 <Columns cols={2}>
   <Card title="Competition guide" href="/reference/competition-guide">
@@ -35,9 +35,9 @@ Welcome. This site documents the exchange **REST** and **WebSocket** APIs you wi
 ## What to build
 
 1. Confirm who you are with [Get User](/rest/user).
-2. Load [Get Markets](/rest/markets) and cache `status`, `tick_size`, and `min_order_quantity` for each symbol you trade.
+2. Load [Get Markets](/rest/markets) and cache `status`, `tick_size`, `min_order_quantity`, and any configured price bounds for each symbol you trade.
 3. Bootstrap risk and positions with [Get Portfolio](/rest/portfolio).
-4. Subscribe to **`l2`** for compact depth, or authenticate and use **`l3`** if you need per-order public detail.
+4. Subscribe to the public **`data`** stream for aggregated depth updates.
 5. Handle **`fill`**, **`order_state`**, **`admin_message`**, and **`resync_required`** on WebSocket.
 6. After reconnects, halts, or settlement, refresh state from REST so your client matches the server.
 
@@ -46,7 +46,7 @@ Welcome. This site documents the exchange **REST** and **WebSocket** APIs you wi
 - **Prices and quantities** are integers.
 - **`side`** is **`BUY`** or **`SELL`**.
 - **Standard teams** have a worst-case **±1000** net position cap per market (unless organizers assign a different role).
-- **`l2`** is public and aggregated by price; **`l3`** is authenticated and shows the public per-order lifecycle.
+- The public WebSocket **`data`** stream is aggregated by price level and batched roughly every **100ms**.
 - **Authenticated** REST and WebSocket trading share one bucket: **500 operations per 10 seconds** by default. Details: [Rate limits](/reference/rate-limits).
 - **After settlement**, positions for that market flatten at the settlement price and PnL is realized there.
 

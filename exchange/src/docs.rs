@@ -1,4 +1,4 @@
-use crate::accounts::{UserProfile, UserRole};
+use crate::accounts::{PublicUserProfile, UserProfile, UserRole};
 use crate::admin::{
     AdminMessageEntry, AdminMessageLevel, AdminStateResponse, AdminTelemetryResponse,
     CompetitionLeaderboardSnapshot, CompetitionSettlementRequest, DeleteMarketResponse,
@@ -72,7 +72,6 @@ impl Modify for ExchangeSecuritySchemes {
         crate::rest::get_positions,
         crate::rest::get_balance,
         crate::rest::get_portfolio,
-        crate::rest::get_leaderboard,
         crate::rest::get_open_orders,
         crate::rest::get_fills,
         crate::rest::submit_order,
@@ -86,8 +85,11 @@ impl Modify for ExchangeSecuritySchemes {
         crate::rest::ensure_admin_desk,
         crate::rest::submit_admin_desk_order,
         crate::rest::upsert_admin_bot,
+        crate::rest::start_all_admin_bots,
         crate::rest::start_admin_bot,
+        crate::rest::pause_all_admin_bots,
         crate::rest::pause_admin_bot,
+        crate::rest::delete_all_admin_bots,
         crate::rest::delete_admin_bot,
         crate::rest::start_trading,
         crate::rest::stop_trading,
@@ -110,6 +112,7 @@ impl Modify for ExchangeSecuritySchemes {
         schemas(
             HealthResponse,
             ApiError,
+            PublicUserProfile,
             UserProfile,
             UserRole,
             Side,

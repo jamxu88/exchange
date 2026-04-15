@@ -1,10 +1,10 @@
 use crate::bots::BotManager;
 use crate::checkpoint::CheckpointHandle;
 use crate::config::Config;
-use crate::derived_marketdata::{DerivedMarketDataHandle, MarketL3Snapshot};
+use crate::derived_marketdata::DerivedMarketDataHandle;
 use crate::marketdata::{
-    BookDelta, BroadcastEvent, L2_CHANNEL, L3_CHANNEL, L3BroadcastEvent, MarketEvent,
-    MarketEventEnvelope, ServerMessage, UserBroadcastEvent,
+    BookDelta, BroadcastEvent, DATA_STREAM_CHANNEL, MarketEvent, MarketEventEnvelope,
+    ServerMessage, UserBroadcastEvent,
 };
 use crate::marketdata_bridge::MarketDataBridgeHandle;
 use crate::marketdata_ipc::MarketBootstrapState;
@@ -331,7 +331,6 @@ pub struct AppState {
     account_barrier_telemetry: AccountBarrierTelemetry,
     persistence_dispatcher: PersistenceDispatchHandle,
     market_broadcaster: MarketBroadcastHandle,
-    market_event_broadcaster: MarketEventBroadcastHandle,
     pub events_tx: broadcast::Sender<BroadcastEvent>,
     pub market_event_tx: broadcast::Sender<MarketEventEnvelope>,
     pub public_events_tx: broadcast::Sender<ServerMessage>,
@@ -365,18 +364,12 @@ impl AppState {
             config.runtime_dispatch_queue_capacity,
             operator_telemetry.clone(),
         );
-        let market_event_broadcaster = MarketEventBroadcastHandle::spawn(
-            config.ws_market_broadcast_workers,
-            config.runtime_dispatch_queue_capacity,
-            operator_telemetry.clone(),
-        );
         let runtime_dispatcher = RuntimeDispatchHandle::spawn(
             config.runtime_dispatch_queue_capacity,
             config.ws_market_delta_batch_interval_ms,
             events_tx.clone(),
             market_event_tx.clone(),
             market_broadcaster.clone(),
-            market_event_broadcaster.clone(),
             public_events_tx.clone(),
             user_events_tx.clone(),
             system_events_tx.clone(),
@@ -398,7 +391,6 @@ impl AppState {
             account_barrier_telemetry,
             persistence_dispatcher,
             market_broadcaster,
-            market_event_broadcaster,
             events_tx,
             market_event_tx,
             public_events_tx,
@@ -495,7 +487,9 @@ impl AppState {
     }
 
     pub async fn begin_book_stream_bootstrap(&self, client_id: Uuid, market: String) {
-        self.market_broadcaster.begin_bootstrap(client_id, market).await;
+        self.market_broadcaster
+            .begin_bootstrap(client_id, market)
+            .await;
     }
 
     pub fn complete_book_stream_bootstrap(
@@ -510,40 +504,6 @@ impl AppState {
 
     pub fn unregister_book_stream(&self, client_id: Uuid) {
         self.market_broadcaster.unregister(client_id);
-    }
-
-    pub fn register_l3_stream(&self, tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>) -> Uuid {
-        self.market_event_broadcaster.register(tx)
-    }
-
-    pub fn update_l3_stream_subscription(
-        &self,
-        client_id: Uuid,
-        market: Option<String>,
-        last_sequence: Option<u64>,
-    ) {
-        self.market_event_broadcaster
-            .update_subscription(client_id, market, last_sequence);
-    }
-
-    pub async fn begin_l3_stream_bootstrap(&self, client_id: Uuid, market: String) {
-        self.market_event_broadcaster
-            .begin_bootstrap(client_id, market)
-            .await;
-    }
-
-    pub fn complete_l3_stream_bootstrap(
-        &self,
-        client_id: Uuid,
-        market: String,
-        snapshot_sequence: u64,
-    ) {
-        self.market_event_broadcaster
-            .complete_bootstrap(client_id, market, snapshot_sequence);
-    }
-
-    pub fn unregister_l3_stream(&self, client_id: Uuid) {
-        self.market_event_broadcaster.unregister(client_id);
     }
 
     pub fn dispatch_user_event(&self, trader_id: Uuid, message: ServerMessage) {
@@ -705,11 +665,6 @@ impl AppState {
         self.derived_market_data.best_prices(market)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn market_l3_snapshot(&self, market: &str) -> MarketL3Snapshot {
-        self.derived_market_data.l3_snapshot(market)
-    }
-
     pub(crate) fn rebuild_derived_market_data(&self) {
         let market_sequences = self
             .storage
@@ -723,6 +678,17 @@ impl AppState {
             .collect();
         self.derived_market_data
             .replace_from_open_orders(market_sequences, self.storage.list_all_open_orders());
+    }
+
+    pub fn sync_market_data_snapshot_state(&self) {
+        let Some(bridge) = self.market_data_bridge() else {
+            return;
+        };
+
+        let _ = bridge.sync_state(
+            self.market_bootstrap_state(),
+            self.storage.list_all_open_orders(),
+        );
     }
 
     pub(crate) fn market_bootstrap_state(&self) -> Vec<MarketBootstrapState> {
@@ -989,16 +955,14 @@ impl MarketBroadcastWorker {
                             market,
                             snapshot_sequence,
                         } => {
-                            let should_remove = clients
-                                .get_mut(&client_id)
-                                .is_some_and(|client| {
-                                    complete_market_bootstrap(
-                                        client,
-                                        market,
-                                        snapshot_sequence,
-                                        &telemetry,
-                                    )
-                                });
+                            let should_remove = clients.get_mut(&client_id).is_some_and(|client| {
+                                complete_market_bootstrap(
+                                    client,
+                                    market,
+                                    snapshot_sequence,
+                                    &telemetry,
+                                )
+                            });
                             if should_remove {
                                 clients.remove(&client_id);
                             }
@@ -1035,231 +999,6 @@ impl MarketBroadcastWorker {
     }
 }
 
-#[derive(Clone)]
-struct MarketEventBroadcastHandle {
-    workers: Arc<Vec<MarketEventBroadcastWorker>>,
-    worker_index_by_client: Arc<DashMap<Uuid, usize>>,
-    next_worker: Arc<AtomicUsize>,
-}
-
-#[derive(Clone)]
-struct MarketEventBroadcastWorker {
-    tx: mpsc::SyncSender<MarketEventBroadcastCommand>,
-}
-
-enum MarketEventBroadcastCommand {
-    Register {
-        client_id: Uuid,
-        tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
-    },
-    BeginBootstrap {
-        client_id: Uuid,
-        market: String,
-        ready: oneshot::Sender<()>,
-    },
-    CompleteBootstrap {
-        client_id: Uuid,
-        market: String,
-        snapshot_sequence: u64,
-    },
-    UpdateSubscription {
-        client_id: Uuid,
-        market: Option<String>,
-        last_sequence: Option<u64>,
-    },
-    Publish(L3BroadcastEvent),
-    Remove {
-        client_id: Uuid,
-    },
-}
-
-struct MarketEventBroadcastClient {
-    tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>,
-    subscription: Option<String>,
-    last_market_sequence: Option<u64>,
-    bootstrap_market: Option<String>,
-    buffered_batches: Vec<L3BroadcastEvent>,
-}
-
-impl MarketEventBroadcastHandle {
-    fn spawn(worker_count: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
-        let worker_count = worker_count.max(1);
-        let workers = (0..worker_count)
-            .map(|index| {
-                MarketEventBroadcastWorker::spawn(index, queue_capacity, telemetry.clone())
-            })
-            .collect();
-
-        Self {
-            workers: Arc::new(workers),
-            worker_index_by_client: Arc::new(DashMap::new()),
-            next_worker: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    fn register(&self, tx: tokio_mpsc::UnboundedSender<Arc<ServerMessage>>) -> Uuid {
-        let client_id = Uuid::new_v4();
-        let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        self.worker_index_by_client.insert(client_id, worker_index);
-        self.workers[worker_index].send(MarketEventBroadcastCommand::Register { client_id, tx });
-        client_id
-    }
-
-    fn update_subscription(
-        &self,
-        client_id: Uuid,
-        market: Option<String>,
-        last_sequence: Option<u64>,
-    ) {
-        let Some(worker_index) = self
-            .worker_index_by_client
-            .get(&client_id)
-            .map(|entry| *entry.value())
-        else {
-            return;
-        };
-
-        self.workers[worker_index].send(MarketEventBroadcastCommand::UpdateSubscription {
-            client_id,
-            market,
-            last_sequence,
-        });
-    }
-
-    async fn begin_bootstrap(&self, client_id: Uuid, market: String) {
-        let Some(worker_index) = self
-            .worker_index_by_client
-            .get(&client_id)
-            .map(|entry| *entry.value())
-        else {
-            return;
-        };
-
-        let (ready_tx, ready_rx) = oneshot::channel();
-        self.workers[worker_index].send(MarketEventBroadcastCommand::BeginBootstrap {
-            client_id,
-            market,
-            ready: ready_tx,
-        });
-        let _ = ready_rx.await;
-    }
-
-    fn complete_bootstrap(&self, client_id: Uuid, market: String, snapshot_sequence: u64) {
-        let Some(worker_index) = self
-            .worker_index_by_client
-            .get(&client_id)
-            .map(|entry| *entry.value())
-        else {
-            return;
-        };
-
-        self.workers[worker_index].send(MarketEventBroadcastCommand::CompleteBootstrap {
-            client_id,
-            market,
-            snapshot_sequence,
-        });
-    }
-
-    fn publish(&self, batch: L3BroadcastEvent) {
-        for worker in self.workers.iter() {
-            worker.send(MarketEventBroadcastCommand::Publish(batch.clone()));
-        }
-    }
-
-    fn unregister(&self, client_id: Uuid) {
-        let Some((_, worker_index)) = self.worker_index_by_client.remove(&client_id) else {
-            return;
-        };
-
-        self.workers[worker_index].send(MarketEventBroadcastCommand::Remove { client_id });
-    }
-}
-
-impl MarketEventBroadcastWorker {
-    fn spawn(index: usize, queue_capacity: usize, telemetry: OperatorTelemetry) -> Self {
-        let (tx, rx) = mpsc::sync_channel(queue_capacity);
-        thread::Builder::new()
-            .name(format!("exchange-l3-broadcast-{index}"))
-            .spawn(move || {
-                let mut clients = HashMap::<Uuid, MarketEventBroadcastClient>::new();
-                while let Ok(command) = rx.recv() {
-                    match command {
-                        MarketEventBroadcastCommand::Register { client_id, tx } => {
-                            clients.insert(
-                                client_id,
-                                MarketEventBroadcastClient {
-                                    tx,
-                                    subscription: None,
-                                    last_market_sequence: None,
-                                    bootstrap_market: None,
-                                    buffered_batches: Vec::new(),
-                                },
-                            );
-                        }
-                        MarketEventBroadcastCommand::BeginBootstrap {
-                            client_id,
-                            market,
-                            ready,
-                        } => {
-                            if let Some(client) = clients.get_mut(&client_id) {
-                                client.subscription = None;
-                                client.last_market_sequence = None;
-                                client.bootstrap_market = Some(market);
-                                client.buffered_batches.clear();
-                            }
-                            let _ = ready.send(());
-                        }
-                        MarketEventBroadcastCommand::CompleteBootstrap {
-                            client_id,
-                            market,
-                            snapshot_sequence,
-                        } => {
-                            let should_remove = clients
-                                .get_mut(&client_id)
-                                .is_some_and(|client| {
-                                    complete_l3_bootstrap(
-                                        client,
-                                        market,
-                                        snapshot_sequence,
-                                        &telemetry,
-                                    )
-                                });
-                            if should_remove {
-                                clients.remove(&client_id);
-                            }
-                        }
-                        MarketEventBroadcastCommand::UpdateSubscription {
-                            client_id,
-                            market,
-                            last_sequence,
-                        } => {
-                            if let Some(client) = clients.get_mut(&client_id) {
-                                client.subscription = market;
-                                client.last_market_sequence = last_sequence;
-                                client.bootstrap_market = None;
-                                client.buffered_batches.clear();
-                            }
-                        }
-                        MarketEventBroadcastCommand::Publish(batch) => {
-                            publish_market_event_batch(&mut clients, batch, &telemetry);
-                        }
-                        MarketEventBroadcastCommand::Remove { client_id } => {
-                            clients.remove(&client_id);
-                        }
-                    }
-                }
-            })
-            .unwrap_or_else(|error| panic!("failed to spawn l3 broadcast thread: {error}"));
-        Self { tx }
-    }
-
-    fn send(&self, command: MarketEventBroadcastCommand) {
-        self.tx
-            .send(command)
-            .unwrap_or_else(|_| panic!("l3 broadcast thread terminated"));
-    }
-}
-
 fn publish_market_batch(
     clients: &mut HashMap<Uuid, MarketBroadcastClient>,
     batch: BroadcastEvent,
@@ -1280,9 +1019,13 @@ fn publish_market_batch(
         if let Some(last_sequence) = client.last_market_sequence {
             let expected_sequence = last_sequence.saturating_add(1);
             if batch.start_sequence != expected_sequence {
-                telemetry.record_l2_resync();
-                let resync_message =
-                    market_resync_message(L2_CHANNEL, batch.market.clone(), expected_sequence, batch.sequence);
+                telemetry.record_data_stream_resync();
+                let resync_message = market_resync_message(
+                    DATA_STREAM_CHANNEL,
+                    batch.market.clone(),
+                    expected_sequence,
+                    batch.sequence,
+                );
                 client.subscription = None;
                 client.last_market_sequence = None;
                 if client.tx.send(resync_message).is_err() {
@@ -1317,14 +1060,14 @@ fn complete_market_bootstrap(
 
         let expected_sequence = last_sequence.saturating_add(1);
         if batch.start_sequence != expected_sequence {
-            telemetry.record_l2_resync();
+            telemetry.record_data_stream_resync();
             client.bootstrap_market = None;
             client.subscription = None;
             client.last_market_sequence = None;
             return client
                 .tx
                 .send(market_resync_message(
-                    L2_CHANNEL,
+                    DATA_STREAM_CHANNEL,
                     market,
                     expected_sequence,
                     batch.sequence,
@@ -1334,93 +1077,6 @@ fn complete_market_bootstrap(
 
         last_sequence = batch.sequence;
         if client.tx.send(l2_delta_message(&batch)).is_err() {
-            client.bootstrap_market = None;
-            client.subscription = None;
-            client.last_market_sequence = None;
-            return true;
-        }
-    }
-
-    client.bootstrap_market = None;
-    client.subscription = Some(market);
-    client.last_market_sequence = Some(last_sequence);
-    false
-}
-
-fn publish_market_event_batch(
-    clients: &mut HashMap<Uuid, MarketEventBroadcastClient>,
-    batch: L3BroadcastEvent,
-    telemetry: &OperatorTelemetry,
-) {
-    let mut disconnected = Vec::new();
-
-    for (client_id, client) in clients.iter_mut() {
-        if client.bootstrap_market.as_deref() == Some(batch.market.as_str()) {
-            client.buffered_batches.push(batch.clone());
-            continue;
-        }
-
-        if client.subscription.as_deref() != Some(batch.market.as_str()) {
-            continue;
-        }
-
-        if let Some(last_sequence) = client.last_market_sequence {
-            let expected_sequence = last_sequence.saturating_add(1);
-            if batch.start_sequence != expected_sequence {
-                telemetry.record_l3_resync();
-                let resync_message =
-                    market_resync_message(L3_CHANNEL, batch.market.clone(), expected_sequence, batch.sequence);
-                client.subscription = None;
-                client.last_market_sequence = None;
-                if client.tx.send(resync_message).is_err() {
-                    disconnected.push(*client_id);
-                }
-                continue;
-            }
-        }
-
-        client.last_market_sequence = Some(batch.sequence);
-        if client.tx.send(l3_delta_message(&batch)).is_err() {
-            disconnected.push(*client_id);
-        }
-    }
-
-    for client_id in disconnected {
-        clients.remove(&client_id);
-    }
-}
-
-fn complete_l3_bootstrap(
-    client: &mut MarketEventBroadcastClient,
-    market: String,
-    snapshot_sequence: u64,
-    telemetry: &OperatorTelemetry,
-) -> bool {
-    let mut last_sequence = snapshot_sequence;
-    for batch in std::mem::take(&mut client.buffered_batches) {
-        if batch.market != market || batch.sequence <= snapshot_sequence {
-            continue;
-        }
-
-        let expected_sequence = last_sequence.saturating_add(1);
-        if batch.start_sequence != expected_sequence {
-            telemetry.record_l3_resync();
-            client.bootstrap_market = None;
-            client.subscription = None;
-            client.last_market_sequence = None;
-            return client
-                .tx
-                .send(market_resync_message(
-                    L3_CHANNEL,
-                    market,
-                    expected_sequence,
-                    batch.sequence,
-                ))
-                .is_err();
-        }
-
-        last_sequence = batch.sequence;
-        if client.tx.send(l3_delta_message(&batch)).is_err() {
             client.bootstrap_market = None;
             client.subscription = None;
             client.last_market_sequence = None;
@@ -1451,17 +1107,7 @@ fn market_resync_message(
 
 fn l2_delta_message(batch: &BroadcastEvent) -> Arc<ServerMessage> {
     Arc::new(ServerMessage::Delta {
-        channel: L2_CHANNEL.to_string(),
-        market: batch.market.clone(),
-        start_sequence: batch.start_sequence,
-        sequence: batch.sequence,
-        events: batch.events.clone(),
-    })
-}
-
-fn l3_delta_message(batch: &L3BroadcastEvent) -> Arc<ServerMessage> {
-    Arc::new(ServerMessage::L3Delta {
-        channel: L3_CHANNEL.to_string(),
+        channel: DATA_STREAM_CHANNEL.to_string(),
         market: batch.market.clone(),
         start_sequence: batch.start_sequence,
         sequence: batch.sequence,
@@ -1524,7 +1170,6 @@ impl RuntimeDispatchHandle {
         events_tx: broadcast::Sender<BroadcastEvent>,
         market_event_tx: broadcast::Sender<MarketEventEnvelope>,
         market_broadcaster: MarketBroadcastHandle,
-        market_event_broadcaster: MarketEventBroadcastHandle,
         public_events_tx: broadcast::Sender<ServerMessage>,
         user_events_tx: broadcast::Sender<UserBroadcastEvent>,
         system_events_tx: broadcast::Sender<ServerMessage>,
@@ -1576,14 +1221,7 @@ impl RuntimeDispatchHandle {
                                     });
                                 }
                                 RuntimeDispatch::MarketEvent(message) => {
-                                    let l3_batch = L3BroadcastEvent {
-                                        market: message.market.clone(),
-                                        start_sequence: message.sequence,
-                                        sequence: message.sequence,
-                                        events: vec![message.event.clone()],
-                                    };
                                     let _ = market_event_tx.send(message);
-                                    market_event_broadcaster.publish(l3_batch);
                                 }
                                 RuntimeDispatch::Public(message) => {
                                     let _ = public_events_tx.send(message);
@@ -1924,16 +1562,6 @@ mod tests {
         assert_eq!(asks[0].price, 200);
         assert_eq!(asks[0].quantity, 1);
 
-        let btc_l3 = state.market_l3_snapshot("BTC-USD");
-        assert_eq!(btc_l3.sequence, 0);
-        assert_eq!(btc_l3.bids.len(), 2);
-        assert!(btc_l3.asks.is_empty());
-
-        let eth_l3 = state.market_l3_snapshot("ETH-USD");
-        assert_eq!(eth_l3.sequence, 0);
-        assert_eq!(eth_l3.asks.len(), 1);
-        assert!(eth_l3.bids.is_empty());
-
         assert_eq!(state.current_market_sequence("BTC-USD"), 0);
         assert_eq!(state.current_market_sequence("ETH-USD"), 0);
         assert_eq!(state.current_market_event_sequence("BTC-USD"), 0);
@@ -2021,7 +1649,7 @@ mod tests {
                 sequence,
                 events,
             } => {
-                assert_eq!(channel, "l2");
+                assert_eq!(channel, "data");
                 assert_eq!(market, "BTC-USD");
                 assert_eq!(*start_sequence, 1);
                 assert_eq!(*sequence, 2);
@@ -2077,7 +1705,7 @@ mod tests {
         assert_eq!(
             message.as_ref(),
             &ServerMessage::ResyncRequired {
-                channel: "l2".to_string(),
+                channel: "data".to_string(),
                 market: Some("BTC-USD".to_string()),
                 expected_sequence: Some(5),
                 current_sequence: Some(7),
@@ -2086,86 +1714,5 @@ mod tests {
             }
         );
         state.unregister_book_stream(client_id);
-    }
-
-    #[tokio::test]
-    async fn l3_broadcast_streams_raw_market_events_and_detects_gaps() {
-        let state = AppState::new(test_config());
-        let (tx, mut rx) = tokio_mpsc::unbounded_channel();
-        let client_id = state.register_l3_stream(tx);
-        state.update_l3_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(0));
-
-        state.dispatch_market_event(
-            "BTC-USD",
-            MarketEvent::OrderAdded {
-                order_id: Uuid::from_u128(1),
-                side: Side::Buy,
-                price: 100,
-                remaining: 2,
-                created_at: Utc::now(),
-            },
-        );
-
-        let message = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timed out waiting for l3 delta")
-            .expect("l3 message");
-        match message.as_ref() {
-            ServerMessage::L3Delta {
-                channel,
-                market,
-                start_sequence,
-                sequence,
-                events,
-            } => {
-                assert_eq!(channel, "l3");
-                assert_eq!(market, "BTC-USD");
-                assert_eq!(*start_sequence, 1);
-                assert_eq!(*sequence, 1);
-                assert!(matches!(
-                    events.as_slice(),
-                    [MarketEvent::OrderAdded {
-                        side: Side::Buy,
-                        price: 100,
-                        remaining: 2,
-                        ..
-                    }]
-                ));
-            }
-            other => panic!("unexpected l3 message: {other:?}"),
-        }
-
-        state.update_l3_stream_subscription(client_id, Some("BTC-USD".to_string()), Some(4));
-        state
-            .runtime_dispatcher
-            .dispatch_market_event(MarketEventEnvelope {
-                market: "BTC-USD".to_string(),
-                sequence: 7,
-                recorded_at: Utc::now(),
-                event: MarketEvent::OrderRemoved {
-                    order_id: Uuid::from_u128(1),
-                    side: Side::Buy,
-                    price: 100,
-                    reason: crate::marketdata::MarketEventRemoveReason::Canceled,
-                },
-            });
-
-        let message = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timed out waiting for l3 resync message")
-            .expect("l3 resync message");
-        assert_eq!(
-            message.as_ref(),
-            &ServerMessage::ResyncRequired {
-                channel: "l3".to_string(),
-                market: Some("BTC-USD".to_string()),
-                expected_sequence: Some(5),
-                current_sequence: Some(7),
-                reason: "market sequence gap detected; resubscribe for a fresh snapshot"
-                    .to_string(),
-            }
-        );
-
-        state.unregister_l3_stream(client_id);
     }
 }

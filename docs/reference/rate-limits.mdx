@@ -25,7 +25,6 @@ By default you get **500 operations per 10 seconds** per key, refilling smoothly
 - `GET /api/v1/positions`
 - `GET /api/v1/open-orders`
 - `GET /api/v1/fills`
-- `GET /api/v1/leaderboard`
 - `POST /api/v1/orders`
 - `PATCH /api/v1/orders/{order_id}`
 - `DELETE /api/v1/orders/{order_id}`
@@ -43,7 +42,7 @@ These are **free** with respect to this bucket:
 - [Health](/rest/health) and [Get Markets](/rest/markets)
 - Opening a WebSocket
 - `authenticate`
-- Market-data **subscribe** / **unsubscribe** (`l2` / `l3`)
+- Market-data **subscribe** / **unsubscribe** (`data`)
 - **Inbound** messages from the server (books, fills, heartbeats, etc.)
 
 ## Why the budget feels “shared”

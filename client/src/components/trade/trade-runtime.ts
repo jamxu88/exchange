@@ -10,7 +10,6 @@ export type TradeRuntimeConfig = {
 
 const DEFAULT_HTTP_URL = "http://localhost:8080";
 const DEFAULT_WS_URL = "ws://localhost:8080/ws";
-const DEFAULT_MARKETS = ["BTC-USD", "ETH-USD", "SOL-USD"];
 const DEFAULT_RECONNECT_DELAY_MS = 1_500;
 
 function splitMarketId(id: string) {
@@ -42,7 +41,7 @@ function toMarketDefinition(entry: string): MarketDefinition {
 export function createTradeRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): TradeRuntimeConfig {
-  const markets = (env.NEXT_PUBLIC_EXCHANGE_MARKETS || DEFAULT_MARKETS.join(","))
+  const markets = (env.NEXT_PUBLIC_EXCHANGE_MARKETS ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean)
@@ -52,7 +51,7 @@ export function createTradeRuntimeConfig(
     httpUrl: env.NEXT_PUBLIC_EXCHANGE_HTTP_URL || DEFAULT_HTTP_URL,
     wsUrl: env.NEXT_PUBLIC_EXCHANGE_WS_URL || DEFAULT_WS_URL,
     apiKey: env.NEXT_PUBLIC_EXCHANGE_API_KEY || undefined,
-    markets: markets.length > 0 ? markets : DEFAULT_MARKETS.map(toMarketDefinition),
+    markets,
     reconnectDelayMs: DEFAULT_RECONNECT_DELAY_MS,
   };
 }

@@ -16,7 +16,7 @@ It uses the admin API to:
 ```bash
 node tools/trader-stress-bot/index.mjs \
   --base-url http://localhost:8080 \
-  --admin-token local-admin-token \
+  --admin-token Quant2024! \
   --market BTC-USD \
   --traders 100 \
   --iterations 200 \

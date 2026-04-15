@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+allocated-api-keys-*.txt
 
 # debug
 npm-debug.log*

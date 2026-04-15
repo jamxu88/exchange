@@ -26,7 +26,7 @@ describe("authenticateExchangeSession", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           trader_id: "c7f8c572-8a50-4dbd-a1e1-9f452774b636",
-          username: "trader",
+          team_number: "TEAM-TRADER",
         }),
       ) as typeof fetch;
 
@@ -43,9 +43,7 @@ describe("authenticateExchangeSession", () => {
       .mockResolvedValueOnce(new Response("invalid admin token", { status: 401 }))
       .mockResolvedValueOnce(new Response("invalid api key", { status: 401 })) as typeof fetch;
 
-    await expect(authenticateExchangeSession("nope")).rejects.toMatchObject<
-      Partial<ExchangeServerError>
-    >({
+    await expect(authenticateExchangeSession("nope")).rejects.toMatchObject({
       status: 401,
       message: "invalid api key",
     });

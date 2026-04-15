@@ -99,6 +99,14 @@ export type TradeAction =
       market: MarketDefinition;
     }
   | {
+      type: "ws-market-deleted";
+      marketId: MarketId;
+    }
+  | {
+      type: "ws-book-reset";
+      marketId: MarketId;
+    }
+  | {
       type: "ws-resync-required";
       channel: string;
       marketId?: MarketId;
@@ -323,6 +331,10 @@ function upsertMarketDefinition(
   return markets.map((market, currentIndex) =>
     currentIndex === index ? nextMarket : market,
   );
+}
+
+function removeMarketDefinition(markets: MarketDefinition[], marketId: MarketId) {
+  return markets.filter((market) => market.id !== marketId);
 }
 
 function tradesFromFills(fills: TradeFill[], marketId: MarketId): MarketTrade[] {
@@ -555,7 +567,7 @@ export function createInitialTradeState(markets: MarketDefinition[]): TradeState
 
   return {
     availableMarkets: markets,
-    selectedMarketId: markets[0]?.id ?? "BTC-USD",
+    selectedMarketId: markets[0]?.id ?? "",
     connectionStatus: "connecting",
     bootstrapStatus: "idle",
     user: null,
@@ -679,7 +691,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         time: action.time,
         tone: "neutral",
         text: action.data.user
-          ? `Loaded account state for ${action.data.user.username}.`
+          ? `Loaded account state for ${action.data.user.teamNumber}.`
           : "Connected in public market-data mode.",
       });
 
@@ -750,7 +762,7 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
           id: action.id,
           time: action.time,
           tone: "positive",
-          text: `WebSocket authenticated for ${action.user.username}.`,
+          text: `WebSocket authenticated for ${action.user.teamNumber}.`,
         }),
       };
 
@@ -905,6 +917,52 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         marketBooks: synced.marketBooks,
         marketTradesByMarket: synced.marketTradesByMarket,
         positionsByMarket: synced.positionsByMarket,
+      };
+    }
+
+    case "ws-market-deleted": {
+      const nextMarkets = removeMarketDefinition(state.availableMarkets, action.marketId);
+      if (nextMarkets.length === state.availableMarkets.length) {
+        return state;
+      }
+
+      const synced = syncMarketDefinitions(state, nextMarkets, state.positions);
+      const selectedMarketChanged =
+        synced.selectedMarketId !== state.selectedMarketId;
+
+      return {
+        ...state,
+        availableMarkets: synced.availableMarkets,
+        selectedMarketId: synced.selectedMarketId,
+        marketBooks: synced.marketBooks,
+        marketTradesByMarket: synced.marketTradesByMarket,
+        positionsByMarket: synced.positionsByMarket,
+        limitPriceInput:
+          selectedMarketChanged && synced.availableMarkets.length > 0
+            ? maybeLimitInputForMarket(
+                {
+                  ...state,
+                  marketBooks: synced.marketBooks,
+                },
+                synced.selectedMarketId,
+                state.ticketSide,
+              )
+            : state.limitPriceInput,
+      };
+    }
+
+    case "ws-book-reset": {
+      const currentBook = state.marketBooks[action.marketId] ?? createEmptyMarketBook(action.marketId);
+      return {
+        ...state,
+        marketBooks: {
+          ...state.marketBooks,
+          [action.marketId]: {
+            ...createEmptyMarketBook(action.marketId),
+            lastTradePrice: currentBook.lastTradePrice,
+            lastTradeQuantity: currentBook.lastTradeQuantity,
+          },
+        },
       };
     }
 
@@ -1201,7 +1259,7 @@ export function initialsForUser(user: TradeUser | null) {
     return "QT";
   }
 
-  return user.username
+  return user.teamNumber
     .split(/[\s._-]+/)
     .filter(Boolean)
     .slice(0, 2)

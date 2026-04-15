@@ -29,6 +29,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -50,13 +51,53 @@ describe("TradeWsClient", () => {
 
     expect(socket.sent).toEqual([
       JSON.stringify({ op: "authenticate", api_key: "secret" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
+      JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
 
     client.updateMarket("ETH-USD");
     expect(socket.sent.slice(2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "ETH-USD" }),
+      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
+      JSON.stringify({ op: "subscribe", channel: "data", market: "ETH-USD" }),
+    ]);
+  });
+
+  it("waits to subscribe until a real market is available", () => {
+    const socket = new MockSocket();
+    const callbacks = {
+      onStatusChange: vi.fn(),
+      onAuthenticated: vi.fn(),
+      onSnapshot: vi.fn(),
+      onDelta: vi.fn(),
+      onReject: vi.fn(),
+      onFill: vi.fn(),
+      onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
+      onResyncRequired: vi.fn(),
+      onAdminMessage: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new TradeWsClient(
+      {
+        wsUrl: "ws://localhost:8080/ws",
+        apiKey: undefined,
+        reconnectDelayMs: 1000,
+        initialMarket: "",
+      },
+      callbacks,
+      () => socket,
+    );
+
+    client.connect();
+    socket.readyState = 1;
+    socket.onopen?.();
+
+    expect(socket.sent).toEqual([]);
+
+    client.updateMarket("BTC-USD");
+
+    expect(socket.sent).toEqual([
+      JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
   });
 
@@ -71,6 +112,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -90,7 +132,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 4,
         bids: [],
@@ -105,7 +147,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         start_sequence: 5,
         sequence: 5,
@@ -168,6 +210,7 @@ describe("TradeWsClient", () => {
         onFill: vi.fn(),
         onOrderState: vi.fn(),
         onMarketState: vi.fn(),
+        onMarketDeleted: vi.fn(),
         onResyncRequired: vi.fn(),
         onAdminMessage: vi.fn(),
         onError: vi.fn(),
@@ -194,6 +237,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -262,6 +306,12 @@ describe("TradeWsClient", () => {
     });
     socket.onmessage?.({
       data: JSON.stringify({
+        type: "market_deleted",
+        market_id: "ETH-USD",
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
         type: "admin_message",
         message: {
           level: "warning",
@@ -274,7 +324,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "resync_required",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         reason: "market sequence gap detected",
       }),
@@ -312,7 +362,12 @@ describe("TradeWsClient", () => {
       name: "Bitcoin",
       baseAsset: "BTC",
       quoteAsset: "USD",
+      minPrice: null,
+      maxPrice: null,
       status: "disabled",
+    });
+    expect(callbacks.onMarketDeleted).toHaveBeenCalledWith({
+      marketId: "ETH-USD",
     });
     expect(callbacks.onAdminMessage).toHaveBeenCalledWith({
       level: "warning",
@@ -321,14 +376,14 @@ describe("TradeWsClient", () => {
       market: "BTC-USD",
     });
     expect(callbacks.onResyncRequired).toHaveBeenCalledWith({
-      channel: "l2",
+      channel: "data",
       marketId: "BTC-USD",
       reason: "market sequence gap detected",
       autoHealing: true,
     });
     expect(socket.sent.slice(-2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
+      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
+      JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
   });
 
@@ -343,6 +398,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -365,7 +421,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 4,
         bids: [],
@@ -375,7 +431,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         start_sequence: 4,
         sequence: 4,
@@ -391,7 +447,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         start_sequence: 6,
         sequence: 6,
@@ -407,14 +463,14 @@ describe("TradeWsClient", () => {
 
     expect(callbacks.onDelta).not.toHaveBeenCalled();
     expect(callbacks.onResyncRequired).toHaveBeenCalledWith({
-      channel: "l2",
+      channel: "data",
       marketId: "BTC-USD",
       reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
       autoHealing: true,
     });
     expect(socket.sent.slice(-2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "l2", market: "BTC-USD" }),
-      JSON.stringify({ op: "subscribe", channel: "l2", market: "BTC-USD" }),
+      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
+      JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
   });
 
@@ -429,6 +485,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -451,7 +508,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 8,
         bids: [],
@@ -461,7 +518,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "resync_required",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         reason: "market sequence gap detected",
       }),
@@ -469,7 +526,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 2,
         bids: [],
@@ -485,6 +542,57 @@ describe("TradeWsClient", () => {
     });
   });
 
+  it("does not resubscribe a market that is not currently selected", () => {
+    const socket = new MockSocket();
+    const callbacks = {
+      onStatusChange: vi.fn(),
+      onAuthenticated: vi.fn(),
+      onSnapshot: vi.fn(),
+      onDelta: vi.fn(),
+      onReject: vi.fn(),
+      onFill: vi.fn(),
+      onOrderState: vi.fn(),
+      onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
+      onResyncRequired: vi.fn(),
+      onAdminMessage: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new TradeWsClient(
+      {
+        wsUrl: "ws://localhost:8080/ws",
+        apiKey: undefined,
+        reconnectDelayMs: 1000,
+        initialMarket: "ETH-USD",
+      },
+      callbacks,
+      () => socket,
+    );
+
+    client.connect();
+    socket.readyState = 1;
+    socket.onopen?.();
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "resync_required",
+        channel: "data",
+        market: "BTC-USD",
+        reason: "admin reset all users cleared resting orders",
+      }),
+    });
+
+    expect(callbacks.onResyncRequired).toHaveBeenCalledWith({
+      channel: "data",
+      marketId: "BTC-USD",
+      reason: "admin reset all users cleared resting orders",
+      autoHealing: true,
+    });
+    expect(socket.sent).toEqual([
+      JSON.stringify({ op: "subscribe", channel: "data", market: "ETH-USD" }),
+    ]);
+  });
+
   it("waits for a fresh snapshot before applying deltas and ignores stale snapshots", () => {
     const socket = new MockSocket();
     const callbacks = {
@@ -496,6 +604,7 @@ describe("TradeWsClient", () => {
       onFill: vi.fn(),
       onOrderState: vi.fn(),
       onMarketState: vi.fn(),
+      onMarketDeleted: vi.fn(),
       onResyncRequired: vi.fn(),
       onAdminMessage: vi.fn(),
       onError: vi.fn(),
@@ -518,7 +627,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         start_sequence: 1,
         sequence: 1,
@@ -534,7 +643,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 1,
         bids: [],
@@ -544,7 +653,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "delta",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         start_sequence: 2,
         sequence: 2,
@@ -560,7 +669,7 @@ describe("TradeWsClient", () => {
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
-        channel: "l2",
+        channel: "data",
         market: "BTC-USD",
         sequence: 1,
         bids: [],

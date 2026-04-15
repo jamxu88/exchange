@@ -52,7 +52,12 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/api/v1/admin/state", get(rest::get_admin_state))
         .route("/api/v1/admin/trading/start", post(rest::start_trading))
         .route("/api/v1/admin/trading/stop", post(rest::stop_trading))
-        .route("/api/v1/admin/bots", post(rest::upsert_admin_bot))
+        .route(
+            "/api/v1/admin/bots",
+            post(rest::upsert_admin_bot).delete(rest::delete_all_admin_bots),
+        )
+        .route("/api/v1/admin/bots/start", post(rest::start_all_admin_bots))
+        .route("/api/v1/admin/bots/pause", post(rest::pause_all_admin_bots))
         .route(
             "/api/v1/admin/bots/:bot_id/start",
             post(rest::start_admin_bot),
@@ -116,7 +121,6 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/api/v1/positions", get(rest::get_positions))
         .route("/api/v1/balance", get(rest::get_balance))
         .route("/api/v1/portfolio", get(rest::get_portfolio))
-        .route("/api/v1/leaderboard", get(rest::get_leaderboard))
         .route("/api/v1/open-orders", get(rest::get_open_orders))
         .route("/api/v1/fills", get(rest::get_fills))
         .route("/api/v1/orders", post(rest::submit_order))

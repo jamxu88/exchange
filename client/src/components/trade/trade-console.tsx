@@ -33,11 +33,10 @@ import type {
   PnlMetric,
 } from "@/components/trade/trade-types";
 
-const contentColumns = "minmax(0, 373fr) minmax(0, 722fr) minmax(0, 298fr)";
-const leftColumnRows = "minmax(0, 500fr) minmax(0, 360fr)";
-const rightColumnRows = "minmax(0, 430fr) minmax(0, 430fr)";
 const panelBaseClass = "rounded-[10px] border border-[#26272b] bg-[#141416]";
 const quickAdjustments = [-100, -10, 10, 100];
+const orderbookInset = "clamp(18px, 2vw, 38px)";
+const orderbookTopPadding = "clamp(18px, 4vh, 40px)";
 const orderBookPriceFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -404,7 +403,7 @@ function OrderBookRow({
   const priceClass = "text-white";
 
   return (
-    <div className="grid grid-cols-[1fr_1fr_1fr] items-center text-[14px] leading-[18px] font-medium font-mono tabular-nums">
+    <div className="grid grid-cols-[1fr_1fr_1fr] items-center py-[5px] text-[14px] leading-[18px] font-medium font-mono tabular-nums">
       <span className={level ? priceClass : "text-transparent"}>
         {level ? orderBookPriceFormatter.format(Math.trunc(level.price)) : "--"}
       </span>
@@ -511,11 +510,15 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const bidLevels = padLevels(summary.bids, 7);
   const connection = connectionPresentation(state.connectionStatus);
   const initials = initialsForUser(state.user);
-  const profileName = state.user?.username ?? "Competition User";
+  const profileName = state.user?.teamNumber ?? "Competition User";
   const profileTeam = teamLabelForUser(state.user?.traderId);
   const latestFillId = state.fills[state.fills.length - 1]?.fillId ?? null;
-  const selectedMarketStatus = resolveMarketStatus(selectedMarket?.status);
-  const selectedMarketCanTrade = selectedMarketStatus === "enabled";
+  const hasAvailableMarkets = state.availableMarkets.length > 0;
+  const selectedMarketStatus = selectedMarket
+    ? resolveMarketStatus(selectedMarket.status)
+    : undefined;
+  const selectedMarketCanTrade =
+    selectedMarketStatus !== undefined && selectedMarketStatus === "enabled";
 
   useEffect(() => {
     const loadedPreferences = loadTradePreferences();
@@ -756,18 +759,18 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden bg-black"
+      className="h-[100dvh] overflow-x-auto overflow-y-hidden bg-black"
       data-testid="trade-console-root"
     >
       <div
-        className="grid h-full w-full grid-rows-[88px_14px_minmax(0,1fr)] bg-black"
+        className="mx-auto grid h-full min-w-[1180px] max-w-[1780px] grid-rows-[82px_14px_minmax(0,1fr)] gap-0 bg-black px-[clamp(12px,2vw,24px)] py-[clamp(10px,1.8vh,18px)]"
         data-testid="trade-console-shell"
       >
         <header
-          className="relative z-[60] h-[88px] bg-black px-[clamp(18px,2.6vw,40px)] pt-[10px]"
+          className="relative z-[60]"
           data-testid="trade-console-header"
         >
-          <div className="surface-panel-soft motion-fade-up rounded-[10px] grid h-[68px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[14px] px-[14px]">
+          <div className="surface-panel-soft motion-fade-up grid h-[68px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[12px] rounded-[10px] px-[14px]">
             <div className="flex min-w-0 items-center gap-[12px]">
               <div className="flex h-[44px] items-center rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
                 <Image alt="Quant" height={32} src="/quant.png" width={124} />
@@ -789,30 +792,36 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     Prev <ShortcutHint keys={tradePreferences.keybinds.marketPrev} />
                   </span>
                 ) : null}
-                <div className="flex items-center gap-[8px] rounded-[10px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] p-[4px]">
-                  {state.availableMarkets.map((market) => {
-                    const isSelected = state.selectedMarketId === market.id;
-                    const marketStatus = resolveMarketStatus(market.status);
+                {hasAvailableMarkets ? (
+                  <div className="flex items-center gap-[8px] rounded-[10px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] p-[4px]">
+                    {state.availableMarkets.map((market) => {
+                      const isSelected = state.selectedMarketId === market.id;
+                      const marketStatus = resolveMarketStatus(market.status);
 
-                    return (
-                      <button
-                        className={marketTabClass(market.status, isSelected)}
-                        key={market.id}
-                        onClick={() => actions.selectMarket(market.id)}
-                        type="button"
-                      >
-                        <span>{market.name}</span>
-                        {marketStatus !== "enabled" ? (
-                          <span
-                            className={`rounded-[999px] px-[6px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] ${marketStatusBadgeClass(marketStatus)}`}
-                          >
-                            {marketStatusLabel(marketStatus)}
-                          </span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
+                      return (
+                        <button
+                          className={marketTabClass(market.status, isSelected)}
+                          key={market.id}
+                          onClick={() => actions.selectMarket(market.id)}
+                          type="button"
+                        >
+                          <span>{market.name}</span>
+                          {marketStatus !== "enabled" ? (
+                            <span
+                              className={`rounded-[999px] px-[6px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] ${marketStatusBadgeClass(marketStatus)}`}
+                            >
+                              {marketStatusLabel(marketStatus)}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-[10px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] py-[10px] text-[13px] font-medium leading-none text-[var(--muted)]">
+                    No live markets
+                  </div>
+                )}
                 {state.availableMarkets.length > 1 ? (
                   <span className="shrink-0 text-[11px] font-medium leading-none text-[#8f929b]">
                     Next <ShortcutHint keys={tradePreferences.keybinds.marketNext} />
@@ -882,23 +891,13 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
           </div>
         </header>
 
-          <div />
+        <div />
 
-          <div
-            className="grid min-h-0 px-[clamp(18px,2.6vw,40px)] pb-[clamp(12px,2vh,20px)]"
-            data-testid="trade-console-content"
-            style={{
-              columnGap: "clamp(12px, 1.4vw, 20px)",
-              gridTemplateColumns: contentColumns,
-            }}
-          >
-            <div
-              className="grid min-h-0"
-              style={{
-                gridTemplateRows: leftColumnRows,
-                rowGap: "clamp(12px, 1.6vh, 20px)",
-              }}
-            >
+        <div
+          className="grid min-h-0 gap-[clamp(12px,1.4vw,20px)] [grid-template-columns:minmax(280px,0.95fr)_minmax(420px,1.45fr)_minmax(300px,1fr)]"
+          data-testid="trade-console-content"
+        >
+          <div className="grid min-h-0 gap-[clamp(12px,1.4vh,18px)] [grid-template-rows:minmax(0,1.2fr)_minmax(0,0.78fr)]">
               <section
                 className={`${panelBaseClass} motion-fade-up motion-delay-1 grid h-full min-h-0 grid-rows-[48px_1fr] overflow-hidden`}
                 data-testid="positions-panel"
@@ -1049,77 +1048,83 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
               </section>
             </div>
 
-            <section
-              className={`${panelBaseClass} motion-fade-up motion-delay-2 grid h-full min-h-0 grid-rows-[52px_1fr_63px] overflow-hidden`}
-              data-testid="orderbook-panel"
+          <section
+            className={`${panelBaseClass} motion-fade-up motion-delay-2 grid min-h-0 grid-rows-[52px_minmax(0,1fr)_auto] overflow-hidden`}
+            data-testid="orderbook-panel"
+          >
+            <div
+              className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-[#26272b] pt-[14px] text-[16px] font-bold leading-none text-[#aaa]"
+              style={{ paddingInline: orderbookInset }}
             >
-              <div className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-[#26272b] px-[66px] pt-[14px] text-[16px] font-bold leading-none text-[#aaa]">
-                <span>Price</span>
-                <span className="justify-self-center">Liquidity</span>
-                <span className="justify-self-end">Total</span>
-              </div>
+              <span>Price</span>
+              <span className="justify-self-center">Liquidity</span>
+              <span className="justify-self-end">Total</span>
+            </div>
 
-              <div className="min-h-0 overflow-hidden">
-                <div className="h-full px-[66px] pt-[52px]">
-                  <div className="space-y-[12px]">
-                    {askLevels.slice(0, 6).map((level, index) => (
-                      <OrderBookRow
-                        key={`ask-${selectedMarket?.id ?? "market"}-${index}`}
-                        level={level}
-                      />
-                    ))}
-                  </div>
+            <div className="min-h-0 overflow-hidden">
+              <div
+                className="h-full overflow-y-auto"
+                style={{ paddingInline: orderbookInset, paddingTop: orderbookTopPadding }}
+              >
+                <div className="space-y-[12px]">
+                  {askLevels.slice(0, 6).map((level, index) => (
+                    <OrderBookRow
+                      key={`ask-${selectedMarket?.id ?? "market"}-${index}`}
+                      level={level}
+                    />
+                  ))}
+                </div>
 
-                  <div className="mt-[12px]">
-                    <OrderBookRow level={askLevels[6]} />
-                  </div>
+                <div className="mt-[12px]">
+                  <OrderBookRow level={askLevels[6]} />
+                </div>
 
-                  <div className="-mx-[66px] mt-[24px] grid grid-cols-[1fr_1fr_1fr] border-y border-[#26272b] px-[66px] py-[9px] text-[14px] font-medium leading-none text-[#aaa]">
-                    <p>
-                      Last:{" "}
-                      <span className="font-mono font-bold text-white">
-                        {formatMaybePrice(summary.lastPrice)}
-                      </span>
-                    </p>
-                    <p className="justify-self-center">
-                      Mid:{" "}
-                      <span className="font-mono font-bold text-white">
-                        {formatMaybePrice(summary.midPrice)}
-                      </span>
-                    </p>
-                    <p className="justify-self-end">
-                      Spread:{" "}
-                      <span className="font-mono font-bold text-white">
-                        {formatMaybePrice(summary.spread)}
-                      </span>
-                    </p>
-                  </div>
+                <div
+                  className="mt-[24px] grid grid-cols-[1fr_1fr_1fr] border-y border-[#26272b] py-[9px] text-[14px] font-medium leading-none text-[#aaa]"
+                  style={{
+                    marginInline: `calc(${orderbookInset} * -1)`,
+                    paddingInline: orderbookInset,
+                  }}
+                >
+                  <p>
+                    Last:{" "}
+                    <span className="font-mono font-bold text-white">
+                      {formatMaybePrice(summary.lastPrice)}
+                    </span>
+                  </p>
+                  <p className="justify-self-center">
+                    Mid:{" "}
+                    <span className="font-mono font-bold text-white">
+                      {formatMaybePrice(summary.midPrice)}
+                    </span>
+                  </p>
+                  <p className="justify-self-end">
+                    Spread:{" "}
+                    <span className="font-mono font-bold text-white">
+                      {formatMaybePrice(summary.spread)}
+                    </span>
+                  </p>
+                </div>
 
-                  <div className="mt-[15px] space-y-[12px]">
-                    {bidLevels.map((level, index) => (
-                      <OrderBookRow
-                        key={`bid-${selectedMarket?.id ?? "market"}-${index}`}
-                        level={level}
-                      />
-                    ))}
-                  </div>
+                <div className="mt-[15px] space-y-[12px] pb-[12px]">
+                  {bidLevels.map((level, index) => (
+                    <OrderBookRow
+                      key={`bid-${selectedMarket?.id ?? "market"}-${index}`}
+                      level={level}
+                    />
+                  ))}
                 </div>
               </div>
+            </div>
 
-              <div className="flex items-center justify-end gap-[12px] border-t border-[#26272b] px-[20px]">
-                <span className="rounded-[4px] border border-[#2c2d31] bg-[#111114] px-[12px] py-[8px] text-[13px] font-semibold text-[#d8d8dc]">
-                  Live orderbook
-                </span>
-              </div>
-            </section>
+            <div className="flex items-center justify-end gap-[12px] border-t border-[#26272b] px-[20px] py-[12px]">
+              <span className="rounded-[4px] border border-[#2c2d31] bg-[#111114] px-[12px] py-[8px] text-[13px] font-semibold text-[#d8d8dc]">
+                Live orderbook
+              </span>
+            </div>
+          </section>
 
-            <div
-              className="grid min-h-0"
-              style={{
-                gridTemplateRows: rightColumnRows,
-                rowGap: "clamp(12px, 1.6vh, 20px)",
-              }}
-            >
+          <div className="grid min-h-0 gap-[clamp(12px,1.4vh,18px)] [grid-template-rows:minmax(0,0.98fr)_minmax(0,1.02fr)]">
               <section
                 className="motion-fade-up motion-delay-3 grid h-full min-h-0 grid-rows-[44px_1fr] overflow-hidden rounded-[6px] border-[0.595px] border-[#26272b] bg-[rgba(24,24,27,0.82)]"
                 data-testid="ticket-panel"
@@ -1127,9 +1132,9 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                 <div className="flex items-center justify-between border-b border-[#2c2d31] px-[13px] py-[10px]">
                   <div className="flex min-w-0 items-center gap-[8px]">
                     <p className="max-w-[180px] truncate text-[15.477px] font-bold leading-none text-white">
-                      {selectedMarket?.name ?? "--"}
+                      {selectedMarket?.name ?? "No active market"}
                     </p>
-                    {selectedMarketStatus !== "enabled" ? (
+                    {selectedMarketStatus !== undefined && selectedMarketStatus !== "enabled" ? (
                       <span
                         className={`rounded-[999px] px-[6px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] ${marketStatusBadgeClass(selectedMarketStatus)}`}
                       >
@@ -1220,7 +1225,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     </button>
                   </div>
 
-                  <div className="mt-[20px] grid grid-cols-[1fr_148px] items-center">
+                  <div className="mt-[20px] grid gap-[8px] sm:grid-cols-[1fr_148px] sm:items-center">
                     <span className="inline-flex items-center gap-[6px] text-[16px] font-medium leading-none text-white">
                       <span>{state.orderType === "market" ? "Market Price" : "Limit Price"}</span>
                       <ShortcutHint keys={tradePreferences.keybinds.price} />
@@ -1245,7 +1250,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     </label>
                   </div>
 
-                  <div className="mt-[16px] grid grid-cols-[1fr_148px] items-center">
+                  <div className="mt-[16px] grid gap-[8px] sm:grid-cols-[1fr_148px] sm:items-center">
                     <span className="inline-flex items-center gap-[6px] text-[16px] font-medium leading-none text-white">
                       <span>Shares</span>
                       <ShortcutHint keys={tradePreferences.keybinds.shares} />
@@ -1296,7 +1301,9 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
 
                   {!selectedMarketCanTrade ? (
                     <p className="mt-[12px] text-[12px] font-medium leading-[1.2] text-[#989ba6]">
-                      {selectedMarketStatus === "settled"
+                      {!hasAvailableMarkets
+                        ? "No markets are available yet. Waiting for the exchange to publish market definitions."
+                        : selectedMarketStatus === "settled"
                         ? "This market is settled. New orders are unavailable."
                         : "This market is disabled. New orders are unavailable."}
                     </p>
@@ -1317,7 +1324,9 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                     <span className="inline-flex items-center gap-[6px]">
                       <span>
                         {!selectedMarketCanTrade
-                          ? `Market ${marketStatusLabel(selectedMarketStatus)}`
+                          ? !hasAvailableMarkets
+                            ? "No Market Available"
+                            : `Market ${marketStatusLabel(selectedMarketStatus)}`
                           : state.isSubmitting
                           ? "Submitting..."
                           : `${state.orderType === "market" ? "Market" : "Limit"} ${

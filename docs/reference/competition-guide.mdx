@@ -13,15 +13,15 @@ Use this page as your **event-day map**: what to wire up first, which rules affe
     Order rules, REST vs WebSocket split, and what “accepted” really means.
   </Card>
   <Card title="After settlement" href="#after-settlement">
-    Refresh everything and know how live leaderboard relates to final results.
+    Refresh everything and know when PnL becomes final.
   </Card>
 </Columns>
 
 ## Before trading
 
 1. Collect your **API key** from the organizers.
-2. Call [Get User](/rest/user) and verify **`username`**, **`trader_id`**, and **`role`**.
-3. From [Get Markets](/rest/markets), cache each **`market_id`**, **`status`**, **`tick_size`**, **`min_order_quantity`**, and **`reference_price`** you rely on.
+2. Call [Get User](/rest/user) and verify **`team_number`** and **`trader_id`**.
+3. From [Get Markets](/rest/markets), cache each **`market_id`**, **`status`**, **`tick_size`**, **`min_order_quantity`**, optional **`min_price`** / **`max_price`**, and **`reference_price`** you rely on.
 4. Call [Get Portfolio](/rest/portfolio) so you know positions and how limits apply.
 5. Open a **WebSocket** if you want live books, fills, or low-latency order messages.
 
@@ -33,6 +33,7 @@ Use this page as your **event-day map**: what to wire up first, which rules affe
 - **`side`** is **`BUY`** or **`SELL`**.
 - Default accounts are subject to a **±1000** worst-case net position cap **per market** (unless organizers assign a different role).
 - **`price`** must align to the market **`tick_size`**.
+- If a market publishes **`min_price`** or **`max_price`**, your limit price must stay within that inclusive band.
 - **`quantity`** must be at least **`min_order_quantity`**.
 - Authenticated REST and authenticated WebSocket trading share **500 operations / 10 seconds** by default. See [Rate limits](/reference/rate-limits) for the exact list.
 
@@ -49,8 +50,7 @@ Use this page as your **event-day map**: what to wire up first, which rules affe
 
 **WebSocket** — live behavior:
 
-- Public aggregated **`l2`** depth (batched ~**100ms**)
-- Authenticated raw public **`l3`** order stream
+- Public aggregated **`data`** stream (batched every **100ms**)
 - Your **`fill`** and **`order_state`** events
 - **`submit_order`**, **`cancel_order`**, **`amend_order`** when you want socket-based entry
 
@@ -62,9 +62,8 @@ Use this page as your **event-day map**: what to wire up first, which rules affe
 - The REST response may include immediate **`fills`**.
 - **`resting: true`** means remaining size is on the book.
 - While connected, **`order_state`** and **`fill`** carry your live account-side updates.
-- **`l2`** is price-level aggregated; **`l3`** is per-order **public** data for strategies.
 - For **your** exact resting lines, combine **`order_state`** with REST [open orders](/rest/open-orders).
-- A single **`delta`** or **`l3_delta`** can bundle multiple events—always check **`start_sequence`** and advance to **`sequence`**.
+- A single **`delta`** can bundle multiple events—always check **`start_sequence`** and advance to **`sequence`**.
 
 ## Recovery during the event
 
@@ -85,9 +84,9 @@ When a market is **settled**:
 - Positions flatten at the **`settlement_price`** organizers set.
 - Unrealized PnL for that market becomes **realized**.
 
-Refresh right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Balance](/rest/balance), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills), [Get Leaderboard](/rest/leaderboard).
+Refresh right away: [Get Markets](/rest/markets), [Get Portfolio](/rest/portfolio), [Get Balance](/rest/balance), [Get Positions](/rest/positions), [Get Open Orders](/rest/open-orders), [Get Fills](/rest/fills).
 
-[Get Leaderboard](/rest/leaderboard) shows **live** event standings. Organizers may publish **official** final rankings after all relevant markets are settled—treat settlement as the moment PnL for that market stabilizes on the server.
+Organizer rankings are private. Competitor clients should treat settlement as the moment PnL for that market stabilizes on the server.
 
 ## Related pages
 

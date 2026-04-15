@@ -15,13 +15,11 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::{self, MissedTickBehavior};
 use tracing::info;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub const ADMIN_DESK_USERNAME: &str = "admin-desk";
-const MIN_BOT_INTERVAL_MS: u64 = 100;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +36,13 @@ pub enum BotStatus {
     Running,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BotStrategy {
+    Maker,
+    Taker,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct AdminBotState {
     pub bot_id: String,
@@ -45,16 +50,15 @@ pub struct AdminBotState {
     pub trader_id: Uuid,
     pub trader_username: String,
     pub market_id: String,
-    pub order_type: OrderType,
+    pub strategy: BotStrategy,
     pub side_mode: BotSideMode,
     pub status: BotStatus,
     pub min_quantity: u64,
     pub max_quantity: u64,
     pub interval_ms: u64,
     pub max_open_orders: usize,
-    pub price_offset_ticks: u64,
-    pub walk_step_ticks: u64,
-    pub fallback_price: Option<u64>,
+    pub min_price: u64,
+    pub max_price: u64,
     pub last_error: Option<String>,
     pub last_submitted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -67,17 +71,22 @@ pub struct UpsertAdminBotRequest {
     pub display_name: Option<String>,
     pub market_id: String,
     #[serde(default)]
-    pub order_type: OrderType,
+    pub strategy: BotStrategy,
     pub side_mode: BotSideMode,
     pub min_quantity: u64,
     pub max_quantity: u64,
     pub interval_ms: u64,
     pub max_open_orders: usize,
-    pub price_offset_ticks: u64,
-    pub walk_step_ticks: u64,
-    pub fallback_price: Option<u64>,
+    pub min_price: u64,
+    pub max_price: u64,
     #[serde(default)]
     pub start_immediately: bool,
+}
+
+impl Default for BotStrategy {
+    fn default() -> Self {
+        Self::Maker
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -114,14 +123,18 @@ pub enum BotControlError {
     MissingMarketId,
     #[error("market is not configured")]
     MarketNotFound,
-    #[error("bot order interval must be at least {minimum_ms} ms")]
-    IntervalTooLow { minimum_ms: u64 },
     #[error("minimum quantity must be greater than zero")]
     InvalidMinimumQuantity,
     #[error("maximum quantity must be at least the minimum quantity")]
     InvalidMaximumQuantity,
     #[error("max open orders must be greater than zero")]
     InvalidOpenOrderLimit,
+    #[error("minimum price must be at least one tick ({tick_size})")]
+    InvalidMinimumPrice { tick_size: u64 },
+    #[error("maximum price must be at least the minimum price")]
+    InvalidMaximumPrice,
+    #[error("price bounds must align to market tick size {tick_size}")]
+    PriceBoundsTickSizeViolation { tick_size: u64 },
     #[error("bot not found")]
     BotNotFound,
     #[error(transparent)]
@@ -134,10 +147,12 @@ impl BotControlError {
             Self::MissingBotId
             | Self::InvalidBotId
             | Self::MissingMarketId
-            | Self::IntervalTooLow { .. }
             | Self::InvalidMinimumQuantity
             | Self::InvalidMaximumQuantity
-            | Self::InvalidOpenOrderLimit => StatusCode::BAD_REQUEST,
+            | Self::InvalidOpenOrderLimit
+            | Self::InvalidMinimumPrice { .. }
+            | Self::InvalidMaximumPrice
+            | Self::PriceBoundsTickSizeViolation { .. } => StatusCode::BAD_REQUEST,
             Self::MarketNotFound | Self::BotNotFound => StatusCode::NOT_FOUND,
             Self::Auth(error) => error.status_code(),
         }
@@ -192,11 +207,6 @@ impl BotManager {
         if market_id.is_empty() {
             return Err(BotControlError::MissingMarketId);
         }
-        if request.interval_ms < MIN_BOT_INTERVAL_MS {
-            return Err(BotControlError::IntervalTooLow {
-                minimum_ms: MIN_BOT_INTERVAL_MS,
-            });
-        }
         if request.min_quantity == 0 {
             return Err(BotControlError::InvalidMinimumQuantity);
         }
@@ -206,8 +216,22 @@ impl BotManager {
         if request.max_open_orders == 0 {
             return Err(BotControlError::InvalidOpenOrderLimit);
         }
-        if state.storage.get_market(&market_id).is_none() {
-            return Err(BotControlError::MarketNotFound);
+        let market = state
+            .storage
+            .get_market(&market_id)
+            .ok_or(BotControlError::MarketNotFound)?;
+        if request.min_price < market.tick_size {
+            return Err(BotControlError::InvalidMinimumPrice {
+                tick_size: market.tick_size,
+            });
+        }
+        if request.max_price < request.min_price {
+            return Err(BotControlError::InvalidMaximumPrice);
+        }
+        if request.min_price % market.tick_size != 0 || request.max_price % market.tick_size != 0 {
+            return Err(BotControlError::PriceBoundsTickSizeViolation {
+                tick_size: market.tick_size,
+            });
         }
 
         let should_restart = {
@@ -253,16 +277,15 @@ impl BotManager {
                 trader_id: trader_profile.trader_id,
                 trader_username: trader_profile.username.clone(),
                 market_id,
-                order_type: request.order_type,
+                strategy: request.strategy,
                 side_mode: request.side_mode,
                 status: BotStatus::Paused,
                 min_quantity: request.min_quantity,
                 max_quantity: request.max_quantity,
                 interval_ms: request.interval_ms,
                 max_open_orders: request.max_open_orders,
-                price_offset_ticks: request.price_offset_ticks,
-                walk_step_ticks: request.walk_step_ticks,
-                fallback_price: request.fallback_price,
+                min_price: request.min_price,
+                max_price: request.max_price,
                 last_error,
                 last_submitted_at,
                 created_at,
@@ -286,14 +309,16 @@ impl BotManager {
             Some(trader_profile.username.clone()),
             Some(trader_profile.trader_id),
             format!(
-                "bot_id={} market={} side_mode={:?} order_type={:?} interval_ms={} quantity={}..{}",
+                "bot_id={} market={} strategy={:?} side_mode={:?} interval_ms={} quantity={}..{} price_bounds={}..{}",
                 next_state.bot_id,
                 next_state.market_id,
+                next_state.strategy,
                 next_state.side_mode,
-                next_state.order_type,
                 next_state.interval_ms,
                 next_state.min_quantity,
-                next_state.max_quantity
+                next_state.max_quantity,
+                next_state.min_price,
+                next_state.max_price
             ),
         );
 
@@ -431,6 +456,57 @@ impl BotManager {
         Ok(deleted)
     }
 
+    pub async fn start_all(
+        &self,
+        state: AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        let bot_ids = self
+            .list()
+            .into_iter()
+            .map(|bot| bot.bot_id)
+            .collect::<Vec<_>>();
+        let mut started = Vec::with_capacity(bot_ids.len());
+        for bot_id in bot_ids {
+            started.push(self.start(state.clone(), admin, &bot_id).await?);
+        }
+        Ok(started)
+    }
+
+    pub async fn pause_all(
+        &self,
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        let bot_ids = self
+            .list()
+            .into_iter()
+            .map(|bot| bot.bot_id)
+            .collect::<Vec<_>>();
+        let mut paused = Vec::with_capacity(bot_ids.len());
+        for bot_id in bot_ids {
+            paused.push(self.pause(state, admin, &bot_id).await?);
+        }
+        Ok(paused)
+    }
+
+    pub async fn delete_all(
+        &self,
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        let bot_ids = self
+            .list()
+            .into_iter()
+            .map(|bot| bot.bot_id)
+            .collect::<Vec<_>>();
+        let mut deleted = Vec::with_capacity(bot_ids.len());
+        for bot_id in bot_ids {
+            deleted.push(self.delete(state, admin, &bot_id).await?);
+        }
+        Ok(deleted)
+    }
+
     fn record_submission(&self, bot_id: &str) {
         if let Some(record) = self
             .inner
@@ -536,109 +612,121 @@ async fn run_bot_loop(
     config: AdminBotState,
     mut stop_rx: oneshot::Receiver<()>,
 ) {
-    let mut ticker = time::interval(time::Duration::from_millis(config.interval_ms));
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut side_toggle = false;
     let mut rng = BotRng::seeded(&config.bot_id, config.trader_id);
-    let mut anchor_price = initial_anchor_price(&state, &config).await;
+    let mut first_iteration = true;
 
     loop {
-        tokio::select! {
-            _ = &mut stop_rx => {
-                break;
+        if first_iteration {
+            first_iteration = false;
+        } else if config.interval_ms == 0 {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                _ = tokio::task::yield_now() => {}
             }
-            _ = ticker.tick() => {
-                let Some(market) = state.storage.get_market(&config.market_id) else {
-                    manager.record_error(&bot_id, "market is not configured");
-                    continue;
-                };
-                if market.status == MarketStatus::Settled {
-                    manager.record_error(&bot_id, "market has already been settled");
-                    continue;
-                }
-                let open_orders = state.storage.list_open_orders(config.trader_id, Some(&config.market_id));
-                if open_orders.len() >= config.max_open_orders {
-                    continue;
-                }
-
-                let current_anchor = market_anchor_price(&state, &config, anchor_price, market.reference_price).await;
-                anchor_price = walk_anchor_price(current_anchor, market.tick_size, config.walk_step_ticks, &mut rng);
-                let side = select_side(config.side_mode, &mut side_toggle);
-                let quantity = rng.range_u64(config.min_quantity, config.max_quantity);
-                let offset = market.tick_size.saturating_mul(config.price_offset_ticks);
-                let price = match config.order_type {
-                    OrderType::Market => 0,
-                    OrderType::Limit => match side {
-                        Side::Buy => anchor_price.saturating_sub(offset).max(market.tick_size),
-                        Side::Sell => anchor_price.saturating_add(offset).max(market.tick_size),
-                    },
-                };
-
-                match TradingService::submit_order(
-                    &state,
-                    config.trader_id,
-                    SubmitOrderRequest {
-                        market: config.market_id.clone(),
-                        side,
-                        order_type: config.order_type,
-                        price,
-                        quantity,
-                    },
-                ).await {
-                    Ok(_) => manager.record_submission(&bot_id),
-                    Err(error) => manager.record_error(&bot_id, error.to_string()),
-                }
+        } else {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(config.interval_ms)) => {}
             }
+        }
+
+        let Some(market) = state.storage.get_market(&config.market_id) else {
+            manager.record_error(&bot_id, "market is not configured");
+            continue;
+        };
+        if market.status == MarketStatus::Settled {
+            manager.record_error(&bot_id, "market has already been settled");
+            continue;
+        }
+        let open_orders = state
+            .storage
+            .list_open_orders(config.trader_id, Some(&config.market_id));
+        if open_orders.len() >= config.max_open_orders {
+            continue;
+        }
+
+        let side = select_side(config.side_mode, &mut side_toggle);
+        let quantity = rng.range_u64(config.min_quantity, config.max_quantity);
+        let request = build_bot_order_request(
+            &state,
+            &config,
+            &market.market_id,
+            market.tick_size,
+            side,
+            quantity,
+            &mut rng,
+        )
+        .await;
+
+        match TradingService::submit_order(&state, config.trader_id, request).await {
+            Ok(_) => manager.record_submission(&bot_id),
+            Err(error) => manager.record_error(&bot_id, error.to_string()),
         }
     }
 
     manager.mark_stopped(&bot_id);
 }
 
-async fn initial_anchor_price(state: &AppState, config: &AdminBotState) -> u64 {
-    market_anchor_price(
-        state,
-        config,
-        config.fallback_price.unwrap_or(1),
-        config.fallback_price,
-    )
-    .await
-}
-
-async fn market_anchor_price(
+async fn build_bot_order_request(
     state: &AppState,
     config: &AdminBotState,
-    previous_anchor: u64,
-    market_reference_price: Option<u64>,
-) -> u64 {
-    let (best_bid, best_ask) = state.market_best_prices(&config.market_id).await;
-    match (best_bid, best_ask) {
-        (Some(bid), Some(ask)) => bid.saturating_add(ask) / 2,
-        (Some(bid), None) => bid,
-        (None, Some(ask)) => ask,
-        (None, None) => config
-            .fallback_price
-            .or(market_reference_price)
-            .unwrap_or(previous_anchor.max(1)),
+    market_id: &str,
+    tick_size: u64,
+    side: Side,
+    quantity: u64,
+    rng: &mut BotRng,
+) -> SubmitOrderRequest {
+    let random_price = bounded_price(config.min_price, config.max_price, tick_size, rng);
+    let price = match config.strategy {
+        BotStrategy::Maker => {
+            maker_price_within_bounds(state, config, side, tick_size, random_price).await
+        }
+        BotStrategy::Taker => random_price,
+    };
+
+    SubmitOrderRequest {
+        market: market_id.to_string(),
+        side,
+        order_type: OrderType::Limit,
+        price,
+        quantity,
     }
 }
 
-fn walk_anchor_price(
-    anchor_price: u64,
+async fn maker_price_within_bounds(
+    state: &AppState,
+    config: &AdminBotState,
+    side: Side,
     tick_size: u64,
-    walk_step_ticks: u64,
-    rng: &mut BotRng,
+    random_price: u64,
 ) -> u64 {
-    if walk_step_ticks == 0 {
-        return anchor_price.max(tick_size);
+    let (best_bid, best_ask) = state.market_best_prices(&config.market_id).await;
+    match side {
+        Side::Buy => {
+            let ceiling = best_ask
+                .map(|ask| ask.saturating_sub(tick_size).max(tick_size))
+                .unwrap_or(config.max_price);
+            random_price
+                .min(ceiling)
+                .clamp(config.min_price, config.max_price)
+        }
+        Side::Sell => {
+            let floor = best_bid
+                .map(|bid| bid.saturating_add(tick_size).max(tick_size))
+                .unwrap_or(config.min_price);
+            random_price
+                .max(floor)
+                .clamp(config.min_price, config.max_price)
+        }
     }
+}
 
-    let max_delta = i64::try_from(walk_step_ticks).unwrap_or(i64::MAX);
-    let delta_ticks = rng.range_i64(-max_delta, max_delta);
-    let tick_size_i64 = i64::try_from(tick_size).unwrap_or(i64::MAX);
-    let price_i64 = i64::try_from(anchor_price).unwrap_or(i64::MAX);
-    let next = price_i64.saturating_add(delta_ticks.saturating_mul(tick_size_i64));
-    u64::try_from(next.max(tick_size_i64)).unwrap_or(tick_size)
+fn bounded_price(min_price: u64, max_price: u64, tick_size: u64, rng: &mut BotRng) -> u64 {
+    let min_ticks = min_price / tick_size;
+    let max_ticks = max_price / tick_size;
+    rng.range_u64(min_ticks, max_ticks)
+        .saturating_mul(tick_size)
 }
 
 fn select_side(side_mode: BotSideMode, toggle: &mut bool) -> Side {
@@ -681,7 +769,8 @@ fn ensure_bot_user(
         admin,
         ProvisionUserRequest {
             username,
-            role: Some(UserRole::Trader),
+            team_number: None,
+            role: Some(UserRole::Admin),
         },
     )?
     .profile)
@@ -700,6 +789,7 @@ fn ensure_admin_desk_profile(
         admin,
         ProvisionUserRequest {
             username: ADMIN_DESK_USERNAME.to_string(),
+            team_number: None,
             role: Some(UserRole::Admin),
         },
     )?
@@ -771,13 +861,5 @@ impl BotRng {
         }
         let span = max.saturating_sub(min).saturating_add(1);
         min.saturating_add(self.next_u64() % span)
-    }
-
-    fn range_i64(&mut self, min: i64, max: i64) -> i64 {
-        if min >= max {
-            return min;
-        }
-        let span = u64::try_from(max.saturating_sub(min).saturating_add(1)).unwrap_or(u64::MAX);
-        min.saturating_add(i64::try_from(self.next_u64() % span).unwrap_or(0))
     }
 }

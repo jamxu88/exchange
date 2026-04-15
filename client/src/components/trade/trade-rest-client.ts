@@ -20,7 +20,7 @@ type ApiErrorPayload = {
 
 type UserResponse = {
   trader_id: string;
-  username: string;
+  team_number: string;
 };
 
 type PositionResponse = {
@@ -65,6 +65,8 @@ type MarketResponse = {
   display_name: string;
   base_asset: string;
   quote_asset: string;
+  min_price?: number | null;
+  max_price?: number | null;
   status?: MarketStatus;
 };
 
@@ -135,6 +137,8 @@ function normalizeMarket(market: MarketResponse): MarketDefinition {
     name: market.display_name,
     baseAsset: market.base_asset,
     quoteAsset: market.quote_asset,
+    minPrice: market.min_price ?? null,
+    maxPrice: market.max_price ?? null,
     status: market.status ?? "enabled",
   };
 }
@@ -208,7 +212,7 @@ export class TradeRestClient {
             .then((value) => {
               user = {
                 traderId: value.trader_id,
-                username: value.username,
+                teamNumber: value.team_number,
               };
               loaded.user = true;
             })

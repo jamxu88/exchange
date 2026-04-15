@@ -32,6 +32,7 @@ import {
 import type {
   ConnectionStatus,
   MarketDefinition,
+  OrderType,
   TradeBootstrapData,
   TradeSide,
 } from "@/components/trade/trade-types";
@@ -99,7 +100,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     () => options.runtime ?? createTradeRuntimeConfig(),
     [options.runtime],
   );
-  const initialMarketId = runtime.markets[0]?.id ?? "BTC-USD";
+  const initialMarketId = runtime.markets[0]?.id ?? "";
   const [state, dispatch] = useReducer(
     tradeReducer,
     runtime.markets,
@@ -131,7 +132,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
   });
 
   const handleAuthenticated = useEffectEvent(
-    (payload: { traderId: string; username: string }) => {
+    (payload: { traderId: string; teamNumber: string }) => {
       startTransition(() => {
         dispatch({
           type: "ws-authenticated",
@@ -261,6 +262,12 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     });
   });
 
+  const handleMarketDeleted = useEffectEvent((payload: { marketId: string }) => {
+    startTransition(() => {
+      dispatch({ type: "ws-market-deleted", marketId: payload.marketId });
+    });
+  });
+
   const handleResyncRequired = useEffectEvent(
     (payload: {
       channel: string;
@@ -268,11 +275,14 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       reason: string;
       autoHealing?: boolean;
     }) => {
-      if (!payload.autoHealing) {
-        startTransition(() => {
+      startTransition(() => {
+        if (payload.channel === "data" && payload.marketId) {
+          dispatch({ type: "ws-book-reset", marketId: payload.marketId });
+        }
+        if (!payload.autoHealing) {
           dispatch({ type: "ws-resync-required", ...payload, ...createStamp() });
-        });
-      }
+        }
+      });
       if (payload.channel === "markets") {
         void refreshAccountState({ markets: true });
       } else if (payload.channel === "user") {
@@ -379,6 +389,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
         onFill: handleFill,
         onOrderState: handleOrderState,
         onMarketState: handleMarketState,
+        onMarketDeleted: handleMarketDeleted,
         onResyncRequired: handleResyncRequired,
         onAdminMessage: handleAdminMessage,
         onError: handleSocketError,
@@ -411,7 +422,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
     socketRef.current?.updateMarket(state.selectedMarketId);
   }, [state.selectedMarketId]);
 
-  async function submitOrder() {
+  function resolveSelectedMarketForSubmit() {
     const selectedMarket = selectMarketById(state, state.selectedMarketId);
     if (!selectedMarket) {
       dispatch({
@@ -419,7 +430,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
         error: "No market selected.",
         ...createStamp(),
       });
-      return;
+      return null;
     }
 
     const selectedMarketStatus = selectedMarket.status ?? "enabled";
@@ -432,10 +443,53 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
             : "Rejected order: market is disabled.",
         ...createStamp(),
       });
+      return null;
+    }
+
+    return {
+      selectedMarket,
+      summary: selectSelectedMarketSummary(state),
+    };
+  }
+
+  async function submitResolvedOrder(intent: {
+    marketId: string;
+    marketName: string;
+    side: TradeSide;
+    orderType: OrderType;
+    quantity: number;
+    requestedPrice: number;
+    effectivePrice: number;
+  }) {
+    dispatch({ type: "submit-start" });
+
+    try {
+      const result = await restClient.submitOrder(intent);
+
+      startTransition(() => {
+        dispatch({ type: "submit-success", result, ...createStamp() });
+      });
+    } catch (error) {
+      startTransition(() => {
+        dispatch({
+          type: "submit-error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Order submission failed.",
+          ...createStamp(),
+        });
+      });
+    }
+  }
+
+  async function submitOrder() {
+    const resolvedMarket = resolveSelectedMarketForSubmit();
+    if (!resolvedMarket) {
       return;
     }
 
-    const summary = selectSelectedMarketSummary(state);
+    const { selectedMarket, summary } = resolvedMarket;
     const shares = parseSharesInput(state.sharesInput);
     const requestedPrice = parseNumberInput(state.limitPriceInput);
     const effectivePrice =
@@ -466,34 +520,15 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       return;
     }
 
-    dispatch({ type: "submit-start" });
-
-    try {
-      const result = await restClient.submitOrder({
-        marketId: selectedMarket.id,
-        marketName: selectedMarket.name,
-        side: state.ticketSide,
-        orderType: state.orderType,
-        quantity: shares,
-        requestedPrice,
-        effectivePrice,
-      });
-
-      startTransition(() => {
-        dispatch({ type: "submit-success", result, ...createStamp() });
-      });
-    } catch (error) {
-      startTransition(() => {
-        dispatch({
-          type: "submit-error",
-          error:
-            error instanceof Error
-              ? error.message
-              : "Order submission failed.",
-          ...createStamp(),
-        });
-      });
-    }
+    await submitResolvedOrder({
+      marketId: selectedMarket.id,
+      marketName: selectedMarket.name,
+      side: state.ticketSide,
+      orderType: state.orderType,
+      quantity: shares,
+      requestedPrice,
+      effectivePrice,
+    });
   }
 
   async function cancelPendingOrder(orderId: string) {

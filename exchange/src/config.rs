@@ -31,10 +31,7 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(1_024),
-            ws_market_delta_batch_interval_ms: env::var("WS_MARKET_DELTA_BATCH_INTERVAL_MS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(100),
+            ws_market_delta_batch_interval_ms: 100,
             ws_market_broadcast_workers: env::var("WS_MARKET_BROADCAST_WORKERS")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
@@ -69,7 +66,7 @@ impl Config {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(10),
             admin_api_token: env::var("ADMIN_API_TOKEN")
-                .unwrap_or_else(|_| "local-admin-token".to_string()),
+                .unwrap_or_else(|_| "Quant2024!".to_string()),
         }
     }
 }

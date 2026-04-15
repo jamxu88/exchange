@@ -5,7 +5,7 @@ use crate::bots::{
     BotControlError, UpsertAdminBotRequest, admin_desk_summary, ensure_admin_desk,
     submit_admin_desk_order,
 };
-use crate::marketdata::{BookDelta, OrderStateStatus, ServerMessage};
+use crate::marketdata::{DATA_STREAM_CHANNEL, OrderStateStatus, ServerMessage};
 use crate::settlement::{SettlementEngine, SettlementError};
 use crate::state::{AccountBarrierStatus, AppState, DispatchQueueMode, DispatchQueueStatus};
 use crate::storage::PersistenceStatus;
@@ -63,6 +63,10 @@ pub struct MarketDefinition {
     pub quote_asset: String,
     pub tick_size: u64,
     pub min_order_quantity: u64,
+    #[serde(default)]
+    pub min_price: Option<u64>,
+    #[serde(default)]
+    pub max_price: Option<u64>,
     pub reference_price: Option<u64>,
     pub settlement_price: Option<u64>,
     pub status: MarketStatus,
@@ -101,6 +105,10 @@ pub struct UpsertMarketRequest {
     pub quote_asset: String,
     pub tick_size: u64,
     pub min_order_quantity: u64,
+    #[serde(default, rename = "min", alias = "min_price")]
+    pub min_price: Option<u64>,
+    #[serde(default, rename = "max", alias = "max_price")]
+    pub max_price: Option<u64>,
     pub reference_price: Option<u64>,
     pub enabled: bool,
 }
@@ -110,6 +118,10 @@ pub struct UpdateMarketRequest {
     pub display_name: Option<String>,
     pub tick_size: Option<u64>,
     pub min_order_quantity: Option<u64>,
+    #[serde(default, rename = "min", alias = "min_price")]
+    pub min_price: Option<u64>,
+    #[serde(default, rename = "max", alias = "max_price")]
+    pub max_price: Option<u64>,
     pub reference_price: Option<u64>,
     pub enabled: Option<bool>,
 }
@@ -118,12 +130,15 @@ pub struct UpdateMarketRequest {
 pub struct LoadExchangeConfigRequest {
     pub trading_enabled: Option<bool>,
     pub markets: Vec<UpsertMarketRequest>,
+    #[serde(default)]
+    pub bots: Vec<UpsertAdminBotRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct LoadExchangeConfigResponse {
     pub controls: ExchangeControls,
     pub markets: Vec<MarketDefinition>,
+    pub bots: Vec<AdminBotState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -154,7 +169,7 @@ pub struct SettleMarketResponse {
 pub struct LeaderboardRow {
     pub rank: usize,
     pub trader_id: Uuid,
-    pub username: String,
+    pub team_number: String,
     pub net_pnl: i64,
     pub realized_pnl: i64,
     pub unrealized_pnl: i64,
@@ -284,6 +299,14 @@ pub enum AdminError {
     InvalidTickSize,
     #[error("minimum order quantity must be greater than zero")]
     InvalidMinimumOrderQuantity,
+    #[error("minimum allowable price must be greater than zero")]
+    InvalidMinimumAllowedPrice,
+    #[error("maximum allowable price must be greater than zero")]
+    InvalidMaximumAllowedPrice,
+    #[error("maximum allowable price must be greater than or equal to minimum allowable price")]
+    InvalidMaximumAllowedPriceRange,
+    #[error("allowable market price bounds must align to tick size {tick_size}")]
+    PriceBoundsTickSizeViolation { tick_size: u64 },
     #[error("market not found")]
     MarketNotFound,
     #[error("market already settled")]
@@ -306,10 +329,12 @@ pub enum AdminError {
     MissingMessageBody,
     #[error("target user not found")]
     TargetUserNotFound,
-    #[error("settlement price must be greater than zero")]
+    #[error("settlement price must be zero or greater")]
     InvalidSettlementPrice,
     #[error("numeric overflow")]
     Overflow,
+    #[error("{message}")]
+    BotControl { message: String, status: u16 },
     #[error("{0}")]
     SettlementFailed(String),
 }
@@ -323,6 +348,9 @@ impl AdminError {
             | Self::TargetUserNotFound
             | Self::CompetitionUserNotFound { .. }
             | Self::CompetitionSnapshotNotFound => StatusCode::NOT_FOUND,
+            Self::BotControl { status, .. } => {
+                StatusCode::from_u16(*status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+            }
             Self::MarketAlreadySettled | Self::MarketHasOpenOrders | Self::SettlementFailed(_) => {
                 StatusCode::CONFLICT
             }
@@ -336,6 +364,10 @@ impl AdminError {
             | Self::MissingMarketLabel
             | Self::InvalidTickSize
             | Self::InvalidMinimumOrderQuantity
+            | Self::InvalidMinimumAllowedPrice
+            | Self::InvalidMaximumAllowedPrice
+            | Self::InvalidMaximumAllowedPriceRange
+            | Self::PriceBoundsTickSizeViolation { .. }
             | Self::MissingMessageBody
             | Self::InvalidSettlementPrice => StatusCode::BAD_REQUEST,
         }
@@ -351,6 +383,15 @@ impl From<SettlementError> for AdminError {
             }
             SettlementError::Overflow => Self::Overflow,
             SettlementError::InvalidSettlementPrice => Self::InvalidSettlementPrice,
+        }
+    }
+}
+
+impl From<BotControlError> for AdminError {
+    fn from(value: BotControlError) -> Self {
+        Self::BotControl {
+            message: value.to_string(),
+            status: value.status_code().as_u16(),
         }
     }
 }
@@ -424,6 +465,13 @@ impl AdminService {
         state.bot_manager.start(state.clone(), admin, bot_id).await
     }
 
+    pub async fn start_all_bots(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        state.bot_manager.start_all(state.clone(), admin).await
+    }
+
     pub async fn pause_bot(
         state: &AppState,
         admin: &AuthenticatedAdmin,
@@ -432,12 +480,26 @@ impl AdminService {
         state.bot_manager.pause(state, admin, bot_id).await
     }
 
+    pub async fn pause_all_bots(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        state.bot_manager.pause_all(state, admin).await
+    }
+
     pub async fn delete_bot(
         state: &AppState,
         admin: &AuthenticatedAdmin,
         bot_id: &str,
     ) -> Result<AdminBotState, BotControlError> {
         state.bot_manager.delete(state, admin, bot_id).await
+    }
+
+    pub async fn delete_all_bots(
+        state: &AppState,
+        admin: &AuthenticatedAdmin,
+    ) -> Result<Vec<AdminBotState>, BotControlError> {
+        state.bot_manager.delete_all(state, admin).await
     }
 
     pub fn ensure_admin_desk(
@@ -611,8 +673,13 @@ impl AdminService {
             Some(market.market_id.clone()),
             None,
             format!(
-                "market {} status={:?} tick_size={} min_order_quantity={}",
-                market.market_id, market.status, market.tick_size, market.min_order_quantity
+                "market {} status={:?} tick_size={} min_order_quantity={} min_price={:?} max_price={:?}",
+                market.market_id,
+                market.status,
+                market.tick_size,
+                market.min_order_quantity,
+                market.min_price,
+                market.max_price
             ),
         );
         state.request_checkpoint_save();
@@ -653,6 +720,13 @@ impl AdminService {
             }
             market.min_order_quantity = min_order_quantity;
         }
+        if let Some(min_price) = request.min_price {
+            market.min_price = Some(min_price);
+        }
+        if let Some(max_price) = request.max_price {
+            market.max_price = Some(max_price);
+        }
+        validate_market_price_bounds(market.min_price, market.max_price, market.tick_size)?;
         if let Some(reference_price) = request.reference_price {
             market.reference_price = Some(reference_price);
         }
@@ -673,8 +747,13 @@ impl AdminService {
             Some(market.market_id.clone()),
             None,
             format!(
-                "market {} status={:?} tick_size={} min_order_quantity={}",
-                market.market_id, market.status, market.tick_size, market.min_order_quantity
+                "market {} status={:?} tick_size={} min_order_quantity={} min_price={:?} max_price={:?}",
+                market.market_id,
+                market.status,
+                market.tick_size,
+                market.min_order_quantity,
+                market.min_price,
+                market.max_price
             ),
         );
         state.request_checkpoint_save();
@@ -704,6 +783,8 @@ impl AdminService {
             .delete_market(trimmed_market)
             .ok_or(AdminError::MarketNotFound)?;
         state.remove_market_runtime(trimmed_market);
+        state.sync_market_data_snapshot_state();
+        publish_market_deleted(state, trimmed_market);
         record_admin_audit(
             state,
             admin.username.clone(),
@@ -718,7 +799,7 @@ impl AdminService {
         })
     }
 
-    pub fn load_exchange_config(
+    pub async fn load_exchange_config(
         state: &AppState,
         admin: &AuthenticatedAdmin,
         request: LoadExchangeConfigRequest,
@@ -743,6 +824,21 @@ impl AdminService {
             markets = state.storage.list_markets();
         }
 
+        let mut bots = Vec::with_capacity(request.bots.len());
+        for bot in request.bots {
+            bots.push(
+                state
+                    .bot_manager
+                    .upsert(state, admin, bot)
+                    .await
+                    .map_err(AdminError::from)?,
+            );
+        }
+
+        if bots.is_empty() {
+            bots = state.bot_manager.list();
+        }
+
         record_admin_audit(
             state,
             admin.username.clone(),
@@ -750,14 +846,19 @@ impl AdminService {
             None,
             None,
             format!(
-                "loaded {} market configs; trading_enabled={}",
+                "loaded {} market configs and {} bot configs; trading_enabled={}",
                 markets.len(),
+                bots.len(),
                 controls.trading_enabled
             ),
         );
         state.request_checkpoint_save();
 
-        Ok(LoadExchangeConfigResponse { controls, markets })
+        Ok(LoadExchangeConfigResponse {
+            controls,
+            markets,
+            bots,
+        })
     }
 
     pub fn send_message(
@@ -814,10 +915,6 @@ impl AdminService {
         market_id: &str,
         request: SettleMarketRequest,
     ) -> Result<SettleMarketResponse, AdminError> {
-        if request.settlement_price == 0 {
-            return Err(AdminError::InvalidSettlementPrice);
-        }
-
         let mut market = state
             .storage
             .get_market(market_id)
@@ -835,6 +932,7 @@ impl AdminService {
             .storage
             .close_open_orders_for_market(&market.market_id);
         state.remove_market_runtime(&market.market_id);
+        state.sync_market_data_snapshot_state();
         publish_market_resync(
             state,
             &market.market_id,
@@ -908,6 +1006,12 @@ impl AdminService {
 
     pub fn reset_all_users(state: &AppState, admin: &AuthenticatedAdmin) -> ResetUsersResponse {
         let open_orders = state.storage.list_all_open_orders();
+        let market_ids = state
+            .storage
+            .list_markets()
+            .into_iter()
+            .map(|market| market.market_id)
+            .collect::<Vec<_>>();
         let cleared_orders = open_orders.len();
         let cleared_positions = state
             .storage
@@ -931,26 +1035,23 @@ impl AdminService {
                     status: OrderStateStatus::Canceled,
                 },
             );
-            publish_market_delta(
-                state,
-                &order.market,
-                BookDelta::LevelUpdated {
-                    side: order.side,
-                    price: order.price,
-                    quantity: 0,
-                },
-            );
         }
 
         state.storage.reset_all_trading_state();
         state.clear_market_runtime();
-        state.dispatch_system_message(ServerMessage::ResyncRequired {
-            channel: "account".to_string(),
-            market: None,
-            expected_sequence: None,
-            current_sequence: None,
-            reason: "admin reset all users".to_string(),
-        });
+        state.sync_market_data_snapshot_state();
+
+        for market_id in &market_ids {
+            publish_market_resync(
+                state,
+                market_id,
+                "admin reset all users cleared resting orders; resubscribe for a fresh snapshot",
+            );
+        }
+        publish_user_resync(
+            state,
+            "admin reset all users cleared account state; refresh account state and reconnect if needed",
+        );
 
         record_admin_audit(
             state,
@@ -998,14 +1099,14 @@ impl AdminService {
 
     pub fn export_competition_snapshot_csv(snapshot: &CompetitionLeaderboardSnapshot) -> String {
         let mut csv = String::from(
-            "rank,trader_id,username,net_pnl,realized_pnl,unrealized_pnl,gross_exposure\n",
+            "rank,trader_id,team_number,net_pnl,realized_pnl,unrealized_pnl,gross_exposure\n",
         );
         for row in &snapshot.leaderboard {
             csv.push_str(&format!(
                 "{},{},{},{},{},{},{}\n",
                 row.rank,
                 row.trader_id,
-                csv_escape(&row.username),
+                csv_escape(&row.team_number),
                 row.net_pnl,
                 row.realized_pnl,
                 row.unrealized_pnl,
@@ -1095,9 +1196,6 @@ fn validate_competition_settlements(
             .ok_or(AdminError::MarketNotFound)?;
         if market.status == MarketStatus::Settled {
             return Err(AdminError::MarketAlreadySettled);
-        }
-        if settlement.settlement_price == 0 {
-            return Err(AdminError::InvalidSettlementPrice);
         }
         validated.push(CompetitionSettlementRequest {
             market_id,
@@ -1213,7 +1311,7 @@ async fn build_leaderboard_rows(
             LeaderboardRow {
                 rank: 0,
                 trader_id: user.profile.trader_id,
-                username: user.profile.username,
+                team_number: user.profile.public_team_number().to_string(),
                 net_pnl,
                 realized_pnl,
                 unrealized_pnl,
@@ -1226,7 +1324,7 @@ async fn build_leaderboard_rows(
         right
             .net_pnl
             .cmp(&left.net_pnl)
-            .then_with(|| left.username.cmp(&right.username))
+            .then_with(|| left.team_number.cmp(&right.team_number))
             .then_with(|| left.trader_id.cmp(&right.trader_id))
     });
     for (index, row) in rows.iter_mut().enumerate() {
@@ -1422,6 +1520,7 @@ fn build_market_definition(
     if request.min_order_quantity == 0 {
         return Err(AdminError::InvalidMinimumOrderQuantity);
     }
+    validate_market_price_bounds(request.min_price, request.max_price, request.tick_size)?;
 
     let now = Utc::now();
     Ok(MarketDefinition {
@@ -1431,6 +1530,8 @@ fn build_market_definition(
         quote_asset,
         tick_size: request.tick_size,
         min_order_quantity: request.min_order_quantity,
+        min_price: request.min_price,
+        max_price: request.max_price,
         reference_price: request.reference_price,
         settlement_price: existing.and_then(|market| market.settlement_price),
         status: if request.enabled {
@@ -1441,6 +1542,35 @@ fn build_market_definition(
         created_at: existing.map(|market| market.created_at).unwrap_or(now),
         updated_at: now,
     })
+}
+
+fn validate_market_price_bounds(
+    min_price: Option<u64>,
+    max_price: Option<u64>,
+    tick_size: u64,
+) -> Result<(), AdminError> {
+    if let Some(min_price) = min_price {
+        if min_price == 0 {
+            return Err(AdminError::InvalidMinimumAllowedPrice);
+        }
+        if min_price % tick_size != 0 {
+            return Err(AdminError::PriceBoundsTickSizeViolation { tick_size });
+        }
+    }
+    if let Some(max_price) = max_price {
+        if max_price == 0 {
+            return Err(AdminError::InvalidMaximumAllowedPrice);
+        }
+        if max_price % tick_size != 0 {
+            return Err(AdminError::PriceBoundsTickSizeViolation { tick_size });
+        }
+    }
+    if let (Some(min_price), Some(max_price)) = (min_price, max_price) {
+        if max_price < min_price {
+            return Err(AdminError::InvalidMaximumAllowedPriceRange);
+        }
+    }
+    Ok(())
 }
 
 async fn market_mark_price(state: &AppState, market: &MarketDefinition) -> u64 {
@@ -1471,8 +1601,10 @@ fn publish_market_state(state: &AppState, market: MarketDefinition) {
     state.dispatch_public_message(ServerMessage::MarketState { market });
 }
 
-fn publish_market_delta(state: &AppState, market: &str, event: BookDelta) {
-    state.dispatch_market_delta(market, event);
+fn publish_market_deleted(state: &AppState, market_id: &str) {
+    state.dispatch_public_message(ServerMessage::MarketDeleted {
+        market_id: market_id.to_string(),
+    });
 }
 
 fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage) {
@@ -1480,15 +1612,13 @@ fn publish_user_event(state: &AppState, trader_id: Uuid, message: ServerMessage)
 }
 
 fn publish_market_resync(state: &AppState, market: &str, reason: &str) {
-    for channel in ["l2", "l3"] {
-        state.dispatch_public_message(ServerMessage::ResyncRequired {
-            channel: channel.to_string(),
-            market: Some(market.to_string()),
-            expected_sequence: None,
-            current_sequence: None,
-            reason: reason.to_string(),
-        });
-    }
+    state.dispatch_public_message(ServerMessage::ResyncRequired {
+        channel: DATA_STREAM_CHANNEL.to_string(),
+        market: Some(market.to_string()),
+        expected_sequence: None,
+        current_sequence: None,
+        reason: reason.to_string(),
+    });
 }
 
 fn publish_user_resync(state: &AppState, reason: &str) {
@@ -1575,6 +1705,8 @@ mod tests {
                 quote_asset: "USD".to_string(),
                 tick_size: 1,
                 min_order_quantity: 1,
+                min_price: None,
+                max_price: None,
                 reference_price: None,
                 enabled: true,
             },
@@ -1597,6 +1729,8 @@ mod tests {
                 quote_asset: String::new(),
                 tick_size: 1,
                 min_order_quantity: 1,
+                min_price: Some(10),
+                max_price: Some(200),
                 reference_price: Some(100),
                 enabled: true,
             },
@@ -1606,6 +1740,76 @@ mod tests {
         assert_eq!(market.market_id, "SOLANA-WINNER-MARKET");
         assert_eq!(market.base_asset, "SOLANA-WINNER");
         assert_eq!(market.quote_asset, DEFAULT_COMPETITION_QUOTE_ASSET);
+        assert_eq!(market.min_price, Some(10));
+        assert_eq!(market.max_price, Some(200));
+    }
+
+    #[test]
+    fn upsert_market_request_accepts_min_and_max_config_keys() {
+        let request: UpsertMarketRequest = serde_json::from_value(serde_json::json!({
+            "market_id": "BTC-USD",
+            "display_name": "Bitcoin",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "tick_size": 5,
+            "min_order_quantity": 1,
+            "min": 50,
+            "max": 150,
+            "enabled": true
+        }))
+        .expect("request should deserialize");
+
+        assert_eq!(request.min_price, Some(50));
+        assert_eq!(request.max_price, Some(150));
+    }
+
+    #[tokio::test]
+    async fn load_exchange_config_upserts_bots_after_markets() {
+        let state = test_state();
+
+        let response = AdminService::load_exchange_config(
+            &state,
+            &admin(),
+            LoadExchangeConfigRequest {
+                trading_enabled: Some(true),
+                markets: vec![UpsertMarketRequest {
+                    market_id: "BTC-USD".to_string(),
+                    display_name: None,
+                    base_asset: "BTC".to_string(),
+                    quote_asset: "USD".to_string(),
+                    tick_size: 1,
+                    min_order_quantity: 1,
+                    min_price: Some(90),
+                    max_price: Some(110),
+                    reference_price: Some(100),
+                    enabled: true,
+                }],
+                bots: vec![UpsertAdminBotRequest {
+                    bot_id: "depth-maker-1".to_string(),
+                    display_name: Some("Depth maker".to_string()),
+                    market_id: "BTC-USD".to_string(),
+                    strategy: crate::bots::BotStrategy::Maker,
+                    side_mode: crate::bots::BotSideMode::Both,
+                    min_quantity: 1,
+                    max_quantity: 2,
+                    interval_ms: 1_000,
+                    max_open_orders: 2,
+                    min_price: 99,
+                    max_price: 101,
+                    start_immediately: false,
+                }],
+            },
+        )
+        .await
+        .expect("config should load");
+
+        assert_eq!(response.markets.len(), 1);
+        assert_eq!(response.markets[0].min_price, Some(90));
+        assert_eq!(response.markets[0].max_price, Some(110));
+        assert_eq!(response.bots.len(), 1);
+        assert_eq!(response.bots[0].bot_id, "depth-maker-1");
+        assert_eq!(response.bots[0].market_id, "BTC-USD");
+        assert_eq!(state.bot_manager.list().len(), 1);
     }
 
     #[tokio::test]
@@ -1615,6 +1819,7 @@ mod tests {
             profile: UserProfile {
                 trader_id: Uuid::new_v4(),
                 username: "alice".to_string(),
+                team_number: "TEAM-ALICE".to_string(),
                 api_key: "exch_alice".to_string(),
                 role: UserRole::Trader,
                 created_at: Utc::now(),
@@ -1624,6 +1829,7 @@ mod tests {
             profile: UserProfile {
                 trader_id: Uuid::new_v4(),
                 username: "bob".to_string(),
+                team_number: "TEAM-BOB".to_string(),
                 api_key: "exch_bob".to_string(),
                 role: UserRole::Trader,
                 created_at: Utc::now(),
@@ -1641,6 +1847,8 @@ mod tests {
                 quote_asset: "USD".to_string(),
                 tick_size: 1,
                 min_order_quantity: 1,
+                min_price: None,
+                max_price: None,
                 reference_price: Some(100),
                 enabled: true,
             },
@@ -1666,9 +1874,9 @@ mod tests {
         let leaderboard = AdminService::leaderboard(&state, None).await;
 
         assert_eq!(leaderboard.len(), 2);
-        assert_eq!(leaderboard[0].username, "alice");
+        assert_eq!(leaderboard[0].team_number, "TEAM-ALICE");
         assert_eq!(leaderboard[0].net_pnl, 40);
-        assert_eq!(leaderboard[1].username, "bob");
+        assert_eq!(leaderboard[1].team_number, "TEAM-BOB");
         assert_eq!(leaderboard[1].net_pnl, 25);
     }
 }

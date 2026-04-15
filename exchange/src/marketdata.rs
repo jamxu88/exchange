@@ -5,8 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const L2_CHANNEL: &str = "l2";
-pub const L3_CHANNEL: &str = "l3";
+pub const DATA_STREAM_CHANNEL: &str = "data";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -58,7 +57,7 @@ pub enum ServerMessage {
     Heartbeat,
     Authenticated {
         trader_id: Uuid,
-        username: String,
+        team_number: String,
     },
     Snapshot {
         channel: String,
@@ -73,20 +72,6 @@ pub enum ServerMessage {
         start_sequence: u64,
         sequence: u64,
         events: Vec<BookDelta>,
-    },
-    L3Snapshot {
-        channel: String,
-        market: String,
-        sequence: u64,
-        bids: Vec<MarketL3Order>,
-        asks: Vec<MarketL3Order>,
-    },
-    L3Delta {
-        channel: String,
-        market: String,
-        start_sequence: u64,
-        sequence: u64,
-        events: Vec<MarketEvent>,
     },
     Unsubscribed {
         channel: String,
@@ -112,6 +97,9 @@ pub enum ServerMessage {
     MarketState {
         market: MarketDefinition,
     },
+    MarketDeleted {
+        market_id: String,
+    },
     AdminMessage {
         message: AdminMessageEntry,
     },
@@ -134,14 +122,6 @@ pub struct BroadcastEvent {
     pub start_sequence: u64,
     pub sequence: u64,
     pub events: Vec<BookDelta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct L3BroadcastEvent {
-    pub market: String,
-    pub start_sequence: u64,
-    pub sequence: u64,
-    pub events: Vec<MarketEvent>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,14 +160,6 @@ pub enum MarketEvent {
         price: u64,
         quantity: u64,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MarketL3Order {
-    pub order_id: Uuid,
-    pub price: u64,
-    pub remaining: u64,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

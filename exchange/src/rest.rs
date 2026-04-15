@@ -1,4 +1,4 @@
-use crate::accounts::UserProfile;
+use crate::accounts::PublicUserProfile;
 use crate::admin::{
     AdminService, AdminStateResponse, AdminTelemetryResponse, CompetitionLeaderboardSnapshot,
     CompetitionSnapshotQuery, DeleteMarketResponse, FinalizeCompetitionRequest,
@@ -226,7 +226,7 @@ pub async fn export_provisioned_users_csv(
     tag = "account",
     security(("competitor_api_key" = [])),
     responses(
-        (status = 200, description = "Authenticated user profile", body = UserProfile)
+        (status = 200, description = "Authenticated user profile", body = PublicUserProfile)
     )
 )]
 pub async fn get_user(State(state): State<AppState>, auth: AuthenticatedUser) -> impl IntoResponse {
@@ -235,7 +235,7 @@ pub async fn get_user(State(state): State<AppState>, auth: AuthenticatedUser) ->
         .get_user(auth.trader_id)
         .map(|user| user.profile)
         .expect("authenticated user should exist");
-    Json(profile)
+    Json(PublicUserProfile::from(&profile))
 }
 
 #[utoipa::path(
@@ -420,27 +420,6 @@ pub async fn get_markets(State(state): State<AppState>) -> impl IntoResponse {
 
 #[utoipa::path(
     get,
-    path = "/api/v1/leaderboard",
-    tag = "account",
-    security(("competitor_api_key" = [])),
-    params(
-        ("limit" = Option<usize>, Query, description = "Optional maximum number of rows to return")
-    ),
-    responses(
-        (status = 200, description = "Live competition leaderboard", body = [LeaderboardRow]),
-        (status = 401, description = "Invalid API key", body = ApiError)
-    )
-)]
-pub async fn get_leaderboard(
-    State(state): State<AppState>,
-    _auth: AuthenticatedUser,
-    Query(query): Query<ListQuery>,
-) -> impl IntoResponse {
-    Json(AdminService::leaderboard(&state, query.limit).await)
-}
-
-#[utoipa::path(
-    get,
     path = "/api/v1/admin/state",
     tag = "admin",
     security(("admin_bearer" = [])),
@@ -576,6 +555,25 @@ pub async fn start_admin_bot(
 
 #[utoipa::path(
     post,
+    path = "/api/v1/admin/bots/start",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "All bots running", body = [AdminBotState]),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot or market not found", body = ApiError)
+    )
+)]
+pub async fn start_all_admin_bots(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> Result<Json<Vec<AdminBotState>>, BotControlError> {
+    AdminService::start_all_bots(&state, &admin).await.map(Json)
+}
+
+#[utoipa::path(
+    post,
     path = "/api/v1/admin/bots/{bot_id}/pause",
     tag = "admin",
     security(("admin_bearer" = [])),
@@ -600,6 +598,25 @@ pub async fn pause_admin_bot(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/v1/admin/bots/pause",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "All bots paused", body = [AdminBotState]),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot not found", body = ApiError)
+    )
+)]
+pub async fn pause_all_admin_bots(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> Result<Json<Vec<AdminBotState>>, BotControlError> {
+    AdminService::pause_all_bots(&state, &admin).await.map(Json)
+}
+
+#[utoipa::path(
     delete,
     path = "/api/v1/admin/bots/{bot_id}",
     tag = "admin",
@@ -620,6 +637,27 @@ pub async fn delete_admin_bot(
     Path(bot_id): Path<String>,
 ) -> Result<Json<AdminBotState>, BotControlError> {
     AdminService::delete_bot(&state, &admin, &bot_id)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/bots",
+    tag = "admin",
+    security(("admin_bearer" = [])),
+    responses(
+        (status = 200, description = "All bots removed", body = [AdminBotState]),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 401, description = "Invalid admin token", body = ApiError),
+        (status = 404, description = "Bot not found", body = ApiError)
+    )
+)]
+pub async fn delete_all_admin_bots(
+    State(state): State<AppState>,
+    admin: AuthenticatedAdmin,
+) -> Result<Json<Vec<AdminBotState>>, BotControlError> {
+    AdminService::delete_all_bots(&state, &admin)
         .await
         .map(Json)
 }
@@ -797,6 +835,7 @@ pub async fn load_exchange_config(
     Json(request): Json<LoadExchangeConfigRequest>,
 ) -> Result<Json<LoadExchangeConfigResponse>, (StatusCode, Json<ApiError>)> {
     AdminService::load_exchange_config(&state, &admin, request)
+        .await
         .map(Json)
         .map_err(|err| {
             (

@@ -17,7 +17,7 @@ const markets: MarketDefinition[] = [
 function bootstrapData(): TradeBootstrapData {
   return {
     markets,
-    user: { traderId: "trader-1", username: "alice" },
+    user: { traderId: "trader-1", teamNumber: "TEAM-ALICE" },
     positions: [
       { market: "BTC-USD", netQuantity: 3, averageEntryPrice: 95, realizedPnl: 10 },
     ],
@@ -92,7 +92,7 @@ describe("tradeReducer", () => {
       time: "09:30:00",
     });
 
-    expect(next.user?.username).toBe("alice");
+    expect(next.user?.teamNumber).toBe("TEAM-ALICE");
     expect(next.positionsByMarket["BTC-USD"]).toEqual({
       netQuantity: 3,
       avgCost: 95,
@@ -150,6 +150,26 @@ describe("tradeReducer", () => {
     });
   });
 
+  it("removes deleted markets and reselects when the active market disappears", () => {
+    let state = createInitialTradeState(markets);
+
+    state = tradeReducer(state, {
+      type: "select-market",
+      marketId: "ETH-USD",
+      id: 1,
+      time: "09:30:00",
+    });
+
+    state = tradeReducer(state, {
+      type: "ws-market-deleted",
+      marketId: "ETH-USD",
+    });
+
+    expect(state.availableMarkets.map((market) => market.id)).toEqual(["BTC-USD"]);
+    expect(state.selectedMarketId).toBe("BTC-USD");
+    expect(state.marketBooks["ETH-USD"]).toBeUndefined();
+  });
+
   it("does not add a message when switching markets", () => {
     const initial = createInitialTradeState(markets);
     const next = tradeReducer(initial, {
@@ -205,6 +225,44 @@ describe("tradeReducer", () => {
       price: 100,
       liquidity: 5,
       total: 500,
+    });
+  });
+
+  it("clears stale orderbook levels without wiping the last trade marker", () => {
+    let state = createInitialTradeState(markets);
+    state = tradeReducer(state, {
+      type: "ws-snapshot",
+      marketId: "BTC-USD",
+      sequence: 3,
+      bids: [{ price: 100, quantity: 2 }],
+      asks: [{ price: 101, quantity: 4 }],
+    });
+    state = tradeReducer(state, {
+      type: "ws-delta",
+      marketId: "BTC-USD",
+      sequence: 4,
+      events: [
+        {
+          kind: "trade",
+          price: 101,
+          quantity: 1,
+        },
+      ],
+      occurredAt: "2026-03-17T09:30:00Z",
+    });
+
+    state = tradeReducer(state, {
+      type: "ws-book-reset",
+      marketId: "BTC-USD",
+    });
+
+    expect(state.marketBooks["BTC-USD"]).toEqual({
+      marketId: "BTC-USD",
+      sequence: 0,
+      bids: [],
+      asks: [],
+      lastTradePrice: 101,
+      lastTradeQuantity: 1,
     });
   });
 

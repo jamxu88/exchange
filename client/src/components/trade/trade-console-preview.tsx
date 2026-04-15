@@ -23,7 +23,7 @@ export function createTradeConsolePreviewController(): PreviewController {
   const state = createInitialTradeState(previewRuntime.markets);
   state.connectionStatus = "connected";
   state.selectedMarketId = "BTC-USD";
-  state.user = { traderId: "preview-trader-42", username: "preview_user" };
+  state.user = { traderId: "preview-trader-42", teamNumber: "TEAM-PREVIEW" };
   state.positionsByMarket["BTC-USD"] = {
     netQuantity: 12,
     avgCost: 98,

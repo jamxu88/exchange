@@ -14,8 +14,8 @@ type ApiSide = "BUY" | "SELL";
 
 type RawClientMessage =
   | { op: "authenticate"; api_key: string }
-  | { op: "subscribe"; channel: "l2"; market: string }
-  | { op: "unsubscribe"; channel: "l2"; market: string };
+  | { op: "subscribe"; channel: "data"; market: string }
+  | { op: "unsubscribe"; channel: "data"; market: string };
 
 type RawBookLevel = {
   price: number;
@@ -32,10 +32,10 @@ type RawBookDelta =
 
 type RawServerMessage =
   | { type: "heartbeat" }
-  | { type: "authenticated"; trader_id: string; username: string }
+  | { type: "authenticated"; trader_id: string; team_number: string }
   | {
       type: "snapshot";
-      channel: "l2";
+      channel: "data";
       market: string;
       sequence: number;
       bids: RawBookLevel[];
@@ -43,7 +43,7 @@ type RawServerMessage =
     }
   | {
       type: "delta";
-      channel: "l2";
+      channel: "data";
       market: string;
       start_sequence: number;
       sequence: number;
@@ -92,8 +92,14 @@ type RawServerMessage =
         display_name: string;
         base_asset: string;
         quote_asset: string;
+        min_price?: number | null;
+        max_price?: number | null;
         status: "enabled" | "disabled" | "settled";
       };
+    }
+  | {
+      type: "market_deleted";
+      market_id: string;
     }
   | {
       type: "resync_required";
@@ -103,7 +109,7 @@ type RawServerMessage =
       current_sequence?: number | null;
       reason: string;
     }
-  | { type: "unsubscribed"; channel: "l2"; market: string }
+  | { type: "unsubscribed"; channel: "data"; market: string }
   | { type: "error"; code: string; message: string };
 
 export type TradeWsSnapshot = {
@@ -121,7 +127,7 @@ export type TradeWsDelta = {
 
 export type TradeWsCallbacks = {
   onStatusChange: (status: ConnectionStatus) => void;
-  onAuthenticated: (payload: { traderId: string; username: string }) => void;
+  onAuthenticated: (payload: { traderId: string; teamNumber: string }) => void;
   onSnapshot: (payload: TradeWsSnapshot) => void;
   onDelta: (payload: TradeWsDelta) => void;
   onReject: (payload: { op: string; code: string; message: string }) => void;
@@ -131,6 +137,7 @@ export type TradeWsCallbacks = {
     status: "open" | "filled" | "canceled";
   }) => void;
   onMarketState: (payload: MarketDefinition) => void;
+  onMarketDeleted: (payload: { marketId: MarketId }) => void;
   onResyncRequired: (payload: {
     channel: string;
     marketId?: string;
@@ -204,6 +211,8 @@ function mapMarketDefinition(
     name: market.display_name,
     baseAsset: market.base_asset,
     quoteAsset: market.quote_asset,
+    minPrice: market.min_price ?? null,
+    maxPrice: market.max_price ?? null,
     status: market.status,
   };
 }
@@ -224,6 +233,10 @@ function mapDelta(event: RawBookDelta): MarketBookDelta {
         quantity: event.quantity,
       };
   }
+}
+
+function hasMarketId(marketId: MarketId) {
+  return marketId.trim().length > 0;
 }
 
 export class TradeWsClient {
@@ -279,16 +292,22 @@ export class TradeWsClient {
 
     const previousMarket = this.selectedMarket;
     this.selectedMarket = nextMarket;
-    this.pendingSnapshots.delete(previousMarket);
-    this.marketSequences.delete(previousMarket);
+    if (hasMarketId(previousMarket)) {
+      this.pendingSnapshots.delete(previousMarket);
+      this.marketSequences.delete(previousMarket);
+    }
 
     if (this.socket?.readyState === 1) {
-      this.send({
-        op: "unsubscribe",
-        channel: "l2",
-        market: previousMarket,
-      });
-      this.requestSnapshot(nextMarket);
+      if (hasMarketId(previousMarket)) {
+        this.send({
+          op: "unsubscribe",
+          channel: "data",
+          market: previousMarket,
+        });
+      }
+      if (hasMarketId(nextMarket)) {
+        this.requestSnapshot(nextMarket);
+      }
     }
   }
 
@@ -302,7 +321,9 @@ export class TradeWsClient {
       if (this.apiKey) {
         this.send({ op: "authenticate", api_key: this.apiKey });
       }
-      this.requestSnapshot(this.selectedMarket);
+      if (hasMarketId(this.selectedMarket)) {
+        this.requestSnapshot(this.selectedMarket);
+      }
     };
 
     socket.onmessage = (event) => {
@@ -340,7 +361,7 @@ export class TradeWsClient {
       case "authenticated":
         this.callbacks.onAuthenticated({
           traderId: message.trader_id,
-          username: message.username,
+          teamNumber: message.team_number,
         });
         return;
       case "snapshot":
@@ -387,6 +408,13 @@ export class TradeWsClient {
       case "market_state":
         this.callbacks.onMarketState(mapMarketDefinition(message.market));
         return;
+      case "market_deleted":
+        this.pendingSnapshots.delete(message.market_id);
+        this.marketSequences.delete(message.market_id);
+        this.callbacks.onMarketDeleted({
+          marketId: message.market_id,
+        });
+        return;
       case "admin_message":
         this.callbacks.onAdminMessage({
           level: message.message.level,
@@ -395,20 +423,20 @@ export class TradeWsClient {
           market: message.message.market ?? undefined,
         });
         return;
-      case "resync_required":
-        {
-          const autoHealing = message.channel === "l2" && typeof message.market === "string";
+      case "resync_required": {
+        const autoHealing =
+          message.channel === "data" && typeof message.market === "string";
         this.callbacks.onResyncRequired({
           channel: message.channel,
           marketId: message.market ?? undefined,
           reason: message.reason,
           autoHealing,
         });
-        if (message.channel === "l2" && message.market) {
+        if (message.channel === "data" && message.market === this.selectedMarket) {
           this.resubscribeMarket(message.market);
         }
         return;
-        }
+      }
       case "unsubscribed":
         return;
       case "error":
@@ -418,11 +446,14 @@ export class TradeWsClient {
   }
 
   private requestSnapshot(marketId: MarketId) {
+    if (!hasMarketId(marketId)) {
+      return;
+    }
     this.marketSequences.delete(marketId);
     this.pendingSnapshots.add(marketId);
     this.send({
       op: "subscribe",
-      channel: "l2",
+      channel: "data",
       market: marketId,
     });
   }
@@ -432,12 +463,12 @@ export class TradeWsClient {
     this.pendingSnapshots.add(marketId);
     this.send({
       op: "unsubscribe",
-      channel: "l2",
+      channel: "data",
       market: marketId,
     });
     this.send({
       op: "subscribe",
-      channel: "l2",
+      channel: "data",
       market: marketId,
     });
   }

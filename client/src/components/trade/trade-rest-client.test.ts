@@ -35,7 +35,7 @@ describe("TradeRestClient", () => {
           status: "disabled",
         },
       ],
-      { trader_id: "trader-1", username: "alice" },
+      { trader_id: "trader-1", team_number: "TEAM-ALICE" },
       [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }],
       [],
       [],
@@ -57,10 +57,12 @@ describe("TradeRestClient", () => {
         name: "Bitcoin",
         baseAsset: "BTC",
         quoteAsset: "USD",
+        minPrice: null,
+        maxPrice: null,
         status: "disabled",
       },
     ]);
-    expect(snapshot.user?.username).toBe("alice");
+    expect(snapshot.user?.teamNumber).toBe("TEAM-ALICE");
     expect(snapshot.loaded).toEqual({
       markets: true,
       user: true,
@@ -121,7 +123,7 @@ describe("TradeRestClient", () => {
   it("marks open orders as not loaded when that specific bootstrap request fails", async () => {
     const responses = [
       { ok: true, payload: [{ market_id: "BTC-USD", display_name: "Bitcoin", base_asset: "BTC", quote_asset: "USD" }] },
-      { ok: true, payload: { trader_id: "trader-1", username: "alice" } },
+      { ok: true, payload: { trader_id: "trader-1", team_number: "TEAM-ALICE" } },
       { ok: true, payload: [{ market: "BTC-USD", net_quantity: 2, average_entry_price: 100, realized_pnl: 5 }] },
       { ok: false, status: 429, payload: { error: "per-user rate limit exceeded: max 500 ops per 10s" } },
       { ok: true, payload: [] },
@@ -303,7 +305,7 @@ describe("TradeRestClient", () => {
     const fetchMock = vi.fn(function (this: unknown) {
       return Promise.resolve({
         ok: true,
-        text: async () => JSON.stringify({ trader_id: "trader-1", username: "alice" }),
+        text: async () => JSON.stringify({ trader_id: "trader-1", team_number: "TEAM-ALICE" }),
       });
     });
     const client = new TradeRestClient(
@@ -313,7 +315,7 @@ describe("TradeRestClient", () => {
 
     await expect(client["request"]("/api/v1/user")).resolves.toEqual({
       trader_id: "trader-1",
-      username: "alice",
+      team_number: "TEAM-ALICE",
     });
     expect(fetchMock.mock.contexts[0]).toBe(globalThis);
   });

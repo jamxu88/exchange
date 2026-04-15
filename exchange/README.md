@@ -35,7 +35,6 @@ Canonical public API docs now live in `docs/` as a Mintlify site. Internal-only 
   - `GET /api/v1/positions`
   - `GET /api/v1/portfolio`
   - `GET /api/v1/balance`
-  - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
   - `GET /api/v1/fills`
 - REST endpoints for order entry:
@@ -196,6 +195,7 @@ Then open:
 Key environment variables:
 
 - `ADMIN_API_TOKEN`
+  Defaults to `Quant2024!`.
 - `CHECKPOINT_PATH`
   Defaults to `exchange.checkpoint.json`. Set to an empty string to disable checkpoint persistence entirely.
 - `CHECKPOINT_INTERVAL_SECONDS`
@@ -203,8 +203,6 @@ Key environment variables:
 - `MARKET_DATA_SERVICE_SOCKET`
   Optional Unix socket path for the external market-data service bridge. If unset, the exchange keeps using the in-process derived feed.
 - `MARKET_DATA_SERVICE_RETRY_BACKOFF_MS`
-- `WS_MARKET_DELTA_BATCH_INTERVAL_MS`
-  Browser-market-data flush interval in milliseconds. Defaults to `100`.
 - `WS_MARKET_BROADCAST_WORKERS`
 - `PER_USER_RATE_LIMIT_BURST_CAPACITY`
 - `PER_USER_RATE_LIMIT_BURST_WINDOW_SECONDS`

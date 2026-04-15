@@ -15,7 +15,7 @@ Each row from [Get Markets](/rest/markets) includes **`status`**.
 
 - Market is **open** for trading.
 - New orders are accepted; resting orders can match.
-- The symbol participates in leaderboard and portfolio logic.
+- The symbol participates in portfolio and settlement logic.
 
 ### `disabled`
 
@@ -29,7 +29,7 @@ Each row from [Get Markets](/rest/markets) includes **`status`**.
 - Organizers set a final **`settlement_price`**.
 - Open **positions** flatten against that price; resting **orders** for that market are canceled.
 - **PnL** for that market becomes **realized**.
-- **Refresh** portfolio, positions, fills, and leaderboard from REST.
+- **Refresh** portfolio, positions, and fills from REST.
 
 ## Competition-wide trading halt
 
@@ -43,10 +43,12 @@ From [Get Markets](/rest/markets), watch at least:
 - `status`
 - `tick_size`
 - `min_order_quantity`
+- `min_price`
+- `max_price`
 - `reference_price`
 - `settlement_price` (once known)
 
-**`tick_size`** and **`min_order_quantity`** decide whether the server accepts your **`price`** and **`quantity`**.
+**`tick_size`**, optional **`min_price`** / **`max_price`**, and **`min_order_quantity`** decide whether the server accepts your **`price`** and **`quantity`**.
 
 ## Suggested client behavior
 
@@ -55,8 +57,6 @@ From [Get Markets](/rest/markets), watch at least:
 3. Apply **`market_state`** immediately; after reconnect or **`resync_required`**, call [Get Markets](/rest/markets) again.
 4. After **settlement**, re-bootstrap **account** state—balances and PnL can change in one tick.
 
-## Leaderboard and finals
+## Rankings and finals
 
-[Get Leaderboard](/rest/leaderboard) reflects **live** standings during the event.
-
-After organizers settle and lock the relevant markets, they may publish **official** final results separately. Use settlement as the point where **that market’s** PnL is **stable** on the server.
+Organizer rankings are private. Use settlement as the point where **that market’s** PnL is **stable** on the server.

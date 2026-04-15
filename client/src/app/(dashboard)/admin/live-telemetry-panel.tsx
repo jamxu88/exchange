@@ -248,10 +248,7 @@ function WebSocketCard({
         {" total"}
       </p>
       <p>
-        L2 subscribers <span className="font-semibold text-white">{formatNumber(stats.l2_subscribers_current)}</span>
-      </p>
-      <p>
-        L3 subscribers <span className="font-semibold text-white">{formatNumber(stats.l3_subscribers_current)}</span>
+        Data stream subscribers <span className="font-semibold text-white">{formatNumber(stats.data_stream_subscribers_current)}</span>
       </p>
     </div>
   );
@@ -446,12 +443,8 @@ export function LiveTelemetryPanel({ initialTelemetry }: LiveTelemetryPanelProps
               title="System resyncs"
             />
             <CounterCard
-              stats={telemetry.traffic.resyncs.l2}
-              title="L2 resyncs"
-            />
-            <CounterCard
-              stats={telemetry.traffic.resyncs.l3}
-              title="L3 resyncs"
+              stats={telemetry.traffic.resyncs.data_stream}
+              title="Data stream resyncs"
             />
           </div>
 

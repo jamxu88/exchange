@@ -1,14 +1,13 @@
 ---
 title: "WebSocket API"
-description: "One connection for live market data, private fills and order updates, and optional low-latency trading messages."
+description: "One connection for the public data stream, private fills and order updates, and optional low-latency trading messages."
 ---
 
-Use **WebSocket** when you want low latency and a single stream for both the book and your own activity. You still keep **REST** handy for bootstrap and recovery.
+Use **WebSocket** when you want low latency and a single stream for both the public book and your own activity. You still keep **REST** handy for bootstrap and recovery.
 
-The exchange offers two **market-data** channels on the same socket:
+The exchange exposes one public **market-data** channel on the socket:
 
-- **`l2`** — Public, **aggregated** price levels, derived from the canonical event stream and batched roughly every **100ms** for efficient dashboards.
-- **`l3`** — **Authenticated**, **per-order** public book updates from the same canonical stream—useful when your logic needs exact resting-order lifecycle.
+- **`data`** — Public, **aggregated** price levels, derived from the canonical order flow and batched every **100ms**.
 
 ```text
 wss://exchange.jamesxu.dev/ws
@@ -16,10 +15,10 @@ wss://exchange.jamesxu.dev/ws
 
 <Columns cols={3}>
   <Card title="Authenticate" href="/websocket/authenticate">
-    Required for `l3`, order messages, and your private fill/order stream.
+    Required for trading messages and your private fill/order stream.
   </Card>
-  <Card title="Market data" href="/websocket/subscribe-l2">
-    Subscribe once per connection to `l2` or `l3` for one market; process snapshot then deltas.
+  <Card title="Data stream" href="/websocket/subscribe-data-stream">
+    Subscribe once per connection to `data` for one market; process snapshot then deltas.
   </Card>
   <Card title="Server messages" href="/websocket/server-messages">
     Heartbeats, book updates, fills, admin notices, and when to resync.
@@ -30,10 +29,10 @@ wss://exchange.jamesxu.dev/ws
 
 - The server sends periodic **`heartbeat`** messages.
 - **Market data** is **sequenced per market**; each batch tells you the first and last sequence in the batch.
-- **`l2` `delta`** frames can span a range from **`start_sequence`** through **`sequence`**.
+- **`data` `delta`** frames can span a range from **`start_sequence`** through **`sequence`**.
 - **One** market-data subscription per TCP connection today—open another socket per extra market if you need more.
-- **`l2`** does not require auth; **`l3`** does (authenticate first).
-- **`l2`** and **`l3`** snapshots and deltas describe the **public** book; your own resting orders are clearest from **`order_state`** and REST.
+- **`data`** does not require auth.
+- `snapshot` and `delta` describe the **public** book; your own resting orders are clearest from **`order_state`** and REST.
 - After you authenticate, the **same** socket can carry market data, trading messages, and user-scoped events.
 - **`submit_order`**, **`cancel_order`**, and **`amend_order`** on the socket count toward the **same** authenticated budget as competitor REST; see [Rate limits](/reference/rate-limits).
 
@@ -41,19 +40,17 @@ wss://exchange.jamesxu.dev/ws
 
 - Keep **REST** in your client for startup and after errors—even if WebSocket is your main path.
 - Prefer **one WebSocket per market** if you follow multiple books at full fidelity.
-- Use **`l2`** for compact UI-style depth; use **`l3`** when strategy code needs order-level detail.
-- Plan for **`market_state`**, **`fill`**, **`order_state`**, **`admin_message`**, and **`resync_required`**—they are part of a complete integration, not edge cases.
-- **Book building (`l2`):** apply **`snapshot`**, then each **`delta`**; confirm **`start_sequence`** matches what you expect, then set your cursor to **`sequence`**.
-- **Book building (`l3`):** same idea with **`l3_snapshot`** and **`l3_delta`**.
+- Plan for **`market_state`**, **`market_deleted`**, **`fill`**, **`order_state`**, **`admin_message`**, and **`resync_required`**—they are part of a complete integration, not edge cases.
+- **Book building (`data`):** apply **`snapshot`**, then each **`delta`**; confirm **`start_sequence`** matches what you expect, then set your cursor to **`sequence`**.
 - **`order_state`** is the best live view of **your** resting orders alongside REST [open orders](/rest/open-orders).
 
 ## Typical flow
 
 1. Connect to `wss://exchange.jamesxu.dev/ws`.
-2. [Authenticate](/websocket/authenticate) if you need **`l3`**, trading, or private events.
-3. [Subscribe to L2](/websocket/subscribe-l2) or [Subscribe to L3](/websocket/subscribe-l3).
+2. [Authenticate](/websocket/authenticate) if you need trading or private events.
+3. [Subscribe to the data stream](/websocket/subscribe-data-stream).
 4. Send [Submit](/websocket/submit-order), [Amend](/websocket/amend-order), or [Cancel](/websocket/cancel-order) as needed.
-5. Handle [Server messages](/websocket/server-messages)—especially **`snapshot`**, **`delta`**, **`l3_snapshot`**, **`l3_delta`**, **`market_state`**, **`fill`**, **`order_state`**, and **`resync_required`**.
+5. Handle [Server messages](/websocket/server-messages)—especially **`snapshot`**, **`delta`**, **`market_state`**, **`market_deleted`**, **`fill`**, **`order_state`**, and **`resync_required`**.
 
 ## Current limitations
 

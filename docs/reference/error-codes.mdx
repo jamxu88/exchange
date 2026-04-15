@@ -26,7 +26,7 @@ Use the message in logs or a debug panel while you are building; in production, 
 | `429` | You exceeded the shared authenticated budget (default **500 ops / 10s**). See [Rate limits](/reference/rate-limits). |
 | `403` | The resource exists but belongs to **another** competitor. |
 | `404` | Unknown order, market, or user for that operation. |
-| `409` | Business rule conflict—limits, market status, duplicate username, etc. |
+| `409` | Business rule conflict—limits, market status, duplicate identifiers, etc. |
 | `500` | Engine unavailable, overflow, or unexpected server fault—retry with care. |
 
 ## WebSocket `type: "error"`
@@ -36,7 +36,7 @@ Protocol issues you should fix **before** relying on trading:
 - `invalid_message`
 - `unsupported_channel`
 - `invalid_api_key`
-- `unauthenticated` (for example, **`l3`** before a successful **`authenticate`**)
+- `unauthenticated` (for example, a trading message before a successful **`authenticate`**)
 
 Example:
 
@@ -44,7 +44,7 @@ Example:
 {
   "type": "error",
   "code": "unsupported_channel",
-  "message": "supported market-data channels are l2 and l3"
+  "message": "supported market-data channel is data"
 }
 ```
 
@@ -63,6 +63,8 @@ Codes you may see:
 - `invalid_price`
 - `price_too_large`
 - `tick_size_violation`
+- `price_below_minimum`
+- `price_above_maximum`
 - `no_liquidity`
 - `invalid_quantity`
 - `quantity_too_large`

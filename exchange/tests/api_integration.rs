@@ -4,7 +4,7 @@ use axum::{
 };
 use chrono::Utc;
 use exchange::{
-    accounts::{UserProfile, UserRole},
+    accounts::{PublicUserProfile, UserRole},
     admin::{
         AdminMessageEntry, AdminMessageLevel, AdminStateResponse, AdminTelemetryResponse,
         CompetitionLeaderboardSnapshot, CompetitionSettlementRequest, DeleteMarketResponse,
@@ -16,7 +16,7 @@ use exchange::{
     auth::{AuthService, ProvisionUserRequest, ProvisionUserResponse},
     bots::{
         ADMIN_DESK_USERNAME, AdminBotState, AdminDeskOrderRequest, AdminDeskOrderResponse,
-        BotSideMode, BotStatus, UpsertAdminBotRequest,
+        BotSideMode, BotStatus, BotStrategy, UpsertAdminBotRequest,
     },
     build_app,
     config::Config,
@@ -83,6 +83,8 @@ fn seed_market(state: &AppState, market_id: &str, base_asset: &str, quote_asset:
         quote_asset: quote_asset.to_string(),
         tick_size: 1,
         min_order_quantity: 1,
+        min_price: None,
+        max_price: None,
         reference_price: None,
         settlement_price: None,
         status: MarketStatus::Enabled,
@@ -158,6 +160,7 @@ fn provision_user(state: &AppState, username: &str) -> ProvisionUserResponse {
         state,
         ProvisionUserRequest {
             username: username.to_string(),
+            team_number: None,
             role: None,
         },
     )
@@ -334,6 +337,7 @@ async fn admin_can_provision_competition_user() {
             Body::from(
                 serde_json::to_vec(&ProvisionUserRequest {
                     username: "comp-user".to_string(),
+                    team_number: None,
                     role: None,
                 })
                 .expect("provision json"),
@@ -360,6 +364,7 @@ async fn admin_can_list_provisioned_users_with_filters() {
         &state,
         ProvisionUserRequest {
             username: "desk-admin".to_string(),
+            team_number: None,
             role: Some(UserRole::Admin),
         },
     )
@@ -404,6 +409,7 @@ async fn admin_can_export_provisioned_users_as_csv() {
         &state,
         ProvisionUserRequest {
             username: "desk-admin".to_string(),
+            team_number: None,
             role: Some(UserRole::Admin),
         },
     )
@@ -453,6 +459,7 @@ async fn admin_role_trader_has_unlimited_position_power() {
             Body::from(
                 serde_json::to_vec(&ProvisionUserRequest {
                     username: "desk-admin".to_string(),
+                    team_number: None,
                     role: Some(UserRole::Admin),
                 })
                 .expect("provision json"),
@@ -560,15 +567,14 @@ async fn admin_can_save_start_pause_and_delete_bots() {
                 bot_id: "depth-maker-1".to_string(),
                 display_name: Some("Depth maker".to_string()),
                 market_id: "BTC-USD".to_string(),
-                order_type: OrderType::Limit,
+                strategy: BotStrategy::Maker,
                 side_mode: BotSideMode::Both,
                 min_quantity: 1,
                 max_quantity: 2,
                 interval_ms: 100,
                 max_open_orders: 2,
-                price_offset_ticks: 1,
-                walk_step_ticks: 1,
-                fallback_price: Some(100),
+                min_price: 99,
+                max_price: 101,
                 start_immediately: true,
             },
         ))
@@ -584,7 +590,7 @@ async fn admin_can_save_start_pause_and_delete_bots() {
         .storage
         .get_user_by_username("bot-depth-maker-1")
         .expect("bot user");
-    assert_eq!(bot_user.profile.role, UserRole::Trader);
+    assert_eq!(bot_user.profile.role, UserRole::Admin);
     assert!(
         !state
             .storage
@@ -652,6 +658,164 @@ async fn admin_can_save_start_pause_and_delete_bots() {
 }
 
 #[tokio::test]
+async fn admin_can_bulk_start_pause_and_delete_bots() {
+    let state = test_state();
+    let app = build_app(state.clone());
+
+    for (bot_id, display_name, market_id) in [
+        ("depth-maker-1", "Depth maker 1", "BTC-USD"),
+        ("depth-maker-2", "Depth maker 2", "ETH-USD"),
+    ] {
+        let save_response = app
+            .clone()
+            .oneshot(admin_json_request(
+                Method::POST,
+                "/api/v1/admin/bots",
+                "test-admin-token",
+                &UpsertAdminBotRequest {
+                    bot_id: bot_id.to_string(),
+                    display_name: Some(display_name.to_string()),
+                    market_id: market_id.to_string(),
+                    strategy: BotStrategy::Maker,
+                    side_mode: BotSideMode::Both,
+                    min_quantity: 1,
+                    max_quantity: 2,
+                    interval_ms: 100,
+                    max_open_orders: 2,
+                    min_price: 99,
+                    max_price: 101,
+                    start_immediately: false,
+                },
+            ))
+            .await
+            .expect("response");
+        assert_eq!(save_response.status(), StatusCode::CREATED);
+    }
+
+    let start_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/bots/start",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(start_response.status(), StatusCode::OK);
+    let started: Vec<AdminBotState> = json_body(start_response).await;
+    assert_eq!(started.len(), 2);
+    assert!(started.iter().all(|bot| bot.status == BotStatus::Running));
+
+    let pause_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            "/api/v1/admin/bots/pause",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(pause_response.status(), StatusCode::OK);
+    let paused: Vec<AdminBotState> = json_body(pause_response).await;
+    assert_eq!(paused.len(), 2);
+    assert!(paused.iter().all(|bot| bot.status == BotStatus::Paused));
+
+    let delete_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            "/api/v1/admin/bots",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let deleted: Vec<AdminBotState> = json_body(delete_response).await;
+    assert_eq!(deleted.len(), 2);
+
+    let final_state_response = app
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/v1/admin/state",
+            "test-admin-token",
+            Body::empty(),
+        ))
+        .await
+        .expect("response");
+    let final_state: AdminStateResponse = json_body(final_state_response).await;
+    assert!(final_state.bots.is_empty());
+}
+
+#[tokio::test]
+async fn market_bot_can_use_taker_price_bounds() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let maker = provision_user(&state, "liquidity-maker");
+
+    let resting_sell = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &maker.profile.api_key,
+            &SubmitOrderRequest {
+                market: "BTC-USD".to_string(),
+                side: Side::Sell,
+                order_type: OrderType::Limit,
+                price: 105,
+                quantity: 5,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(resting_sell.status(), StatusCode::CREATED);
+
+    let save_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/bots",
+            "test-admin-token",
+            &UpsertAdminBotRequest {
+                bot_id: "bounded-taker-1".to_string(),
+                display_name: Some("Bounded taker".to_string()),
+                market_id: "BTC-USD".to_string(),
+                strategy: BotStrategy::Taker,
+                side_mode: BotSideMode::Buy,
+                min_quantity: 1,
+                max_quantity: 1,
+                interval_ms: 100,
+                max_open_orders: 1,
+                min_price: 105,
+                max_price: 110,
+                start_immediately: true,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(save_response.status(), StatusCode::CREATED);
+    let saved: AdminBotState = json_body(save_response).await;
+    assert_eq!(saved.strategy, BotStrategy::Taker);
+    assert_eq!(saved.min_price, 105);
+    assert_eq!(saved.max_price, 110);
+
+    sleep(Duration::from_millis(250)).await;
+
+    let bot_user = state
+        .storage
+        .get_user_by_username("bot-bounded-taker-1")
+        .expect("bot user");
+    let fills = state
+        .storage
+        .list_fills(bot_user.profile.trader_id, Some("BTC-USD"));
+    assert!(!fills.is_empty());
+    assert!(fills.iter().all(|fill| (105..=110).contains(&fill.price)));
+}
+
+#[tokio::test]
 async fn admin_provision_requires_valid_admin_token() {
     let app = build_app(test_state());
     let response = app
@@ -663,6 +827,7 @@ async fn admin_provision_requires_valid_admin_token() {
                 .body(Body::from(
                     serde_json::to_vec(&ProvisionUserRequest {
                         username: "comp-user".to_string(),
+                        team_number: None,
                         role: None,
                     })
                     .expect("provision json"),
@@ -686,6 +851,7 @@ async fn admin_provision_rejects_invalid_admin_token() {
             Body::from(
                 serde_json::to_vec(&ProvisionUserRequest {
                     username: "comp-user".to_string(),
+                    team_number: None,
                     role: None,
                 })
                 .expect("provision json"),
@@ -711,6 +877,7 @@ async fn admin_provision_rejects_duplicate_username() {
             Body::from(
                 serde_json::to_vec(&ProvisionUserRequest {
                     username: "duplicate-user".to_string(),
+                    team_number: None,
                     role: None,
                 })
                 .expect("provision json"),
@@ -737,9 +904,9 @@ async fn provisioned_api_key_can_read_profile() {
         .await
         .expect("response");
     assert_eq!(profile_response.status(), StatusCode::OK);
-    let profile: UserProfile = json_body(profile_response).await;
-    assert_eq!(profile.username, "alice");
-    assert_eq!(profile.api_key, registered.profile.api_key);
+    let profile: PublicUserProfile = json_body(profile_response).await;
+    assert_eq!(profile.team_number, "alice");
+    assert_eq!(profile.trader_id, registered.profile.trader_id);
 }
 
 #[tokio::test]
@@ -841,6 +1008,8 @@ async fn submit_order_rejects_invalid_market_states_and_order_constraints() {
         quote_asset: "USD".to_string(),
         tick_size: 5,
         min_order_quantity: 10,
+        min_price: None,
+        max_price: None,
         reference_price: Some(25),
         settlement_price: None,
         status: MarketStatus::Enabled,
@@ -854,6 +1023,8 @@ async fn submit_order_rejects_invalid_market_states_and_order_constraints() {
         quote_asset: "USD".to_string(),
         tick_size: 1,
         min_order_quantity: 1,
+        min_price: None,
+        max_price: None,
         reference_price: Some(1),
         settlement_price: None,
         status: MarketStatus::Disabled,
@@ -867,6 +1038,8 @@ async fn submit_order_rejects_invalid_market_states_and_order_constraints() {
         quote_asset: "USD".to_string(),
         tick_size: 1,
         min_order_quantity: 1,
+        min_price: None,
+        max_price: None,
         reference_price: Some(2),
         settlement_price: Some(3),
         status: MarketStatus::Settled,
@@ -1788,6 +1961,8 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
                 "display_name": "Solana",
                 "tick_size": 5,
                 "min_order_quantity": 2,
+                "min": 20,
+                "max": 60,
                 "reference_price": 25,
                 "enabled": true
             }),
@@ -1800,6 +1975,26 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
     assert_eq!(created.base_asset, "SOLANA");
     assert_eq!(created.quote_asset, "USD");
     assert_eq!(created.tick_size, 5);
+    assert_eq!(created.min_price, Some(20));
+    assert_eq!(created.max_price, Some(60));
+
+    let high_price_order = app
+        .clone()
+        .oneshot(api_key_json_request(
+            Method::POST,
+            "/api/v1/orders",
+            &trader.profile.api_key,
+            &SubmitOrderRequest {
+                market: "SOLANA-MARKET".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 65,
+                quantity: 2,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(high_price_order.status(), StatusCode::BAD_REQUEST);
 
     let patch_response = app
         .clone()
@@ -1811,6 +2006,8 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
                 display_name: None,
                 tick_size: None,
                 min_order_quantity: None,
+                min_price: None,
+                max_price: None,
                 reference_price: None,
                 enabled: Some(false),
             },
@@ -1865,6 +2062,8 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
                         "display_name": "Dogecoin",
                         "tick_size": 1,
                         "min_order_quantity": 10,
+                        "min": 1,
+                        "max": 10,
                         "reference_price": 1,
                         "enabled": true
                     }
@@ -1876,12 +2075,11 @@ async fn admin_can_manage_market_lifecycle_and_load_config() {
     assert_eq!(load_response.status(), StatusCode::OK);
     let loaded: LoadExchangeConfigResponse = json_body(load_response).await;
     assert!(!loaded.controls.trading_enabled);
-    assert!(
-        loaded
-            .markets
-            .iter()
-            .any(|market| market.market_id == "DOGECOIN-MARKET")
-    );
+    assert!(loaded.markets.iter().any(|market| {
+        market.market_id == "DOGECOIN-MARKET"
+            && market.min_price == Some(1)
+            && market.max_price == Some(10)
+    }));
 }
 
 #[tokio::test]
@@ -2072,8 +2270,10 @@ async fn admin_telemetry_endpoint_reports_live_operator_counters() {
     assert_eq!(telemetry.traffic.fills.shares, 4);
     assert_eq!(telemetry.traffic.rate_limit_rejections.total, 0);
     assert_eq!(telemetry.traffic.websocket.connections_current, 0);
-    assert_eq!(telemetry.traffic.websocket.l2_subscribers_current, 0);
-    assert_eq!(telemetry.traffic.websocket.l3_subscribers_current, 0);
+    assert_eq!(
+        telemetry.traffic.websocket.data_stream_subscribers_current,
+        0
+    );
     assert_eq!(resting_order.order.remaining, 4);
 }
 
@@ -2244,17 +2444,49 @@ async fn admin_can_settle_market_and_leaderboard_reflects_result() {
     assert_eq!(second_positions[0].realized_pnl, -60);
 
     let leaderboard_response = app
-        .oneshot(api_key_request(
+        .oneshot(admin_request(
             Method::GET,
-            "/api/v1/leaderboard",
-            &maker.profile.api_key,
+            "/api/v1/admin/leaderboard",
+            "test-admin-token",
+            Body::empty(),
         ))
         .await
         .expect("response");
     assert_eq!(leaderboard_response.status(), StatusCode::OK);
     let leaderboard: Vec<LeaderboardRow> = json_body(leaderboard_response).await;
-    assert_eq!(leaderboard[0].username, "settle-maker");
+    assert_eq!(leaderboard[0].team_number, "settle-maker");
     assert_eq!(leaderboard[0].net_pnl, 150);
+}
+
+#[tokio::test]
+async fn admin_can_settle_market_at_zero() {
+    let state = test_state();
+    let app = build_app(state.clone());
+    let trader = provision_user(&state, "zero-settle-user");
+    SettlementEngine::seed_position(&state, trader.profile.trader_id, "BTC-USD", 2, Some(50), 0);
+
+    let settle_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/v1/admin/markets/BTC-USD/settle",
+            "test-admin-token",
+            &SettleMarketRequest {
+                settlement_price: 0,
+                announcement: None,
+            },
+        ))
+        .await
+        .expect("response");
+    assert_eq!(settle_response.status(), StatusCode::OK);
+    let settled: SettleMarketResponse = json_body(settle_response).await;
+    assert_eq!(settled.market.status, MarketStatus::Settled);
+    assert_eq!(settled.settlement_price, 0);
+
+    let positions = state.storage.list_positions(trader.profile.trader_id);
+    assert_eq!(positions.len(), 1);
+    assert_eq!(positions[0].net_quantity, 0);
+    assert_eq!(positions[0].realized_pnl, -100);
 }
 
 #[tokio::test]
@@ -2320,7 +2552,7 @@ async fn admin_can_finalize_competition_and_export_snapshot() {
             .snapshot
             .leaderboard
             .iter()
-            .map(|row| row.username.as_str())
+            .map(|row| row.team_number.as_str())
             .collect::<Vec<_>>(),
         vec!["alice", "bob"]
     );
@@ -2380,8 +2612,9 @@ async fn admin_can_finalize_competition_and_export_snapshot() {
     );
     let export_csv = text_body(export_response).await;
     assert!(
-        export_csv
-            .contains("rank,trader_id,username,net_pnl,realized_pnl,unrealized_pnl,gross_exposure")
+        export_csv.contains(
+            "rank,trader_id,team_number,net_pnl,realized_pnl,unrealized_pnl,gross_exposure"
+        )
     );
     assert!(export_csv.contains(",alice,40,40,0,0"));
     assert!(export_csv.contains(",bob,-10,-10,0,0"));

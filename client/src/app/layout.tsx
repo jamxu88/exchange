@@ -44,16 +44,6 @@ export default function RootLayout({
 
         <KeybindProvider>
           {children}
-          <div className="pointer-events-none fixed inset-x-0 bottom-2 z-50 flex justify-center px-4">
-            <a
-              className="pointer-events-auto text-[10px] font-medium tracking-[0.08em] text-[var(--muted)] hover:text-[var(--foreground)] motion-fade-up motion-fade-up-fast motion-delay-4"
-              href="https://jamesxu.dev"
-              rel="noreferrer"
-              target="_blank"
-            >
-              Made with ❤️ by James
-            </a>
-          </div>
         </KeybindProvider>
       </body>
     </html>

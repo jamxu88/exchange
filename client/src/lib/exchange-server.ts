@@ -14,7 +14,7 @@ type ExchangeErrorPayload = {
 
 type ExchangeUserResponse = {
   trader_id: string;
-  username: string;
+  team_number: string;
 };
 
 export type ExchangePersistenceStatus = {
@@ -105,15 +105,13 @@ export type ExchangeWebSocketTelemetry = {
   connections_total: number;
   authenticated_current: number;
   authenticated_total: number;
-  l2_subscribers_current: number;
-  l3_subscribers_current: number;
+  data_stream_subscribers_current: number;
 };
 
 export type ExchangeResyncTelemetry = {
   user: ExchangeCounterTelemetry;
   system: ExchangeCounterTelemetry;
-  l2: ExchangeCounterTelemetry;
-  l3: ExchangeCounterTelemetry;
+  data_stream: ExchangeCounterTelemetry;
 };
 
 export type ExchangeOperatorTelemetry = {
@@ -137,6 +135,8 @@ export type ExchangeMarket = {
   quote_asset: string;
   tick_size: number;
   min_order_quantity: number;
+  min_price: number | null;
+  max_price: number | null;
   reference_price: number | null;
   settlement_price: number | null;
   status: "enabled" | "disabled" | "settled";
@@ -161,16 +161,15 @@ export type ExchangeAdminBot = {
   trader_id: string;
   trader_username: string;
   market_id: string;
-  order_type: "limit" | "market";
+  strategy: "maker" | "taker";
   side_mode: "buy" | "sell" | "both";
   status: "paused" | "running";
   min_quantity: number;
   max_quantity: number;
   interval_ms: number;
   max_open_orders: number;
-  price_offset_ticks: number;
-  walk_step_ticks: number;
-  fallback_price: number | null;
+  min_price: number;
+  max_price: number;
   last_error: string | null;
   last_submitted_at: string | null;
   created_at: string;
@@ -240,7 +239,7 @@ export type ExchangeAdminDeskOrderResponse = {
 export type ExchangeLeaderboardRow = {
   rank: number;
   trader_id: string;
-  username: string;
+  team_number: string;
   net_pnl: number;
   realized_pnl: number;
   unrealized_pnl: number;

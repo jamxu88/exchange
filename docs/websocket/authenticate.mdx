@@ -3,7 +3,7 @@ title: "Authenticate"
 description: "Authenticate a WebSocket session with your assigned API key."
 ---
 
-Authenticate when you need **raw `l3`** market data, **WebSocket order entry**, or **private** `fill` / `order_state` events. **Public `l2`** data works without logging in.
+Authenticate when you need **WebSocket order entry** or **private** `fill` / `order_state` events. The public **`data`** stream works without logging in.
 
 <RequestExample>
 
@@ -19,7 +19,7 @@ Authenticate when you need **raw `l3`** market data, **WebSocket order entry**, 
 {
   "type": "authenticated",
   "trader_id": "9d64e278-8b56-46e9-9cab-18c5b22f2fb9",
-  "username": "team-alpha"
+  "team_number": "TEAM-042"
 }
 ```
 
@@ -34,7 +34,7 @@ Authenticate when you need **raw `l3`** market data, **WebSocket order entry**, 
 
 - `type` is `authenticated`.
 - `trader_id` is the stable identity for the socket session.
-- `username` is the human-readable label associated with the API key.
+- `team_number` is the team identifier associated with the API key.
 
 ## Failure behavior
 
@@ -42,5 +42,5 @@ Invalid credentials are returned as a WebSocket `error` message with `code = "in
 
 ## Notes
 
-- Authenticate once per socket before subscribing to `l3` or sending trading messages.
-- After authentication, the same socket can carry `l2` or `l3` market data, trading messages, and user-scoped events.
+- Authenticate once per socket before sending trading messages.
+- After authentication, the same socket can carry the public `data` stream, trading messages, and user-scoped events.

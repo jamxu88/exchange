@@ -289,4 +289,126 @@ mod tests {
         service_task.abort();
         let _ = std::fs::remove_file(socket_path);
     }
+
+    #[tokio::test]
+    async fn market_data_service_replaces_existing_snapshot_state_on_bootstrap_refresh() {
+        let socket_path = format!("/tmp/ex-md-{}.sock", &Uuid::new_v4().simple());
+        let config = test_config(socket_path.clone());
+        let service_task = tokio::spawn(async move {
+            run_market_data_service(config).await.expect("run service");
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut stream = UnixStream::connect(&socket_path)
+            .await
+            .expect("connect market-data socket");
+
+        let order = crate::orderbook::Order {
+            id: Uuid::new_v4(),
+            trader_id: Uuid::new_v4(),
+            market: "BTC-USD".to_string(),
+            side: Side::Buy,
+            price: 100,
+            quantity: 5,
+            remaining: 5,
+            created_at: Utc::now(),
+        };
+
+        write_request(
+            &mut stream,
+            &MarketDataRequest::Bootstrap {
+                markets: vec![MarketBootstrapState {
+                    market: "BTC-USD".to_string(),
+                    event_sequence: 4,
+                    book_sequence: 9,
+                }],
+                open_orders: vec![order],
+            },
+        )
+        .await;
+
+        write_request(
+            &mut stream,
+            &MarketDataRequest::SnapshotRequest {
+                request_id: 1,
+                market: "BTC-USD".to_string(),
+            },
+        )
+        .await;
+
+        let mut lines = BufReader::new(stream).lines();
+        let first = serde_json::from_str::<MarketDataResponse>(
+            &lines
+                .next_line()
+                .await
+                .expect("read line")
+                .expect("response line"),
+        )
+        .expect("decode response");
+        match first {
+            MarketDataResponse::Snapshot {
+                request_id,
+                sequence,
+                bids,
+                asks,
+                ..
+            } => {
+                assert_eq!(request_id, 1);
+                assert_eq!(sequence, 9);
+                assert_eq!(bids.len(), 1);
+                assert_eq!(bids[0].price, 100);
+                assert_eq!(bids[0].quantity, 5);
+                assert!(asks.is_empty());
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        write_request(
+            lines.get_mut().get_mut(),
+            &MarketDataRequest::Bootstrap {
+                markets: vec![MarketBootstrapState {
+                    market: "BTC-USD".to_string(),
+                    event_sequence: 4,
+                    book_sequence: 9,
+                }],
+                open_orders: Vec::new(),
+            },
+        )
+        .await;
+        write_request(
+            lines.get_mut().get_mut(),
+            &MarketDataRequest::SnapshotRequest {
+                request_id: 2,
+                market: "BTC-USD".to_string(),
+            },
+        )
+        .await;
+
+        let second = serde_json::from_str::<MarketDataResponse>(
+            &lines
+                .next_line()
+                .await
+                .expect("read line")
+                .expect("response line"),
+        )
+        .expect("decode response");
+        match second {
+            MarketDataResponse::Snapshot {
+                request_id,
+                sequence,
+                bids,
+                asks,
+                ..
+            } => {
+                assert_eq!(request_id, 2);
+                assert_eq!(sequence, 9);
+                assert!(bids.is_empty());
+                assert!(asks.is_empty());
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        service_task.abort();
+        let _ = std::fs::remove_file(socket_path);
+    }
 }

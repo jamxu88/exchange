@@ -131,11 +131,11 @@ impl CheckpointHandle {
         match self.tx.try_send(CheckpointCommand::Save) {
             Ok(()) => self.telemetry.record_request_enqueued(),
             Err(TrySendError::Full(_)) => self.telemetry.cancel_request_enqueue(),
-            Err(TrySendError::Disconnected(_)) => self
-                .telemetry
-                .cancel_request_enqueue_and_mark_stopped(
+            Err(TrySendError::Disconnected(_)) => {
+                self.telemetry.cancel_request_enqueue_and_mark_stopped(
                     "checkpoint writer thread terminated".to_string(),
-                ),
+                )
+            }
         }
     }
 
@@ -315,7 +315,10 @@ fn snapshot_runtime_state(storage: &StorageRepository) -> RuntimeCheckpoint {
         balances: storage
             .list_all_balances()
             .into_iter()
-            .map(|(trader_id, balances)| TraderBalances { trader_id, balances })
+            .map(|(trader_id, balances)| TraderBalances {
+                trader_id,
+                balances,
+            })
             .collect(),
         positions: storage
             .list_all_positions()
@@ -338,10 +341,7 @@ fn write_checkpoint(path: &Path, checkpoint: RuntimeCheckpoint) -> Result<(), St
         )
     })?;
 
-    let temp_path = path.with_extension(format!(
-        "{}.tmp",
-        Uuid::new_v4().simple()
-    ));
+    let temp_path = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
     let file = File::create(&temp_path).map_err(|error| {
         format!(
             "failed to create checkpoint temp file {}: {error}",
@@ -355,12 +355,18 @@ fn write_checkpoint(path: &Path, checkpoint: RuntimeCheckpoint) -> Result<(), St
             temp_path.display()
         )
     })?;
-    writer
-        .flush()
-        .map_err(|error| format!("failed to flush checkpoint {}: {error}", temp_path.display()))?;
-    let file = writer
-        .into_inner()
-        .map_err(|error| format!("failed to finalize checkpoint {}: {error}", temp_path.display()))?;
+    writer.flush().map_err(|error| {
+        format!(
+            "failed to flush checkpoint {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    let file = writer.into_inner().map_err(|error| {
+        format!(
+            "failed to finalize checkpoint {}: {error}",
+            temp_path.display()
+        )
+    })?;
     file.sync_all()
         .map_err(|error| format!("failed to sync checkpoint {}: {error}", temp_path.display()))?;
 
@@ -435,7 +441,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_state_recovers_users_positions_and_snapshots_from_checkpoint() {
-        let path = std::env::temp_dir().join(format!("exchange-checkpoint-{}.json", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("exchange-checkpoint-{}.json", Uuid::new_v4()));
         let path_string = path.to_string_lossy().to_string();
 
         let state = AppState::new(test_config(Some(path_string.clone())));
@@ -446,6 +453,7 @@ mod tests {
             },
             crate::auth::ProvisionUserRequest {
                 username: "alice".to_string(),
+                team_number: None,
                 role: Some(UserRole::Trader),
             },
         )
@@ -458,6 +466,8 @@ mod tests {
             quote_asset: "USD".to_string(),
             tick_size: 1,
             min_order_quantity: 1,
+            min_price: None,
+            max_price: None,
             reference_price: Some(100),
             settlement_price: None,
             status: crate::admin::MarketStatus::Enabled,
@@ -485,7 +495,7 @@ mod tests {
                 leaderboard: vec![LeaderboardRow {
                     rank: 1,
                     trader_id: provisioned.profile.trader_id,
-                    username: provisioned.profile.username.clone(),
+                    team_number: provisioned.profile.public_team_number().to_string(),
                     net_pnl: 12,
                     realized_pnl: 12,
                     unrealized_pnl: 0,
@@ -510,7 +520,13 @@ mod tests {
             .expect("recovered user");
         assert_eq!(recovered_user.profile.username, "alice");
         assert_eq!(recovered.storage.list_all_open_orders().len(), 0);
-        assert_eq!(recovered.storage.list_positions(recovered_user.profile.trader_id).len(), 1);
+        assert_eq!(
+            recovered
+                .storage
+                .list_positions(recovered_user.profile.trader_id)
+                .len(),
+            1
+        );
         assert_eq!(recovered.storage.list_competition_snapshots().len(), 1);
 
         let _ = std::fs::remove_file(path);

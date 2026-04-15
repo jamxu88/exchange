@@ -432,6 +432,10 @@ pub enum TradingError {
     PriceTooLarge { maximum: u64 },
     #[error("price must align to tick size {tick_size}")]
     TickSizeViolation { tick_size: u64 },
+    #[error("price must be at least {minimum}")]
+    PriceBelowMinimum { minimum: u64 },
+    #[error("price must be at most {maximum}")]
+    PriceAboveMaximum { maximum: u64 },
     #[error("market order could not be filled because no opposite-side liquidity is available")]
     NoLiquidity,
     #[error("quantity must be greater than zero")]
@@ -466,6 +470,8 @@ impl TradingError {
             TradingError::TradingDisabled => StatusCode::CONFLICT,
             TradingError::InvalidMarket
             | TradingError::TickSizeViolation { .. }
+            | TradingError::PriceBelowMinimum { .. }
+            | TradingError::PriceAboveMaximum { .. }
             | TradingError::QuantityBelowMinimum { .. }
             | TradingError::NoLiquidity
             | TradingError::InvalidPrice
@@ -603,6 +609,16 @@ fn validate_submit_market(
             return Err(TradingError::TickSizeViolation {
                 tick_size: market.tick_size,
             });
+        }
+        if let Some(minimum) = market.min_price {
+            if request.price < minimum {
+                return Err(TradingError::PriceBelowMinimum { minimum });
+            }
+        }
+        if let Some(maximum) = market.max_price {
+            if request.price > maximum {
+                return Err(TradingError::PriceAboveMaximum { maximum });
+            }
         }
     }
     if request.quantity == 0 {
@@ -1215,6 +1231,8 @@ mod tests {
             quote_asset: quote_asset.to_string(),
             tick_size: 1,
             min_order_quantity: 1,
+            min_price: None,
+            max_price: None,
             reference_price: None,
             settlement_price: None,
             status: MarketStatus::Enabled,
@@ -1400,6 +1418,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_limit_order_rejects_prices_outside_market_bounds() {
+        let state = test_state();
+        let trader_id = Uuid::new_v4();
+        let now = Utc::now();
+        state.storage.upsert_market(MarketDefinition {
+            market_id: "BOUNDED-USD".to_string(),
+            display_name: "Bounded".to_string(),
+            base_asset: "BOUNDED".to_string(),
+            quote_asset: "USD".to_string(),
+            tick_size: 5,
+            min_order_quantity: 1,
+            min_price: Some(50),
+            max_price: Some(150),
+            reference_price: Some(100),
+            settlement_price: None,
+            status: MarketStatus::Enabled,
+            created_at: now,
+            updated_at: now,
+        });
+
+        let below_minimum = TradingService::submit_limit_order(
+            &state,
+            trader_id,
+            SubmitOrderRequest {
+                market: "BOUNDED-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 45,
+                quantity: 1,
+            },
+        )
+        .await
+        .expect_err("order below minimum price should fail");
+        assert_eq!(
+            below_minimum,
+            TradingError::PriceBelowMinimum { minimum: 50 }
+        );
+
+        let above_maximum = TradingService::submit_limit_order(
+            &state,
+            trader_id,
+            SubmitOrderRequest {
+                market: "BOUNDED-USD".to_string(),
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 155,
+                quantity: 1,
+            },
+        )
+        .await
+        .expect_err("order above maximum price should fail");
+        assert_eq!(
+            above_maximum,
+            TradingError::PriceAboveMaximum { maximum: 150 }
+        );
+    }
+
+    #[tokio::test]
     async fn recovered_open_orders_participate_in_matching_after_restart() {
         let storage = crate::storage::StorageRepository::new_in_memory();
         let maker_id = Uuid::new_v4();
@@ -1425,6 +1501,8 @@ mod tests {
             quote_asset: "USD".to_string(),
             tick_size: 1,
             min_order_quantity: 1,
+            min_price: None,
+            max_price: None,
             reference_price: None,
             settlement_price: None,
             status: MarketStatus::Enabled,

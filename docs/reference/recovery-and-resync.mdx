@@ -7,9 +7,9 @@ Markets on WebSocket are **sequenced**. When you fall behind or the server detec
 
 ## How market-data sequencing works
 
-- Each **`subscribe`** is followed by a **`snapshot`** (or **`l3_snapshot`**).
-- **`l2`** rebuilds **aggregated** levels; **`l3`** rebuilds the **public per-order** view.
-- Each **`delta`** / **`l3_delta`** includes **`start_sequence`** (first event in the batch) and **`sequence`** (last in the batch).
+- Each **`subscribe`** is followed by a **`snapshot`**.
+- The public **`data`** stream rebuilds **aggregated** price levels.
+- Each **`delta`** includes **`start_sequence`** (first event in the batch) and **`sequence`** (last in the batch).
 - Batches arrive in **order**; one frame may contain **multiple** events.
 - **`resync_required`** means you should **discard** local book state for that stream and **subscribe again**.
 
@@ -20,7 +20,7 @@ Example:
 ```json
 {
   "type": "resync_required",
-  "channel": "l2",
+  "channel": "data",
   "market": "BTC-USD",
   "expected_sequence": 5,
   "current_sequence": 9,
@@ -31,9 +31,9 @@ Example:
 **What to do**
 
 1. Compare your last applied sequence to **`expected_sequence`**; treat the server as source of truth.
-2. Clear **local** book state for that market (and channel).
+2. Clear **local** book state for that market.
 3. Send **`subscribe`** again for the same **`channel`** and **`market`**.
-4. Replace state from the new **`snapshot`** or **`l3_snapshot`**.
+4. Replace state from the new **`snapshot`**.
 5. Continue from the new baseline **`sequence`**.
 
 ## When the user event stream lags

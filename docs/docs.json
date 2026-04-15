@@ -77,8 +77,7 @@
               "rest/balance",
               "rest/positions",
               "rest/open-orders",
-              "rest/fills",
-              "rest/leaderboard"
+              "rest/fills"
             ]
           },
           {
@@ -105,10 +104,8 @@
             "group": "Connection",
             "pages": [
               "websocket/authenticate",
-              "websocket/subscribe-l2",
-              "websocket/unsubscribe-l2",
-              "websocket/subscribe-l3",
-              "websocket/unsubscribe-l3"
+              "websocket/subscribe-data-stream",
+              "websocket/unsubscribe-data-stream"
             ]
           },
           {

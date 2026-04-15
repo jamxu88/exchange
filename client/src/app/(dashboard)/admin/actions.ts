@@ -45,15 +45,14 @@ function parseNumberField(formData: FormData, key: string) {
 function readSharedBotMutationFields(formData: FormData) {
   return {
     market_id: String(formData.get("marketId") ?? "").trim(),
-    order_type: String(formData.get("orderType") ?? "limit"),
+    strategy: String(formData.get("strategy") ?? "maker"),
     side_mode: String(formData.get("sideMode") ?? "both"),
     min_quantity: Number(formData.get("minQuantity") ?? 0),
     max_quantity: Number(formData.get("maxQuantity") ?? 0),
     interval_ms: Number(formData.get("intervalMs") ?? 0),
     max_open_orders: Number(formData.get("maxOpenOrders") ?? 0),
-    price_offset_ticks: Number(formData.get("priceOffsetTicks") ?? 0),
-    walk_step_ticks: Number(formData.get("walkStepTicks") ?? 0),
-    fallback_price: parseNumberField(formData, "fallbackPrice"),
+    min_price: Number(formData.get("minPrice") ?? 0),
+    max_price: Number(formData.get("maxPrice") ?? 0),
     start_immediately: String(formData.get("startImmediately") ?? "") === "on",
   };
 }
@@ -127,6 +126,8 @@ export async function createMarketAction(formData: FormData) {
       quote_asset: COMPETITION_QUOTE_ASSET,
       tick_size: Number(formData.get("tickSize") ?? 0),
       min_order_quantity: Number(formData.get("minOrderQuantity") ?? 0),
+      min: parseNumberField(formData, "minPrice"),
+      max: parseNumberField(formData, "maxPrice"),
       reference_price: parseNumberField(formData, "referencePrice"),
       enabled: String(formData.get("enabled") ?? "on") === "on",
     },

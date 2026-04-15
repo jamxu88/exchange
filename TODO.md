@@ -73,14 +73,13 @@ What is still true:
   - `GET /api/v1/user`
   - `GET /api/v1/positions`
   - `GET /api/v1/portfolio`
-  - `GET /api/v1/leaderboard`
   - `GET /api/v1/open-orders`
   - `GET /api/v1/fills`
   - `POST /api/v1/orders`
   - `PATCH /api/v1/orders/{order_id}`
   - `DELETE /api/v1/orders/{order_id}`
 - Swagger docs are exposed at `/docs`
-- WebSocket connection, heartbeat, and public L3 snapshot + delta broadcast flow exist
+- WebSocket connection, heartbeat, and public aggregated data-stream snapshot + delta flow exist
 - WebSocket `authenticate` handshake exists for assigned user API keys
 - In-memory orderbook supports:
   - price priority

@@ -14,13 +14,11 @@ function nextTheme(theme: AppTheme): AppTheme {
 }
 
 export function ThemeToggle({ className }: { className?: string }) {
-  const [theme, setTheme] = useState<AppTheme>(DEFAULT_APP_THEME);
+  const [theme, setTheme] = useState<AppTheme>(() => loadAppTheme() ?? DEFAULT_APP_THEME);
 
   useEffect(() => {
-    const currentTheme = loadAppTheme();
-    setTheme(currentTheme);
-    applyAppTheme(currentTheme);
-  }, []);
+    applyAppTheme(theme);
+  }, [theme]);
 
   function handleToggle() {
     const updatedTheme = nextTheme(theme);

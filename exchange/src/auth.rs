@@ -20,6 +20,7 @@ const RESERVED_TRADER_ID: u128 = 0x74726164657200000000000000000001;
 pub struct AuthenticatedUser {
     pub trader_id: Uuid,
     pub username: String,
+    pub team_number: String,
     pub role: UserRole,
 }
 
@@ -31,6 +32,7 @@ pub struct AuthenticatedAdmin {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProvisionUserRequest {
     pub username: String,
+    pub team_number: Option<String>,
     pub role: Option<UserRole>,
 }
 
@@ -79,6 +81,13 @@ impl AuthService {
         request: ProvisionUserRequest,
     ) -> Result<ProvisionUserResponse, AuthError> {
         let username = request.username.trim().to_string();
+        let team_number = request
+            .team_number
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&username)
+            .to_string();
         let role = request.role.unwrap_or_default();
         if username.is_empty() {
             return Err(AuthError::MissingUsername);
@@ -88,6 +97,7 @@ impl AuthService {
             let profile = UserProfile {
                 trader_id: Uuid::new_v4(),
                 username: username.clone(),
+                team_number: team_number.clone(),
                 api_key: format!("exch_{}", Uuid::new_v4().simple()),
                 role,
                 created_at: Utc::now(),
@@ -221,6 +231,7 @@ impl AuthService {
             profile: UserProfile {
                 trader_id: Uuid::from_u128(RESERVED_TRADER_ID),
                 username: RESERVED_TRADER_USERNAME.to_string(),
+                team_number: RESERVED_TRADER_USERNAME.to_string(),
                 api_key: RESERVED_TRADER_API_KEY.to_string(),
                 role: UserRole::Trader,
                 created_at: Utc::now(),
@@ -249,10 +260,13 @@ impl AuthService {
 }
 
 fn authenticated_user_from_record(user: UserRecord) -> AuthenticatedUser {
+    let profile = user.profile;
+    let team_number = profile.public_team_number().to_string();
     AuthenticatedUser {
-        trader_id: user.profile.trader_id,
-        username: user.profile.username,
-        role: user.profile.role,
+        trader_id: profile.trader_id,
+        username: profile.username,
+        team_number,
+        role: profile.role,
     }
 }
 
@@ -336,6 +350,7 @@ mod tests {
             &state,
             ProvisionUserRequest {
                 username: "alice".to_string(),
+                team_number: None,
                 role: None,
             },
         )
@@ -351,6 +366,7 @@ mod tests {
             &state,
             ProvisionUserRequest {
                 username: "bob".to_string(),
+                team_number: None,
                 role: None,
             },
         )

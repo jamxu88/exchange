@@ -5,8 +5,28 @@ AWS_PROFILE="${AWS_PROFILE:-personal}"
 AWS_REGION="${AWS_REGION:-us-east-2}"
 REPOSITORY_NAME="${REPOSITORY_NAME:-exchange-client}"
 TAG="${1:-$(git rev-parse --short HEAD)}"
+ALLOCATED_KEYS_FILE="${ALLOCATED_KEYS_FILE:-allocated-api-keys-2026-04-05.txt}"
+CLIENT_KEYS_FILE="client/${ALLOCATED_KEYS_FILE}"
 
 ACCOUNT_ID="$(AWS_PROFILE="$AWS_PROFILE" aws sts get-caller-identity --query Account --output text)"
+
+if [[ ! -f "${ALLOCATED_KEYS_FILE}" ]]; then
+  echo "Expected ${ALLOCATED_KEYS_FILE} at the repo root before building the client image." >&2
+  exit 1
+fi
+
+if [[ -f "${CLIENT_KEYS_FILE}" ]]; then
+  echo "${CLIENT_KEYS_FILE} already exists. Remove it before running the ECS client build." >&2
+  exit 1
+fi
+
+cleanup() {
+  rm -f "${CLIENT_KEYS_FILE}"
+}
+
+trap cleanup EXIT
+
+cp "${ALLOCATED_KEYS_FILE}" "${CLIENT_KEYS_FILE}"
 
 if ! AWS_PROFILE="$AWS_PROFILE" aws ecr describe-repositories \
   --region "$AWS_REGION" \
