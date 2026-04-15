@@ -386,6 +386,7 @@ describe("TradeWsClient", () => {
   });
 
   it("ignores duplicate deltas and resubscribes on client-side sequence gaps", () => {
+    vi.useFakeTimers();
     const socket = new MockSocket();
     const callbacks = {
       onStatusChange: vi.fn(),
@@ -415,6 +416,7 @@ describe("TradeWsClient", () => {
     client.connect();
     socket.readyState = 1;
     socket.onopen?.();
+    const sentAfterOpen = socket.sent.length;
 
     socket.onmessage?.({
       data: JSON.stringify({
@@ -466,9 +468,13 @@ describe("TradeWsClient", () => {
       reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
       autoHealing: true,
     });
-    expect(socket.sent.slice(-1)).toEqual([
+
+    // Gap resubscribe is throttled — the retry fires after the throttle window.
+    vi.advanceTimersByTime(300);
+    expect(socket.sent.slice(sentAfterOpen)).toEqual([
       JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
+    vi.useRealTimers();
   });
 
   it("accepts a fresh snapshot after resync even when the sequence resets lower", () => {
@@ -522,8 +528,12 @@ describe("TradeWsClient", () => {
       }),
     });
 
-    // Snapshot refresh requests are throttled to prevent subscribe storms.
+    // Resync triggers a throttled snapshot request — retry fires after the throttle window.
+    const subscribes = socket.sent.length;
     vi.advanceTimersByTime(300);
+    expect(socket.sent.slice(subscribes)).toEqual([
+      JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
+    ]);
 
     socket.onmessage?.({
       data: JSON.stringify({

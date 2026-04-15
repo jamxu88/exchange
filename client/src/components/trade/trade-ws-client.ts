@@ -251,6 +251,7 @@ export class TradeWsClient {
   private readonly marketSequences = new Map<MarketId, number>();
   private readonly pendingSnapshots = new Set<MarketId>();
   private readonly lastSnapshotRequestAt = new Map<MarketId, number>();
+  private snapshotRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
   constructor(
@@ -279,6 +280,7 @@ export class TradeWsClient {
   disconnect() {
     this.disposed = true;
     this.clearReconnectTimer();
+    this.clearSnapshotRetryTimer();
     this.marketSequences.clear();
     this.pendingSnapshots.clear();
     this.socket?.close();
@@ -446,19 +448,43 @@ export class TradeWsClient {
     this.marketSequences.delete(marketId);
     this.pendingSnapshots.add(marketId);
 
-    const now = Date.now();
-    const last = this.lastSnapshotRequestAt.get(marketId) ?? 0;
-    // Prevent subscribe storms on spotty networks (out-of-order bursts often trigger repeated gap detection).
-    // Even when throttled, we still clear local sequence so a fresh snapshot can be accepted.
-    if (now - last < 250) {
+    // If the socket isn't open, onopen will call requestSnapshot when the connection is established.
+    if (this.socket?.readyState !== 1) {
       return;
     }
+
+    const now = Date.now();
+    const last = this.lastSnapshotRequestAt.get(marketId) ?? 0;
+    const remaining = 250 - (now - last);
+
+    if (remaining > 0) {
+      // Throttled — prevent subscribe storms on spotty networks, but schedule a retry
+      // so the client doesn't get stuck waiting for a snapshot that was never requested.
+      this.clearSnapshotRetryTimer();
+      this.snapshotRetryTimer = setTimeout(() => {
+        this.snapshotRetryTimer = null;
+        if (this.pendingSnapshots.has(marketId)) {
+          this.lastSnapshotRequestAt.delete(marketId);
+          this.requestSnapshot(marketId);
+        }
+      }, remaining + 10);
+      return;
+    }
+
     this.lastSnapshotRequestAt.set(marketId, now);
     this.send({
       op: "subscribe",
       channel: "data",
       market: marketId,
     });
+  }
+
+  private clearSnapshotRetryTimer() {
+    if (!this.snapshotRetryTimer) {
+      return;
+    }
+    clearTimeout(this.snapshotRetryTimer);
+    this.snapshotRetryTimer = null;
   }
 
   // Resubscribe is intentionally avoided in favor of requesting a fresh snapshot.
