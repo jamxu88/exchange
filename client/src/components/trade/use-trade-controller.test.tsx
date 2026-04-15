@@ -716,8 +716,12 @@ describe("useTradeController", () => {
     await waitFor(() => {
       expect(bootstrapAccountData).toHaveBeenCalledTimes(1);
     });
-    expect(result.current.derived.summary.bids).toEqual([]);
-    expect(result.current.derived.summary.asks).toEqual([]);
+    expect(result.current.derived.summary.bids).toEqual([
+      { price: 100, liquidity: 3, total: 300 },
+    ]);
+    expect(result.current.derived.summary.asks).toEqual([
+      { price: 101, liquidity: 2, total: 202 },
+    ]);
     expect(
       result.current.state.messages.some((message) => message.text.includes("market sequence gap detected")),
     ).toBe(false);

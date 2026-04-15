@@ -250,6 +250,7 @@ export class TradeWsClient {
   private selectedMarket: MarketId;
   private readonly marketSequences = new Map<MarketId, number>();
   private readonly pendingSnapshots = new Set<MarketId>();
+  private readonly lastSnapshotRequestAt = new Map<MarketId, number>();
   private disposed = false;
 
   constructor(
@@ -298,13 +299,6 @@ export class TradeWsClient {
     }
 
     if (this.socket?.readyState === 1) {
-      if (hasMarketId(previousMarket)) {
-        this.send({
-          op: "unsubscribe",
-          channel: "data",
-          market: previousMarket,
-        });
-      }
       if (hasMarketId(nextMarket)) {
         this.requestSnapshot(nextMarket);
       }
@@ -433,7 +427,7 @@ export class TradeWsClient {
           autoHealing,
         });
         if (message.channel === "data" && message.market === this.selectedMarket) {
-          this.resubscribeMarket(message.market);
+          this.requestSnapshot(message.market);
         }
         return;
       }
@@ -451,6 +445,15 @@ export class TradeWsClient {
     }
     this.marketSequences.delete(marketId);
     this.pendingSnapshots.add(marketId);
+
+    const now = Date.now();
+    const last = this.lastSnapshotRequestAt.get(marketId) ?? 0;
+    // Prevent subscribe storms on spotty networks (out-of-order bursts often trigger repeated gap detection).
+    // Even when throttled, we still clear local sequence so a fresh snapshot can be accepted.
+    if (now - last < 250) {
+      return;
+    }
+    this.lastSnapshotRequestAt.set(marketId, now);
     this.send({
       op: "subscribe",
       channel: "data",
@@ -458,20 +461,8 @@ export class TradeWsClient {
     });
   }
 
-  private resubscribeMarket(marketId: MarketId) {
-    this.marketSequences.delete(marketId);
-    this.pendingSnapshots.add(marketId);
-    this.send({
-      op: "unsubscribe",
-      channel: "data",
-      market: marketId,
-    });
-    this.send({
-      op: "subscribe",
-      channel: "data",
-      market: marketId,
-    });
-  }
+  // Resubscribe is intentionally avoided in favor of requesting a fresh snapshot.
+  // This keeps the last known-good book visible and prevents flicker on spotty networks.
 
   private send(message: RawClientMessage) {
     if (!this.socket || this.socket.readyState !== 1) {
@@ -502,7 +493,7 @@ export class TradeWsClient {
           reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
           autoHealing: true,
         });
-        this.resubscribeMarket(message.market);
+        this.requestSnapshot(message.market);
         return false;
       }
     }

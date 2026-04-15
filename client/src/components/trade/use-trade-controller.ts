@@ -276,7 +276,7 @@ export function useTradeController(options: UseTradeControllerOptions = {}) {
       autoHealing?: boolean;
     }) => {
       startTransition(() => {
-        if (payload.channel === "data" && payload.marketId) {
+        if (payload.channel === "data" && payload.marketId && !payload.autoHealing) {
           dispatch({ type: "ws-book-reset", marketId: payload.marketId });
         }
         if (!payload.autoHealing) {

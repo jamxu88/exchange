@@ -56,7 +56,6 @@ describe("TradeWsClient", () => {
 
     client.updateMarket("ETH-USD");
     expect(socket.sent.slice(2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
       JSON.stringify({ op: "subscribe", channel: "data", market: "ETH-USD" }),
     ]);
   });
@@ -381,8 +380,7 @@ describe("TradeWsClient", () => {
       reason: "market sequence gap detected",
       autoHealing: true,
     });
-    expect(socket.sent.slice(-2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
+    expect(socket.sent.slice(-1)).toEqual([
       JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
   });
@@ -468,13 +466,13 @@ describe("TradeWsClient", () => {
       reason: "market sequence gap detected client-side; resubscribing for a fresh snapshot",
       autoHealing: true,
     });
-    expect(socket.sent.slice(-2)).toEqual([
-      JSON.stringify({ op: "unsubscribe", channel: "data", market: "BTC-USD" }),
+    expect(socket.sent.slice(-1)).toEqual([
       JSON.stringify({ op: "subscribe", channel: "data", market: "BTC-USD" }),
     ]);
   });
 
   it("accepts a fresh snapshot after resync even when the sequence resets lower", () => {
+    vi.useFakeTimers();
     const socket = new MockSocket();
     const callbacks = {
       onStatusChange: vi.fn(),
@@ -523,6 +521,10 @@ describe("TradeWsClient", () => {
         reason: "market sequence gap detected",
       }),
     });
+
+    // Snapshot refresh requests are throttled to prevent subscribe storms.
+    vi.advanceTimersByTime(300);
+
     socket.onmessage?.({
       data: JSON.stringify({
         type: "snapshot",
@@ -540,6 +542,7 @@ describe("TradeWsClient", () => {
       bids: [],
       asks: [],
     });
+    vi.useRealTimers();
   });
 
   it("does not resubscribe a market that is not currently selected", () => {
