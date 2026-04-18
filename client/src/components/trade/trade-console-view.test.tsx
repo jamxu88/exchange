@@ -127,7 +127,6 @@ describe("TradeConsoleView", () => {
     await user.click(screen.getByRole("button", { name: "Open profile menu" }));
 
     expect(screen.getByText("TEAM-ALICE")).toBeInTheDocument();
-    expect(screen.getByText("Team 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
   });

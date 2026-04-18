@@ -437,15 +437,6 @@ function connectionPresentation(status: string) {
   return { label: "Connecting", dotClass: "bg-[#8a8a92]" };
 }
 
-function teamLabelForUser(traderId?: string) {
-  if (!traderId) {
-    return "Team --";
-  }
-
-  const match = traderId.match(/(\d+)(?!.*\d)/);
-  return match ? `Team ${match[1]}` : `Team ${traderId}`;
-}
-
 function formatNetQuantity(value: number) {
   return value > 0 ? `+${value}` : String(value);
 }
@@ -511,7 +502,6 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
   const connection = connectionPresentation(state.connectionStatus);
   const initials = initialsForUser(state.user);
   const profileName = state.user?.teamNumber ?? "Competition User";
-  const profileTeam = teamLabelForUser(state.user?.traderId);
   const latestFillId = state.fills[state.fills.length - 1]?.fillId ?? null;
   const hasAvailableMarkets = state.availableMarkets.length > 0;
   const selectedMarketStatus = selectedMarket
@@ -852,7 +842,7 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   aria-haspopup="menu"
                   className="flex h-[44px] items-center gap-[8px] rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] py-[6px] pl-[6px] pr-[10px] hover:border-[rgba(66,204,78,0.42)] motion-hover-soft"
                   onClick={() => setIsProfileMenuOpen((current) => !current)}
-                  title={`${profileName} · ${profileTeam}`}
+                  title={profileName}
                   type="button"
                 >
                   <span className="flex h-[32px] w-[32px] items-center justify-center rounded-[8px] bg-[var(--avatar-background)] text-[13px] font-semibold leading-none text-[var(--avatar-foreground)]">
@@ -865,9 +855,6 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
                   <div className="surface-panel motion-scale-in absolute right-0 top-[calc(100%+10px)] z-[80] w-[240px] rounded-[10px] p-[8px]">
                     <div className="surface-panel-soft rounded-[8px] px-[12px] py-[10px]">
                       <p className="text-[15px] font-semibold leading-none text-white">{profileName}</p>
-                      <p className="mt-[8px] text-[13px] font-medium leading-none text-[var(--muted)]">
-                        {profileTeam}
-                      </p>
                     </div>
                     <button
                       className="mt-[8px] w-full rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-semibold leading-none text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white motion-hover-soft"
