@@ -75,9 +75,9 @@ function batchFilename(batchIndex) {
 }
 
 async function writeBatch(batchIndex, rows) {
-  const header = "identifier\tapi_key";
+  const header = "identifier,api_key";
   const lines = rows.map(
-    ({ teamIndex, apiKey }) => `${CONFIG.identifierPrefix}${teamIndex}\t${apiKey}`,
+    ({ teamIndex, apiKey }) => `${CONFIG.identifierPrefix}${teamIndex},${apiKey}`,
   );
   const body = [header, ...lines, ""].join("\n");
   const target = path.join(CONFIG.outputDir, batchFilename(batchIndex));

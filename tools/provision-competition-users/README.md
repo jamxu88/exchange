@@ -6,9 +6,9 @@ REST endpoint and writes two batch files of 100 keys each:
 - `allocated-api-keys-batch-1.txt` — `Team 1` .. `Team 100`
 - `allocated-api-keys-batch-2.txt` — `Team 101` .. `Team 200`
 
-Each file is tab-separated with the header `identifier\tapi_key` and one row per
-team. The identifier column uses the format `Team #<n>`, matching the handout
-label; the `api_key` column is the 7-character alphanumeric key returned by the
+Each file is comma-separated (CSV) with the header `identifier,api_key` and one
+row per team. The identifier column uses the format `Team #<n>`, matching the
+handout label; the `api_key` column is the 7-character alphanumeric key returned by the
 exchange.
 
 ## Usage
