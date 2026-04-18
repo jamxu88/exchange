@@ -15,7 +15,7 @@ node tools/multi-key-market-order-clients-js/run.mjs \
 
 ## Notes
 
-- Input keys file defaults to `allocated-api-keys-2026-04-05.txt`.
+- Input keys file defaults to `allocated-api-keys-batch-1.txt`.
 - API keys are read from TSV columns: `identifier<TAB>api_key`.
 - Every key gets its own concurrent client loop.
 - Orders sent are:

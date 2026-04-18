@@ -5,6 +5,10 @@ description: "Use your assigned API key on REST and WebSocket so the exchange kn
 
 Your **API key** is your identity for the competition API. Organizers issue one key per competitor or team. Treat it like a password: do not commit it to public repos or share it in screenshots.
 
+## Key format
+
+Assigned API keys are **7-character alphanumeric strings** drawn from uppercase letters and digits (`A-Z`, `0-9`), for example `7QX2L9P`. There is no prefix. Treat the key as opaque; the length and alphabet are guaranteed by the exchange when organizers hand them out.
+
 We recommend starting every session with [GET /api/v1/user](/rest/user) to confirm **`team_number`** and **`trader_id`**, then [GET /api/v1/portfolio](/rest/portfolio) so you know positions and limits before you send orders.
 
 ## REST (competitor routes)

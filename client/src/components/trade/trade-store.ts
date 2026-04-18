@@ -880,21 +880,27 @@ export function tradeReducer(state: TradeState, action: TradeAction): TradeState
         action.status === "open"
           ? upsertPendingOrder(state.pendingOrders, action.order)
           : state.pendingOrders.filter((order) => order.id !== action.order.id);
-      const text =
-        action.status === "open"
-          ? `Order ${action.order.id} is open for ${action.order.shares} shares.`
-          : action.status === "filled"
-            ? `Order ${action.order.id} filled.`
-            : `Order ${action.order.id} canceled.`;
-
-      return {
+      const nextState = {
         ...state,
         pendingOrders,
         knownOrderSides: {
           ...state.knownOrderSides,
           [action.order.id]: action.order.side,
         },
-        messages: pushMessage(state.messages, {
+      };
+
+      if (action.status === "filled") {
+        return nextState;
+      }
+
+      const text =
+        action.status === "open"
+          ? `Order ${action.order.id} is open for ${action.order.shares} shares.`
+          : `Order ${action.order.id} canceled.`;
+
+      return {
+        ...nextState,
+        messages: pushMessage(nextState.messages, {
           id: action.id,
           time: action.time,
           tone: action.status === "canceled" ? "neutral" : "positive",

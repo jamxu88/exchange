@@ -349,7 +349,16 @@ async fn admin_can_provision_competition_user() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let provisioned: ProvisionUserResponse = json_body(response).await;
     assert_eq!(provisioned.profile.username, "comp-user");
-    assert!(provisioned.profile.api_key.starts_with("exch_"));
+    assert_eq!(provisioned.profile.api_key.len(), 7);
+    assert!(
+        provisioned
+            .profile
+            .api_key
+            .chars()
+            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit()),
+        "api key should be 7-char alphanumeric, got {}",
+        provisioned.profile.api_key
+    );
     assert!(state.storage.get_user_by_username("comp-user").is_some());
     assert_eq!(state.storage.list_admin_audit_logs().len(), 1);
 }

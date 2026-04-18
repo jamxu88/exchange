@@ -12,9 +12,20 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 const API_KEY_HEADER: &str = "x-api-key";
-const RESERVED_TRADER_API_KEY: &str = "trader";
-const RESERVED_TRADER_USERNAME: &str = "trader";
-const RESERVED_TRADER_ID: u128 = 0x74726164657200000000000000000001;
+const API_KEY_LENGTH: usize = 7;
+const API_KEY_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+fn generate_api_key() -> String {
+    let uuid = Uuid::new_v4();
+    let bytes = uuid.as_bytes();
+    let mut key = String::with_capacity(API_KEY_LENGTH);
+    for index in 0..API_KEY_LENGTH {
+        let sample = bytes[index] as usize;
+        let pick = API_KEY_ALPHABET[sample % API_KEY_ALPHABET.len()];
+        key.push(char::from(pick));
+    }
+    key
+}
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
@@ -98,7 +109,7 @@ impl AuthService {
                 trader_id: Uuid::new_v4(),
                 username: username.clone(),
                 team_number: team_number.clone(),
-                api_key: format!("exch_{}", Uuid::new_v4().simple()),
+                api_key: generate_api_key(),
                 role,
                 created_at: Utc::now(),
             };
@@ -161,13 +172,6 @@ impl AuthService {
             return Ok(authenticated_user_from_record(user));
         }
 
-        if api_key == RESERVED_TRADER_API_KEY {
-            Self::ensure_reserved_trader_user(state)?;
-            if let Some(user) = state.storage.get_user_by_api_key(api_key) {
-                return Ok(authenticated_user_from_record(user));
-            }
-        }
-
         Err(AuthError::InvalidApiKey)
     }
 
@@ -218,45 +222,6 @@ impl AuthService {
         state.storage.append_admin_audit_log(entry);
     }
 
-    fn ensure_reserved_trader_user(state: &AppState) -> Result<(), AuthError> {
-        if state
-            .storage
-            .get_user_by_api_key(RESERVED_TRADER_API_KEY)
-            .is_some()
-        {
-            return Ok(());
-        }
-
-        let record = UserRecord {
-            profile: UserProfile {
-                trader_id: Uuid::from_u128(RESERVED_TRADER_ID),
-                username: RESERVED_TRADER_USERNAME.to_string(),
-                team_number: RESERVED_TRADER_USERNAME.to_string(),
-                api_key: RESERVED_TRADER_API_KEY.to_string(),
-                role: UserRole::Trader,
-                created_at: Utc::now(),
-            },
-        };
-
-        match state.storage.create_user(record) {
-            Ok(()) => {
-                state.request_checkpoint_save();
-                Ok(())
-            }
-            Err(StorageError::ApiKeyTaken) => Ok(()),
-            Err(StorageError::UsernameTaken) => {
-                if state
-                    .storage
-                    .get_user_by_api_key(RESERVED_TRADER_API_KEY)
-                    .is_some()
-                {
-                    Ok(())
-                } else {
-                    Err(AuthError::InvalidApiKey)
-                }
-            }
-        }
-    }
 }
 
 fn authenticated_user_from_record(user: UserRecord) -> AuthenticatedUser {
@@ -356,7 +321,16 @@ mod tests {
         )
         .expect("provision should succeed");
         assert_eq!(provisioned.profile.username, "alice");
-        assert!(provisioned.profile.api_key.starts_with("exch_"));
+        assert_eq!(provisioned.profile.api_key.len(), API_KEY_LENGTH);
+        assert!(
+            provisioned
+                .profile
+                .api_key
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit()),
+            "api key should be 7-char alphanumeric, got {}",
+            provisioned.profile.api_key
+        );
     }
 
     #[tokio::test]
@@ -386,19 +360,13 @@ mod tests {
     }
 
     #[test]
-    fn reserved_trader_api_key_auto_provisions_on_first_auth() {
+    fn authenticate_api_key_rejects_unknown_keys() {
         let state = test_state();
 
-        let auth = AuthService::authenticate_api_key(&state, RESERVED_TRADER_API_KEY)
-            .expect("reserved trader auth should succeed");
+        let error = AuthService::authenticate_api_key(&state, "UNKNOWN")
+            .expect_err("unknown api key should be rejected");
 
-        assert_eq!(auth.username, RESERVED_TRADER_USERNAME);
-        let stored = state
-            .storage
-            .get_user_by_api_key(RESERVED_TRADER_API_KEY)
-            .expect("reserved trader should be stored");
-        assert_eq!(stored.profile.username, RESERVED_TRADER_USERNAME);
-        assert_eq!(stored.profile.role, UserRole::Trader);
+        assert_eq!(error, AuthError::InvalidApiKey);
     }
 
     #[tokio::test]

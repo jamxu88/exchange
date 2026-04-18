@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const DEFAULTS = {
   baseUrl: process.env.EXCHANGE_HTTP_URL ?? "http://localhost:8080",
-  keysFile: "../../allocated-api-keys-2026-04-05.txt",
+  keysFile: "../../allocated-api-keys-batch-1.txt",
   market: "test-market",
   quantity: 1,
   durationSeconds: 10,
