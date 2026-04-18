@@ -821,14 +821,6 @@ export function TradeConsoleView({ controller }: TradeConsoleViewProps) {
             </nav>
 
             <div className="flex items-center justify-end gap-[10px]">
-              <a
-                className="inline-flex items-center rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[14px] py-[10px] text-[13px] font-semibold leading-none whitespace-nowrap text-[var(--muted-strong)] hover:border-[rgba(66,204,78,0.42)] hover:text-white motion-hover-soft"
-                href="https://jamesxu.mintlify.app/"
-                rel="noreferrer"
-                target="_blank"
-              >
-                API Docs
-              </a>
               <div className="inline-flex items-center gap-[8px] rounded-[8px] border border-[var(--surface-stroke)] bg-[var(--surface-soft)] px-[12px] py-[10px] text-[13px] font-medium leading-none whitespace-nowrap text-white">
                 <span
                   className={`motion-status-pulse h-[8px] w-[8px] rounded-full shadow-[0_0_14px_rgba(255,255,255,0.18)] ${connection.dotClass}`}

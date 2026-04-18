@@ -119,10 +119,7 @@ describe("TradeConsoleView", () => {
     expect(screen.getByRole("button", { name: "Cancel order order-1" })).toBeInTheDocument();
     expect(screen.getByText("Market data connected.")).toBeInTheDocument();
     expect(screen.getAllByText("$101.00").length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "API Docs" })).toHaveAttribute(
-      "href",
-      "https://jamesxu.mintlify.app/",
-    );
+    expect(screen.queryByRole("link", { name: "API Docs" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open profile menu" }));
 
