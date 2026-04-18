@@ -29,7 +29,7 @@ Parameters:
     Default: "1024"
   Markets:
     Type: String
-    Default: BTC-USD,ETH-USD,SOL-USD
+    Default: ""
   ExchangeServerUrl:
     Type: String
     Default: https://exchange.jamesxu.dev
