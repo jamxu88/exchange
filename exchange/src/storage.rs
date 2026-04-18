@@ -460,7 +460,11 @@ impl StorageBackend for InMemoryRepository {
             .iter()
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
-        markets.sort_by(|left, right| left.market_id.cmp(&right.market_id));
+        markets.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.market_id.cmp(&right.market_id))
+        });
         markets
     }
 

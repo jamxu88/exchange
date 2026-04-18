@@ -326,7 +326,7 @@ function buildBotPayload(
 }
 
 function sortMarkets(markets: ExchangeMarket[]) {
-  return [...markets].sort((left, right) => left.display_name.localeCompare(right.display_name));
+  return [...markets];
 }
 
 function sortBots(bots: ExchangeAdminBot[]) {
