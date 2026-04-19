@@ -259,7 +259,7 @@ async function main() {
 
   // 3. POST admin messages in parallel with limited concurrency.
   console.log(`\nPOSTing ${traders.length} private messages …`);
-  const titlePrefix = roundLabel.length > 0 ? `${roundLabel} · ` : "";
+  const messageTitle = roundLabel.length > 0 ? roundLabel : null;
   const concurrency = 16;
   let cursor = 0;
   let sentOk = 0;
@@ -278,7 +278,7 @@ async function main() {
         .join(", ");
       const body = `Your card reveal: ${cardList}`;
       const payload = {
-        title: `${titlePrefix}Your card reveal`,
+        title: messageTitle,
         body,
         level: "info",
         target_username: trader.username,

@@ -78,7 +78,7 @@ export function CardDealBroadcaster() {
     <form action={sendCardDealsAction} className="grid gap-4">
       <div className="grid gap-2">
         <label className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-strong)]">
-          Round label (used in the message title)
+          Round label (optional; shown as a prefix before the card line)
         </label>
         <input
           className={inputClass}

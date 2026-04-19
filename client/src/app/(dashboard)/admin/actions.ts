@@ -492,7 +492,9 @@ export async function sendCardDealsAction(formData: FormData) {
     throw new Error("unreachable");
   }
 
-  const titlePrefix = roundLabel.length > 0 ? `${roundLabel} · ` : "";
+  // trade-store renders `${title}: ${body}` — keep title as round context only so we do not
+  // duplicate "Your card reveal" (which lives in the body).
+  const messageTitle = roundLabel.length > 0 ? roundLabel : null;
   let sentCount = 0;
   let lastTarget: string | null = null;
 
@@ -509,7 +511,7 @@ export async function sendCardDealsAction(formData: FormData) {
       const body = `Your card reveal: ${cardList}`;
 
       await sendAdminMutation(apiKey, "/api/v1/admin/messages", "POST", {
-        title: `${titlePrefix}Your card reveal`,
+        title: messageTitle,
         body,
         level: "info",
         target_username: team.username,
