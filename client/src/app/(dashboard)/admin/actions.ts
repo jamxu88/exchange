@@ -500,17 +500,13 @@ export async function sendCardDealsAction(formData: FormData) {
     for (const team of teams) {
       lastTarget = team.username;
       const positions = pickThreePositions();
-      const lines = positions.map((pos) => {
-        const card = cards[pos - 1];
-        return `  • Position ${pos}: ${card.value} of ${SUIT_LABELS[card.suit]}`;
-      });
-      const body = [
-        "Your three private cards for this round:",
-        "",
-        ...lines,
-        "",
-        "These are yours alone. Public info reveals are broadcast separately.",
-      ].join("\n");
+      const cardList = positions
+        .map((pos) => {
+          const card = cards[pos - 1];
+          return `${card.value} of ${SUIT_LABELS[card.suit]} (pos ${pos})`;
+        })
+        .join(", ");
+      const body = `Your card reveal: ${cardList}`;
 
       await sendAdminMutation(apiKey, "/api/v1/admin/messages", "POST", {
         title: `${titlePrefix}Your card reveal`,
