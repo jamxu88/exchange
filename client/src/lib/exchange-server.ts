@@ -362,6 +362,30 @@ export async function getAdminState(adminToken: string) {
   };
 }
 
+export type ProvisionedUserCredential = {
+  trader_id: string;
+  username: string;
+  api_key: string;
+  role: "trader" | "admin";
+};
+
+export type ProvisionedUsersResponse = {
+  users: ProvisionedUserCredential[];
+};
+
+export async function listProvisionedUsers(
+  adminToken: string,
+  filters?: { role?: "trader" | "admin"; usernamePrefix?: string; limit?: number },
+) {
+  const params = new URLSearchParams();
+  if (filters?.role) params.set("role", filters.role);
+  if (filters?.usernamePrefix) params.set("username_prefix", filters.usernamePrefix);
+  if (typeof filters?.limit === "number") params.set("limit", String(filters.limit));
+  const query = params.toString();
+  const path = query ? `/api/v1/admin/users?${query}` : "/api/v1/admin/users";
+  return exchangeRequest<ProvisionedUsersResponse>(path, { adminToken });
+}
+
 export async function getAdminLeaderboard(adminToken: string, limit?: number) {
   const path = typeof limit === "number"
     ? `/api/v1/admin/leaderboard?limit=${limit}`

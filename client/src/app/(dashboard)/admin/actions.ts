@@ -15,6 +15,7 @@ import { readSessionFromCookieValue, SESSION_COOKIE } from "@/lib/auth";
 import {
   ExchangeAdminDeskOrderResponse,
   ExchangeServerError,
+  listProvisionedUsers,
   sendAdminMutation,
 } from "@/lib/exchange-server";
 
@@ -417,4 +418,126 @@ export async function submitAdminDeskOrderAction(formData: FormData) {
     : `Admin desk ${response.desk.username} filled ${filledQuantity || response.submission.order.quantity} ${response.submission.order.market} shares at ${formatPrice(executionPrice)}.`;
 
   adminRedirect({ notice });
+}
+
+const CARD_VALUE_SET = new Set([
+  "A",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "J",
+  "Q",
+  "K",
+]);
+const CARD_SUIT_SET = new Set(["S", "H", "D", "C"]);
+const SUIT_LABELS: Record<string, string> = {
+  S: "spades",
+  H: "hearts",
+  D: "diamonds",
+  C: "clubs",
+};
+const DEALABLE_POSITIONS = [1, 2, 4, 5, 7, 8, 10] as const;
+
+function pickThreePositions(): [number, number, number] {
+  const pool = [...DEALABLE_POSITIONS];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const picked = pool.slice(0, 3).sort((a, b) => a - b);
+  return [picked[0], picked[1], picked[2]];
+}
+
+export async function sendCardDealsAction(formData: FormData) {
+  const roundLabel = String(formData.get("roundLabel") ?? "").trim();
+  const cards: Array<{ value: string; suit: string }> = [];
+  for (let pos = 1; pos <= 10; pos += 1) {
+    const value = String(formData.get(`value_${pos}`) ?? "").trim();
+    const suit = String(formData.get(`suit_${pos}`) ?? "").trim().toUpperCase();
+    if (!CARD_VALUE_SET.has(value)) {
+      adminRedirect({ error: `Position ${pos}: pick a card value.` });
+      throw new Error("unreachable");
+    }
+    if (!CARD_SUIT_SET.has(suit)) {
+      adminRedirect({ error: `Position ${pos}: pick a suit.` });
+      throw new Error("unreachable");
+    }
+    cards.push({ value, suit });
+  }
+
+  const apiKey = await requireAdminApiKey();
+
+  let roster: Awaited<ReturnType<typeof listProvisionedUsers>>;
+  try {
+    roster = await listProvisionedUsers(apiKey, { role: "trader" });
+  } catch (error) {
+    if (error instanceof ExchangeServerError && error.status === 401) {
+      redirect("/login?error=session-expired");
+    }
+    adminRedirect({
+      error: error instanceof Error ? error.message : "Failed to load team roster.",
+    });
+    throw new Error("unreachable");
+  }
+
+  const teams = roster.users.filter((user) => user.role === "trader");
+  if (teams.length === 0) {
+    adminRedirect({ error: "No trader users to deal cards to." });
+    throw new Error("unreachable");
+  }
+
+  const titlePrefix = roundLabel.length > 0 ? `${roundLabel} · ` : "";
+  let sentCount = 0;
+  let lastTarget: string | null = null;
+
+  try {
+    for (const team of teams) {
+      lastTarget = team.username;
+      const positions = pickThreePositions();
+      const lines = positions.map((pos) => {
+        const card = cards[pos - 1];
+        return `  • Position ${pos}: ${card.value} of ${SUIT_LABELS[card.suit]}`;
+      });
+      const body = [
+        "Your three private cards for this round:",
+        "",
+        ...lines,
+        "",
+        "These are yours alone. Public info reveals are broadcast separately.",
+      ].join("\n");
+
+      await sendAdminMutation(apiKey, "/api/v1/admin/messages", "POST", {
+        title: `${titlePrefix}Your card reveal`,
+        body,
+        level: "info",
+        target_username: team.username,
+        market: null,
+      });
+      sentCount += 1;
+    }
+  } catch (error) {
+    if (error instanceof ExchangeServerError && error.status === 401) {
+      redirect("/login?error=session-expired");
+    }
+    const message =
+      error instanceof Error ? error.message : "Admin action failed.";
+    adminRedirect({
+      error:
+        sentCount > 0 && lastTarget
+          ? `Dealt to ${sentCount} teams before failing on ${lastTarget}. ${message}`
+          : message,
+    });
+    throw new Error("unreachable");
+  }
+
+  const summary = roundLabel.length > 0
+    ? `Dealt private 3-card subsets to ${sentCount} teams for ${roundLabel}.`
+    : `Dealt private 3-card subsets to ${sentCount} teams.`;
+  adminRedirect({ notice: summary });
 }

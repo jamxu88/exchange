@@ -10,6 +10,7 @@ import {
   submitAdminDeskOrderAction,
 } from "@/app/(dashboard)/admin/actions";
 import { AdminMarketBotManager } from "@/app/(dashboard)/admin/admin-market-bot-manager";
+import { CardDealBroadcaster } from "@/app/(dashboard)/admin/card-deal-broadcaster";
 import { CompetitionMessagePresets } from "@/app/(dashboard)/admin/competition-message-presets";
 import { LiveTelemetryPanel } from "@/app/(dashboard)/admin/live-telemetry-panel";
 import {
@@ -167,6 +168,16 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             </div>
           </div>
           <LiveTelemetryPanel initialTelemetry={initialTelemetry} />
+        </section>
+
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Deal cards to teams</h2>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Enter the 10 drawn cards for this round, then broadcast a private 3-card subset to every team. Each team receives 3 positions chosen at random from positions 1, 2, 4, 5, 7, 8, 10.
+          </p>
+          <div className="mt-4">
+            <CardDealBroadcaster />
+          </div>
         </section>
 
         <section className="ops-panel px-5 py-5">
