@@ -10,6 +10,7 @@ import {
   submitAdminDeskOrderAction,
 } from "@/app/(dashboard)/admin/actions";
 import { AdminMarketBotManager } from "@/app/(dashboard)/admin/admin-market-bot-manager";
+import { CompetitionMessagePresets } from "@/app/(dashboard)/admin/competition-message-presets";
 import { LiveTelemetryPanel } from "@/app/(dashboard)/admin/live-telemetry-panel";
 import {
   COMPETITION_QUOTE_ASSET,
@@ -169,7 +170,17 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </section>
 
         <section className="ops-panel px-5 py-5">
-          <h2 className="ops-section-title">Send message</h2>
+          <h2 className="ops-section-title">Competition messages</h2>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            One-click broadcasts for the 5-round card-draw case. Tabs are per round; edit placeholders inline then send to all teams.
+          </p>
+          <div className="mt-4">
+            <CompetitionMessagePresets />
+          </div>
+        </section>
+
+        <section className="ops-panel px-5 py-5">
+          <h2 className="ops-section-title">Send custom message</h2>
           <form action={sendMessageAction} className="mt-4 grid gap-3">
             <input
               className={inputClass}
